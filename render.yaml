@@ -1,0 +1,43 @@
+# Blueprint de Render para desplegar SHESHE.
+# En Render: New > Blueprint > conectá este repo y aplicá.
+# Después cargá los valores secretos (sync:false) en el panel.
+services:
+  - type: web
+    name: sheshe-store
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # PUBLIC_BASE_URL debe ser la URL pública de este servicio
+      # (ej. https://sheshe-store.onrender.com). Cargala tras el primer deploy.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # Token de administrador para /api/admin/orders (se genera solo).
+      - key: ADMIN_TOKEN
+        generateValue: true
+      # --- Mercado Pago (secretos) ---
+      - key: MP_ACCESS_TOKEN
+        sync: false
+      - key: MP_WEBHOOK_SECRET
+        sync: false
+      # --- Email SMTP (secretos, opcionales) ---
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: MAIL_TO
+        sync: false
+# NOTA: el plan free no tiene disco persistente, así que la base SQLite
+# se reinicia en cada redeploy. Para conservar los pedidos en producción,
+# agregá un disco persistente (plan pago) montado en /data y poné
+# DB_PATH=/data/sheshe.db, o migrá a una base Postgres.

@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    base-uri 'self';
+    object-src 'none';
+    img-src 'self' data:;
+    font-src 'self' https://fonts.gstatic.com;
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    script-src 'self';
+    connect-src 'self';
+    form-action 'self';
+    upgrade-insecure-requests;
+  " />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="color-scheme" content="light" />
+
+  <title>SHESHE — Ropa de Noche & Eventos</title>
+  <meta name="description" content="SHESHE — Moda femenina elegante para noches y eventos especiales. Piezas únicas diseñadas para mujeres que brillan." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <a href="#tienda" class="skip-link">Saltar al contenido</a>
+
+  <nav class="nav" id="navbar">
+    <a href="#inicio" class="nav__logo">SHESHE</a>
+
+    <ul class="nav__links">
+      <li><a href="#inicio">Inicio</a></li>
+      <li><a href="#tienda">Tienda</a></li>
+      <li><a href="#lookbook">Lookbook</a></li>
+      <li><a href="#contacto">Contacto</a></li>
+    </ul>
+
+    <div class="nav__actions">
+      <button class="nav__cart-btn" id="cartBtn" type="button" aria-label="Abrir carrito" aria-haspopup="dialog">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.4" aria-hidden="true" focusable="false">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
+        </svg>
+        <span>Carrito</span>
+        <span class="cart-count" id="cartCount" aria-hidden="true">0</span>
+      </button>
+      <button class="nav__hamburger" id="menuBtn" type="button" aria-label="Abrir menú" aria-expanded="false" aria-controls="mobileMenu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <div id="mobileMenu" class="mobile-menu" hidden>
+    <a href="#inicio" data-close-menu>Inicio</a>
+    <a href="#tienda" data-close-menu>Tienda</a>
+    <a href="#lookbook" data-close-menu>Lookbook</a>
+    <a href="#contacto" data-close-menu>Contacto</a>
+  </div>
+
+  <section class="hero" id="inicio">
+    <div class="hero__text">
+      <p class="hero__eyebrow fade-up">Nueva Colección 2025</p>
+      <h1 class="hero__title fade-up delay-1">
+        Vestida para<br><em>brillar</em><br>esta noche
+      </h1>
+      <p class="hero__subtitle fade-up delay-2">
+        Piezas diseñadas para mujeres que convierten cada evento en un recuerdo. Elegancia sin esfuerzo, sofisticación en cada detalle.
+      </p>
+      <div class="hero__cta-group fade-up delay-3">
+        <a href="#tienda" class="btn btn--primary">Ver Colección</a>
+        <a href="#lookbook" class="btn btn--ghost">
+          Lookbook
+          <span class="btn--ghost-arrow" aria-hidden="true">→</span>
+        </a>
+      </div>
+    </div>
+    <div class="hero__image">
+      <div class="hero__image-placeholder">
+        <svg width="160" height="240" viewBox="0 0 160 240" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.35" aria-hidden="true" focusable="false">
+          <ellipse cx="80" cy="60" rx="28" ry="32" stroke="#9A8472" stroke-width="1.2"/>
+          <path d="M52 92 C40 130 32 170 36 240 L124 240 C128 170 120 130 108 92" stroke="#9A8472" stroke-width="1.2" fill="none"/>
+          <path d="M52 92 C60 85 100 85 108 92" stroke="#9A8472" stroke-width="1.2" fill="none"/>
+          <path d="M60 110 C58 140 58 180 60 220" stroke="#9A8472" stroke-width="0.8" opacity="0.5"/>
+          <path d="M100 110 C102 140 102 180 100 220" stroke="#9A8472" stroke-width="0.8" opacity="0.5"/>
+        </svg>
+        <p class="hero__image-label">Imagen de colección</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="intro-strip">
+    <span class="intro-strip__item">Diseñado para brillar</span>
+    <span class="intro-strip__sep" aria-hidden="true">·</span>
+    <span class="intro-strip__item">Envíos a todo el país</span>
+    <span class="intro-strip__sep" aria-hidden="true">·</span>
+    <span class="intro-strip__item">Devoluciones sin cargo</span>
+    <span class="intro-strip__sep" aria-hidden="true">·</span>
+    <span class="intro-strip__item">Pago en cuotas</span>
+    <span class="intro-strip__sep" aria-hidden="true">·</span>
+    <span class="intro-strip__item">Atención personalizada</span>
+  </div>
+
+  <section class="section section--light" id="tienda">
+    <div class="section__header">
+      <div>
+        <p class="section__label">Colección 2025</p>
+        <h2 class="section__title">Nuestra <em>Tienda</em></h2>
+      </div>
+      <a href="#tienda" class="btn btn--ghost">
+        Ver todo <span class="btn--ghost-arrow" aria-hidden="true">→</span>
+      </a>
+    </div>
+
+    <div class="shop-filters" role="group" aria-label="Filtrar productos por categoría">
+      <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">Todo</button>
+      <button class="filter-btn" type="button" data-filter="vestidos" aria-pressed="false">Vestidos</button>
+      <button class="filter-btn" type="button" data-filter="conjuntos" aria-pressed="false">Conjuntos</button>
+      <button class="filter-btn" type="button" data-filter="tops" aria-pressed="false">Tops</button>
+      <button class="filter-btn" type="button" data-filter="faldas" aria-pressed="false">Faldas</button>
+    </div>
+
+    <div class="products-grid" id="productsGrid">
+
+      <article class="product-card" data-category="vestidos" data-id="nocturne"
+               data-name="Vestido Nocturne" data-price="89900" data-cat="Vestidos" data-grad="grad-1"
+               data-desc="Vestido largo de crepé satinado con escote asimétrico. Tiro alto y caída fluida. Ideal para galas y eventos formales.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Vestido Nocturne">
+            <span class="product-card__img-placeholder grad-1">
+              <span class="product-card__img-inner">
+                <svg width="60" height="100" viewBox="0 0 60 100" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <ellipse cx="30" cy="18" rx="10" ry="12" stroke="#9A8472" stroke-width="1"/>
+                  <path d="M20 30 C15 50 12 70 14 100 L46 100 C48 70 45 50 40 30" stroke="#9A8472" stroke-width="1" fill="none"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+          <span class="product-card__badge">Nuevo</span>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Vestidos</p>
+          <h3 class="product-card__name">Vestido Nocturne</h3>
+          <p class="product-card__price">$89.900</p>
+        </div>
+      </article>
+
+      <article class="product-card" data-category="conjuntos" data-id="velvet"
+               data-name="Conjunto Velvet" data-price="112000" data-cat="Conjuntos" data-grad="grad-2"
+               data-desc="Blazer y pantalón de terciopelo suave. Una combinación poderosa para noches de gala o cenas de negocios.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Conjunto Velvet">
+            <span class="product-card__img-placeholder grad-2">
+              <span class="product-card__img-inner">
+                <svg width="60" height="100" viewBox="0 0 60 100" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <ellipse cx="30" cy="18" rx="10" ry="12" stroke="#9A8472" stroke-width="1"/>
+                  <path d="M20 30 L14 100 L46 100 L40 30" stroke="#9A8472" stroke-width="1" fill="none"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Conjuntos</p>
+          <h3 class="product-card__name">Conjunto Velvet</h3>
+          <p class="product-card__price">$112.000</p>
+        </div>
+      </article>
+
+      <article class="product-card" data-category="vestidos" data-id="aurora"
+               data-name="Vestido Aurora" data-price="79500" data-cat="Vestidos" data-grad="grad-3"
+               data-desc="Vestido midi de gasa con bordados dorados sutiles. Perfecto para fiestas y celebraciones al aire libre.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Vestido Aurora">
+            <span class="product-card__img-placeholder grad-3">
+              <span class="product-card__img-inner">
+                <svg width="60" height="100" viewBox="0 0 60 100" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <ellipse cx="30" cy="18" rx="10" ry="12" stroke="#9A8472" stroke-width="1"/>
+                  <path d="M20 30 C14 55 8 78 6 100 L54 100 C52 78 46 55 40 30" stroke="#9A8472" stroke-width="1" fill="none"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+          <span class="product-card__badge">Más vendido</span>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Vestidos</p>
+          <h3 class="product-card__name">Vestido Aurora</h3>
+          <p class="product-card__price">$79.500</p>
+        </div>
+      </article>
+
+      <article class="product-card" data-category="tops" data-id="lumiere"
+               data-name="Top Lumière" data-price="48000" data-cat="Tops" data-grad="grad-4"
+               data-desc="Top sin mangas de seda natural con detalle de lazada al cuello. Versátil para usar solo o bajo blazer.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Top Lumière">
+            <span class="product-card__img-placeholder grad-4">
+              <span class="product-card__img-inner">
+                <svg width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <ellipse cx="30" cy="14" rx="10" ry="12" stroke="#9A8472" stroke-width="1"/>
+                  <path d="M20 26 L16 60 L44 60 L40 26" stroke="#9A8472" stroke-width="1" fill="none"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Tops</p>
+          <h3 class="product-card__name">Top Lumière</h3>
+          <p class="product-card__price">$48.000</p>
+        </div>
+      </article>
+
+      <article class="product-card" data-category="faldas" data-id="soiree"
+               data-name="Falda Soirée" data-price="62000" data-cat="Faldas" data-grad="grad-5"
+               data-desc="Falda midi plisada de chifón con cintura alta elástica. Caída liviana ideal para fiestas y cenas nocturnas.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Falda Soirée">
+            <span class="product-card__img-placeholder grad-5">
+              <span class="product-card__img-inner">
+                <svg width="60" height="80" viewBox="0 0 60 80" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <path d="M18 0 L42 0 L50 80 L10 80 Z" stroke="#9A8472" stroke-width="1" fill="none"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Faldas</p>
+          <h3 class="product-card__name">Falda Soirée</h3>
+          <p class="product-card__price">$62.000</p>
+        </div>
+      </article>
+
+      <article class="product-card" data-category="vestidos" data-id="minuit"
+               data-name="Vestido Minuit" data-price="95000" data-cat="Vestidos" data-grad="grad-6"
+               data-desc="Vestido largo de tul superpuesto con corpiño estructurado. La pieza estrella para una noche inolvidable.">
+        <div class="product-card__image">
+          <button class="product-card__open" type="button" data-open-modal aria-label="Ver detalle de Vestido Minuit">
+            <span class="product-card__img-placeholder grad-6">
+              <span class="product-card__img-inner">
+                <svg width="60" height="100" viewBox="0 0 60 100" fill="none" xmlns="http://www.w3.org/2000/svg" opacity="0.4" aria-hidden="true" focusable="false">
+                  <ellipse cx="30" cy="18" rx="10" ry="12" stroke="#9A8472" stroke-width="1"/>
+                  <path d="M20 30 L10 100 L50 100 L40 30" stroke="#9A8472" stroke-width="1" fill="none"/>
+                  <path d="M22 50 L38 50" stroke="#9A8472" stroke-width="0.8"/>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="product-card__overlay">
+            <button class="btn btn--primary btn--sm product-card__add" type="button" data-add-to-cart>+ Agregar</button>
+          </div>
+          <span class="product-card__badge">Exclusivo</span>
+        </div>
+        <div class="product-card__info">
+          <p class="product-card__cat">Vestidos</p>
+          <h3 class="product-card__name">Vestido Minuit</h3>
+          <p class="product-card__price">$95.000</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="section section--dark banner-center">
+    <p class="section__label banner-center__label">La filosofía SHESHE</p>
+    <h2 class="section__title banner-center__title">
+      Cada pieza cuenta una historia.<br><em>La tuya.</em>
+    </h2>
+    <p class="banner-center__text">
+      Creemos que la ropa no solo te cubre — te define. Por eso cada prenda nace del detalle, el tejido y la silueta perfecta.
+    </p>
+    <a href="#tienda" class="btn btn--outline banner-center__cta">Explorar colección</a>
+  </section>
+
+  <section class="section section--beige" id="lookbook">
+    <div class="section__header">
+      <div>
+        <p class="section__label">Inspiración</p>
+        <h2 class="section__title"><em>Lookbook</em></h2>
+      </div>
+    </div>
+
+    <div class="lookbook-grid">
+      <div class="look-item">
+        <div class="look-item__img look-bg-1 look-item__img--feature">
+          <svg width="80" height="140" viewBox="0 0 80 140" fill="none" opacity="0.3" aria-hidden="true" focusable="false">
+            <ellipse cx="40" cy="24" rx="14" ry="16" stroke="#9A8472" stroke-width="1.2"/>
+            <path d="M26 40 C18 70 16 100 18 140 L62 140 C64 100 62 70 54 40" stroke="#9A8472" stroke-width="1.2" fill="none"/>
+          </svg>
+        </div>
+        <div class="look-item__caption"><p class="look-item__caption-title">Noche de gala</p></div>
+      </div>
+
+      <div class="look-item">
+        <div class="look-item__img look-bg-2">
+          <svg width="50" height="90" viewBox="0 0 50 90" fill="none" opacity="0.3" aria-hidden="true" focusable="false">
+            <ellipse cx="25" cy="15" rx="9" ry="11" stroke="#9A8472" stroke-width="1"/>
+            <path d="M16 26 C10 45 10 65 12 90 L38 90 C40 65 40 45 34 26" stroke="#9A8472" stroke-width="1" fill="none"/>
+          </svg>
+        </div>
+        <div class="look-item__caption"><p class="look-item__caption-title">Cena íntima</p></div>
+      </div>
+
+      <div class="look-item">
+        <div class="look-item__img look-bg-3">
+          <svg width="50" height="70" viewBox="0 0 50 70" fill="none" opacity="0.3" aria-hidden="true" focusable="false">
+            <ellipse cx="25" cy="13" rx="9" ry="11" stroke="#9A8472" stroke-width="1"/>
+            <path d="M16 24 L12 70 L38 70 L34 24" stroke="#9A8472" stroke-width="1" fill="none"/>
+          </svg>
+        </div>
+        <div class="look-item__caption"><p class="look-item__caption-title">Cocktail party</p></div>
+      </div>
+
+      <div class="look-item">
+        <div class="look-item__img look-bg-4">
+          <svg width="50" height="90" viewBox="0 0 50 90" fill="none" opacity="0.3" aria-hidden="true" focusable="false">
+            <ellipse cx="25" cy="15" rx="9" ry="11" stroke="#9A8472" stroke-width="1"/>
+            <path d="M16 26 C8 55 5 70 8 90 L42 90 C45 70 42 55 34 26" stroke="#9A8472" stroke-width="1" fill="none"/>
+          </svg>
+        </div>
+        <div class="look-item__caption"><p class="look-item__caption-title">Evento especial</p></div>
+      </div>
+
+      <div class="look-item">
+        <div class="look-item__img look-bg-5">
+          <svg width="50" height="80" viewBox="0 0 50 80" fill="none" opacity="0.3" aria-hidden="true" focusable="false">
+            <path d="M12 0 L38 0 L44 80 L6 80 Z" stroke="#9A8472" stroke-width="1" fill="none"/>
+          </svg>
+        </div>
+        <div class="look-item__caption"><p class="look-item__caption-title">Fiesta de gala</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--light" id="contacto">
+    <div class="section__header section__header--contact">
+      <div>
+        <p class="section__label">Hablemos</p>
+        <h2 class="section__title">Contacto &amp; <em>Atención</em></h2>
+      </div>
+    </div>
+
+    <div class="contact-wrapper">
+      <div class="contact-info">
+        <div class="contact-info__detail">
+          <p class="contact-info__detail-label">Email</p>
+          <p class="contact-info__detail-value">hola@sheshe.com.ar</p>
+        </div>
+        <div class="contact-info__detail">
+          <p class="contact-info__detail-label">WhatsApp</p>
+          <p class="contact-info__detail-value">+54 11 0000-0000</p>
+        </div>
+        <div class="contact-info__detail">
+          <p class="contact-info__detail-label">Horario de atención</p>
+          <p class="contact-info__detail-value contact-info__detail-value--sm">Lun – Vie · 10:00 – 18:00 hs</p>
+        </div>
+        <div class="contact-social">
+          <a href="https://instagram.com" class="social-link" aria-label="Instagram" target="_blank" rel="noopener noreferrer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+              <circle cx="12" cy="12" r="4"/>
+              <circle cx="17.5" cy="6.5" r="0.5" fill="currentColor"/>
+            </svg>
+          </a>
+          <a href="https://pinterest.com" class="social-link" aria-label="Pinterest" target="_blank" rel="noopener noreferrer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false">
+              <path d="M12 2C6.48 2 2 6.48 2 12c0 4.24 2.65 7.86 6.39 9.29-.09-.78-.17-1.99.04-2.85.18-.78 1.22-5.17 1.22-5.17s-.31-.62-.31-1.55c0-1.45.84-2.54 1.89-2.54.89 0 1.32.67 1.32 1.47 0 .9-.57 2.24-.87 3.48-.25 1.04.52 1.88 1.54 1.88 1.85 0 3.27-1.95 3.27-4.77 0-2.49-1.79-4.24-4.35-4.24-2.96 0-4.7 2.22-4.7 4.52 0 .9.34 1.85.77 2.37.08.1.09.19.07.29-.08.32-.25 1.04-.28 1.18-.04.19-.14.23-.32.14-1.25-.58-2.03-2.42-2.03-3.89 0-3.15 2.29-6.05 6.61-6.05 3.47 0 6.16 2.47 6.16 5.78 0 3.45-2.17 6.22-5.19 6.22-1.01 0-1.97-.53-2.3-1.15l-.62 2.33c-.23.87-.84 1.96-1.25 2.62.94.29 1.94.45 2.97.45 5.52 0 10-4.48 10-10S17.52 2 12 2z"/>
+            </svg>
+          </a>
+          <a href="https://tiktok.com" class="social-link" aria-label="TikTok" target="_blank" rel="noopener noreferrer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+              <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.27 6.27 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.77a8.21 8.21 0 004.79 1.54V6.88a4.85 4.85 0 01-1.02-.19z"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <form class="contact-form" id="contactForm" novalidate>
+        <div class="form-group">
+          <label class="form-label" for="nombre">Nombre</label>
+          <input class="form-input" type="text" id="nombre" name="nombre" autocomplete="name"
+                 placeholder="Tu nombre completo" required minlength="2" maxlength="80"
+                 aria-describedby="nombre-error" />
+          <span class="form-error" id="nombre-error" role="alert"></span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="email">Email</label>
+          <input class="form-input" type="email" id="email" name="email" autocomplete="email"
+                 placeholder="tucorreo@email.com" required maxlength="120"
+                 aria-describedby="email-error" />
+          <span class="form-error" id="email-error" role="alert"></span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="asunto">Asunto</label>
+          <input class="form-input" type="text" id="asunto" name="asunto"
+                 placeholder="¿En qué podemos ayudarte?" maxlength="120" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="mensaje">Mensaje</label>
+          <textarea class="form-textarea" id="mensaje" name="mensaje"
+                    placeholder="Escribinos tu consulta..." required minlength="10" maxlength="1000"
+                    aria-describedby="mensaje-error mensaje-count"></textarea>
+          <span class="form-char-count" id="mensaje-count" aria-live="polite">0 / 1000</span>
+          <span class="form-error" id="mensaje-error" role="alert"></span>
+        </div>
+        <button type="submit" class="btn btn--primary contact-form__submit">
+          Enviar mensaje
+        </button>
+      </form>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer__top">
+      <div>
+        <p class="footer__brand-name">SHESHE</p>
+        <p class="footer__brand-desc">Moda femenina de noche y eventos. Piezas diseñadas para mujeres que brillan en cada ocasión especial.</p>
+      </div>
+      <div>
+        <p class="footer__col-title">Navegación</p>
+        <ul class="footer__col-links">
+          <li><a href="#inicio">Inicio</a></li>
+          <li><a href="#tienda">Tienda</a></li>
+          <li><a href="#lookbook">Lookbook</a></li>
+          <li><a href="#contacto">Contacto</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__col-title">Información</p>
+        <ul class="footer__col-links">
+          <li><a href="#">Guía de talles</a></li>
+          <li><a href="#">Envíos y entregas</a></li>
+          <li><a href="#">Cambios y devoluciones</a></li>
+          <li><a href="#">Cómo comprar</a></li>
+        </ul>
+      </div>
+      <div>
+        <p class="footer__col-title">Legal</p>
+        <ul class="footer__col-links">
+          <li><a href="#">Términos y condiciones</a></li>
+          <li><a href="#">Política de privacidad</a></li>
+          <li><a href="#">Cookies</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <p class="footer__copy">© 2025 SHESHE. Todos los derechos reservados.</p>
+      <div class="footer__legal">
+        <a href="#">Privacidad</a>
+        <a href="#">Términos</a>
+      </div>
+    </div>
+  </footer>
+
+  <div class="cart-overlay" id="cartOverlay"></div>
+  <aside class="cart-sidebar" id="cartSidebar" role="dialog" aria-modal="true" aria-label="Carrito de compras" aria-hidden="true">
+    <div class="cart-sidebar__header">
+      <h2 class="cart-sidebar__title">Tu carrito</h2>
+      <button class="cart-close" id="cartCloseBtn" type="button" aria-label="Cerrar carrito">✕</button>
+    </div>
+    <div class="cart-sidebar__items" id="cartItems">
+      <div class="cart-empty" id="cartEmpty">
+        <div class="cart-empty__icon" aria-hidden="true">🛍</div>
+        <p>Tu carrito está vacío</p>
+        <a href="#tienda" class="btn btn--outline btn--sm" data-close-cart>Ver productos</a>
+      </div>
+    </div>
+    <div class="cart-sidebar__footer">
+      <div class="cart-total">
+        <span class="cart-total__label">Total</span>
+        <span class="cart-total__amount" id="cartTotal">$0</span>
+      </div>
+      <button class="btn btn--primary cart-checkout" id="checkoutBtn" type="button">Finalizar compra</button>
+    </div>
+  </aside>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalName">
+      <button class="modal__close" id="modalCloseBtn" type="button" aria-label="Cerrar">✕</button>
+      <div class="modal__image" id="modalImage" aria-hidden="true"></div>
+      <div class="modal__info">
+        <p class="modal__cat" id="modalCat"></p>
+        <h3 class="modal__name" id="modalName"></h3>
+        <p class="modal__price" id="modalPrice"></p>
+        <p class="modal__desc" id="modalDesc"></p>
+        <p class="modal__size-label" id="modalSizeLabel">Talles disponibles</p>
+        <div class="modal__sizes" role="group" aria-labelledby="modalSizeLabel" id="modalSizes">
+          <button class="size-opt" type="button" data-size="XS">XS</button>
+          <button class="size-opt" type="button" data-size="S">S</button>
+          <button class="size-opt selected" type="button" data-size="M" aria-pressed="true">M</button>
+          <button class="size-opt" type="button" data-size="L">L</button>
+          <button class="size-opt" type="button" data-size="XL">XL</button>
+        </div>
+        <button class="btn btn--primary modal__add" type="button" id="modalAddBtn">Agregar al carrito</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
