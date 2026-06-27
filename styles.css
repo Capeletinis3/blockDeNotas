@@ -1,14 +1,8 @@
-/* ===========================
-   SHESHE — Estilos Principales
-   Paleta: Beige & Crema Elegante
-   =========================== */
-
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Jost:wght@300;400;500&display=swap');
 
-/* === VARIABLES === */
 :root {
   --cream:     #F7F3EE;
-  --beige:     #EDE4D8;   /* beige claro real (antes estaba puesto en negro por error) */
+  --beige:     #EDE4D8;
   --sand:      #D4C4AF;
   --warm-dark: #5C4D3C;
   --mink:      #9A8472;
@@ -24,7 +18,6 @@
   --radius: 2px;
 }
 
-/* === RESET === */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
 body {
@@ -42,7 +35,6 @@ a { text-decoration: none; color: inherit; }
 button { cursor: pointer; border: none; background: none; font-family: inherit; color: inherit; }
 ul { list-style: none; }
 
-/* Accesibilidad: foco visible y skip link */
 :focus-visible { outline: 2px solid var(--warm-dark); outline-offset: 2px; }
 .skip-link {
   position: absolute;
@@ -58,7 +50,6 @@ ul { list-style: none; }
 }
 .skip-link:focus { left: 8px; top: 8px; }
 
-/* === NAVEGACIÓN === */
 .nav {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -146,7 +137,6 @@ ul { list-style: none; }
 }
 .cart-count.visible { display: flex; }
 
-/* Menú hamburguesa */
 .nav__hamburger {
   display: none;
   flex-direction: column;
@@ -160,7 +150,6 @@ ul { list-style: none; }
   transition: var(--transition);
 }
 
-/* Menú móvil */
 .mobile-menu {
   position: fixed;
   top: var(--nav-h); left: 0; right: 0;
@@ -182,7 +171,6 @@ ul { list-style: none; }
 }
 .mobile-menu a:hover { color: var(--black); }
 
-/* === HERO === */
 .hero {
   padding-top: var(--nav-h);
   min-height: 100vh;
@@ -251,7 +239,6 @@ ul { list-style: none; }
   letter-spacing: 0.05em;
 }
 
-/* === BOTONES === */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -303,7 +290,6 @@ ul { list-style: none; }
   font-size: 10px;
 }
 
-/* === SECCIONES === */
 .section {
   padding: 100px 80px;
 }
@@ -339,7 +325,6 @@ ul { list-style: none; }
 .section--dark .section__title { color: var(--cream); }
 .section--dark .section__label { color: var(--sand); }
 
-/* Banner central */
 .banner-center { text-align: center; padding: 80px; }
 .banner-center__label { color: var(--sand); margin-bottom: 16px; }
 .banner-center__title {
@@ -357,7 +342,6 @@ ul { list-style: none; }
 }
 .banner-center__cta { border-color: var(--mink); color: var(--cream); }
 
-/* === INTRO STRIP === */
 .intro-strip {
   padding: 48px 80px;
   background: var(--black);
@@ -381,7 +365,6 @@ ul { list-style: none; }
   font-size: 20px;
 }
 
-/* === TIENDA — GRID DE PRODUCTOS === */
 .products-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -426,7 +409,6 @@ ul { list-style: none; }
   padding: 24px;
 }
 
-/* Placeholder con degradado elegante */
 .grad-1 { background: linear-gradient(170deg, #E2D5C5 0%, #C9B69A 100%); }
 .grad-2 { background: linear-gradient(170deg, #D8CDBE 0%, #BDA98E 100%); }
 .grad-3 { background: linear-gradient(170deg, #EDE5D8 0%, #D4C0A8 100%); }
@@ -489,7 +471,6 @@ ul { list-style: none; }
   font-weight: 400;
 }
 
-/* Filtros de tienda */
 .shop-filters {
   display: flex;
   gap: 8px;
@@ -517,7 +498,6 @@ ul { list-style: none; }
   color: var(--white);
 }
 
-/* === LOOKBOOK === */
 .lookbook-grid {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
@@ -570,7 +550,6 @@ ul { list-style: none; }
 .look-bg-4 { background: linear-gradient(160deg, #D8C9B5 0%, #B09578 100%); }
 .look-bg-5 { background: linear-gradient(160deg, #CCC0AB 0%, #A58E75 100%); }
 
-/* === CONTACTO === */
 .contact-wrapper {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -616,7 +595,6 @@ ul { list-style: none; }
   color: var(--white);
 }
 
-/* Formulario */
 .form-group {
   margin-bottom: 24px;
 }
@@ -678,7 +656,6 @@ ul { list-style: none; }
 .form-char-count--limit { color: var(--danger); }
 .contact-form__submit { width: 100%; justify-content: center; }
 
-/* === CARRITO (SIDEBAR) === */
 .cart-overlay {
   position: fixed;
   inset: 0;
@@ -832,7 +809,6 @@ ul { list-style: none; }
 }
 .cart-checkout { width: 100%; text-align: center; justify-content: center; }
 
-/* === FOOTER === */
 .footer {
   background: var(--black);
   color: var(--sand);
@@ -900,7 +876,6 @@ ul { list-style: none; }
 }
 .footer__legal a:hover { opacity: 1; }
 
-/* === NOTIFICACIÓN TOAST === */
 .toast {
   position: fixed;
   bottom: 32px;
@@ -923,7 +898,6 @@ ul { list-style: none; }
   transform: translateX(-50%) translateY(0);
 }
 
-/* === MODAL PRODUCTO === */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1039,7 +1013,6 @@ ul { list-style: none; }
   box-shadow: 0 2px 12px rgba(0,0,0,0.1);
 }
 
-/* === RESPONSIVE === */
 @media (max-width: 1024px) {
   .section { padding: 80px 48px; }
   .nav { padding: 0 32px; }
@@ -1078,7 +1051,6 @@ ul { list-style: none; }
   .products-grid { grid-template-columns: 1fr; }
 }
 
-/* === ANIMACIONES === */
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(24px); }
   to   { opacity: 1; transform: translateY(0); }

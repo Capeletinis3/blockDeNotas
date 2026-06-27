@@ -1,28 +1,14 @@
-/* ===========================================================
-   SHESHE — Lógica del front-end
-   - Sin código inline (compatible con Content-Security-Policy estricta)
-   - Renderizado del carrito con escapado anti-XSS
-   - Persistencia en localStorage
-   - Checkout contra el backend (precios autoritativos en el servidor)
-   =========================================================== */
 'use strict';
 
 (function () {
-  /* ---- CONFIG ---- */
-  // URL base de la API. Si el front se sirve desde el mismo origen que el
-  // backend, dejar '' (mismo origen). Si no, poner la URL del servidor.
   const API_BASE = '';
   const CART_KEY = 'sheshe_cart_v1';
   const MAX_QTY_PER_ITEM = 10;
 
-  /* ---- ESTADO ---- */
   let cart = loadCart();
   let currentProduct = null;
   let lastFocusedEl = null;
 
-  /* ---- UTILIDADES ---- */
-
-  // Escapa texto para insertarlo de forma segura como HTML (anti-XSS).
   function escapeHTML(value) {
     return String(value)
       .replace(/&/g, '&amp;')
@@ -44,7 +30,6 @@
       if (!raw) return [];
       const data = JSON.parse(raw);
       if (!Array.isArray(data)) return [];
-      // Saneamos: solo aceptamos la forma esperada y tipos válidos.
       return data
         .filter(i => i && typeof i.id === 'string' && typeof i.name === 'string')
         .map(i => ({
@@ -63,15 +48,13 @@
   function saveCart() {
     try {
       localStorage.setItem(CART_KEY, JSON.stringify(cart));
-    } catch (e) { /* almacenamiento lleno o deshabilitado: se ignora */ }
+    } catch (e) {}
   }
 
-  /* ---- NAVBAR scroll ---- */
   window.addEventListener('scroll', () => {
     $('navbar').classList.toggle('scrolled', window.scrollY > 60);
   }, { passive: true });
 
-  /* ---- MENÚ MÓVIL ---- */
   const menuBtn = $('menuBtn');
   const mobileMenu = $('mobileMenu');
   function setMobileMenu(open) {
@@ -84,7 +67,6 @@
     a.addEventListener('click', () => setMobileMenu(false));
   });
 
-  /* ---- FILTROS TIENDA ---- */
   document.querySelectorAll('.filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.filter-btn').forEach(b => {
@@ -101,7 +83,6 @@
     });
   });
 
-  /* ---- LECTURA DE PRODUCTO DESDE LA TARJETA ---- */
   function productFromCard(card) {
     return {
       id: card.dataset.id,
@@ -113,7 +94,6 @@
     };
   }
 
-  /* ---- MODAL PRODUCTO ---- */
   const modalOverlay = $('modalOverlay');
 
   function openModal(card) {
@@ -128,12 +108,10 @@
 
     const img = $('modalImage');
     img.className = 'modal__image ' + (/^grad-[1-6]$/.test(p.grad) ? p.grad : 'grad-1');
-    // SVG estático y controlado (no proviene de datos de usuario).
     img.innerHTML = '<svg width="80" height="130" viewBox="0 0 80 130" fill="none" opacity="0.3" aria-hidden="true">' +
       '<ellipse cx="40" cy="22" rx="14" ry="16" stroke="#9A8472" stroke-width="1.2"/>' +
       '<path d="M26 38 C18 65 16 95 18 130 L62 130 C64 95 62 65 54 38" stroke="#9A8472" stroke-width="1.2" fill="none"/></svg>';
 
-    // Reset de talle por defecto (M).
     document.querySelectorAll('#modalSizes .size-opt').forEach(s => {
       const isM = s.dataset.size === 'M';
       s.classList.toggle('selected', isM);
@@ -187,7 +165,6 @@
     closeModal();
   });
 
-  /* ---- CARRITO ---- */
   const cartOverlay = $('cartOverlay');
   const cartSidebar = $('cartSidebar');
 
@@ -266,7 +243,6 @@
     }
     emptyEl.style.display = 'none';
 
-    // Construcción del DOM con escapado de todos los valores dinámicos.
     itemsEl.innerHTML = cart.map((item, idx) => {
       const name = escapeHTML(item.name);
       const size = escapeHTML(item.size);
@@ -291,7 +267,6 @@
     }).join('');
   }
 
-  // Delegación de eventos para los botones del carrito (creados dinámicamente).
   $('cartItems').addEventListener('click', (e) => {
     const qtyBtn = e.target.closest('[data-qty]');
     if (qtyBtn) {
@@ -302,7 +277,6 @@
     if (rmBtn) removeFromCart(parseInt(rmBtn.dataset.remove, 10));
   });
 
-  /* ---- CHECKOUT (contra el backend) ---- */
   const checkoutBtn = $('checkoutBtn');
   checkoutBtn.addEventListener('click', async () => {
     if (cart.length === 0) { showToast('Tu carrito está vacío'); return; }
@@ -312,7 +286,6 @@
     checkoutBtn.textContent = 'Procesando...';
 
     try {
-      // Solo se envían id, cantidad y talle. El servidor calcula los precios.
       const payload = {
         items: cart.map(i => ({ id: i.id, qty: i.qty, size: i.size })),
       };
@@ -329,7 +302,6 @@
 
       const data = await res.json();
       if (data && typeof data.init_point === 'string' && /^https:\/\//.test(data.init_point)) {
-        // Redirección a Mercado Pago (Checkout Pro).
         window.location.assign(data.init_point);
       } else {
         throw new Error('Respuesta de pago inválida');
@@ -341,7 +313,6 @@
     }
   });
 
-  /* ---- FORMULARIO DE CONTACTO ---- */
   const form = $('contactForm');
   const mensaje = $('mensaje');
   const mensajeCount = $('mensaje-count');
@@ -372,7 +343,6 @@
       if (value.length < 2) { setError(id, 'Ingresá tu nombre (mínimo 2 caracteres).'); return false; }
     }
     if (id === 'email') {
-      // Validación de formato razonable (la verificación real es del lado del servidor).
       const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
       if (!ok) { setError(id, 'Ingresá un email válido.'); return false; }
     }
@@ -418,7 +388,6 @@
         form.reset();
         if (mensaje) mensajeCount.textContent = '0 / ' + MAX_MSG;
       } catch (err) {
-        // Si el backend no está disponible, igual damos respuesta al usuario.
         showToast('No pudimos enviar el mensaje. Probá más tarde.');
       } finally {
         submitBtn.disabled = false;
@@ -426,7 +395,6 @@
     });
   }
 
-  /* ---- TOAST ---- */
   let toastTimer = null;
   function showToast(msg) {
     const t = $('toast');
@@ -436,7 +404,6 @@
     toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
   }
 
-  /* ---- TECLA ESC: cierra modal / carrito / menú ---- */
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (modalOverlay.classList.contains('open')) closeModal();
@@ -444,7 +411,6 @@
     else if (!mobileMenu.hidden) setMobileMenu(false);
   });
 
-  /* ---- ANIMACIÓN FADE-UP al scroll ---- */
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const animatable = document.querySelectorAll('.product-card, .look-item, .contact-info__detail');
   if (reduceMotion) {
@@ -467,6 +433,5 @@
     });
   }
 
-  /* ---- INICIALIZACIÓN ---- */
   updateCartUI();
 })();

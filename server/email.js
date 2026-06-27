@@ -1,14 +1,5 @@
 'use strict';
 
-/*
- * Envío de emails con Nodemailer (SMTP).
- * Funciona con cualquier proveedor SMTP (Gmail, Brevo, Resend, Mailgun, etc.).
- *
- * Si no hay credenciales SMTP configuradas, las funciones NO fallan:
- * simplemente registran el mensaje en consola. Así el sitio sigue andando
- * aunque todavía no hayas configurado el correo.
- */
-
 const nodemailer = require('nodemailer');
 
 const {
@@ -17,7 +8,7 @@ const {
   SMTP_USER,
   SMTP_PASS,
   MAIL_FROM,
-  MAIL_TO, // a dónde te llegan las notificaciones (tu casilla)
+  MAIL_TO,
 } = process.env;
 
 const isConfigured = Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
@@ -27,7 +18,7 @@ if (isConfigured) {
   transporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465, // 465 = SSL; 587 = STARTTLS
+    secure: Number(SMTP_PORT) === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
 }
@@ -35,7 +26,6 @@ if (isConfigured) {
 const FROM = MAIL_FROM || SMTP_USER;
 const TO = MAIL_TO || SMTP_USER;
 
-// Escapa texto para insertarlo de forma segura en el HTML del email.
 function esc(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -58,7 +48,6 @@ async function send(opts) {
   }
 }
 
-// Notificación de consulta del formulario de contacto.
 function sendContactNotification({ nombre, email, asunto, mensaje }) {
   return send({
     to: TO,
@@ -74,7 +63,6 @@ function sendContactNotification({ nombre, email, asunto, mensaje }) {
   });
 }
 
-// Notificación de pedido pagado (te llega a vos, la tienda).
 function sendOrderPaidNotification(order) {
   const rows = order.items.map(it =>
     `<tr><td>${esc(it.name)}</td><td>${esc(it.size)}</td><td>${it.qty}</td>` +

@@ -4,12 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!--
-    Content-Security-Policy: defensa principal contra XSS.
-    Lo ideal es enviarla también como cabecera HTTP desde el servidor
-    (ver server/server.js -> helmet). Acá la dejamos como respaldo.
-    'self' = solo recursos de este mismo origen. No se permite JS inline.
-  -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     base-uri 'self';
@@ -33,10 +27,8 @@
 </head>
 <body>
 
-  <!-- Salto de accesibilidad -->
   <a href="#tienda" class="skip-link">Saltar al contenido</a>
 
-  <!-- ===== NAVEGACIÓN ===== -->
   <nav class="nav" id="navbar">
     <a href="#inicio" class="nav__logo">SHESHE</a>
 
@@ -61,7 +53,6 @@
     </div>
   </nav>
 
-  <!-- Menú móvil -->
   <div id="mobileMenu" class="mobile-menu" hidden>
     <a href="#inicio" data-close-menu>Inicio</a>
     <a href="#tienda" data-close-menu>Tienda</a>
@@ -69,7 +60,6 @@
     <a href="#contacto" data-close-menu>Contacto</a>
   </div>
 
-  <!-- ===== HERO ===== -->
   <section class="hero" id="inicio">
     <div class="hero__text">
       <p class="hero__eyebrow fade-up">Nueva Colección 2025</p>
@@ -101,7 +91,6 @@
     </div>
   </section>
 
-  <!-- ===== STRIP ===== -->
   <div class="intro-strip">
     <span class="intro-strip__item">Diseñado para brillar</span>
     <span class="intro-strip__sep" aria-hidden="true">·</span>
@@ -114,7 +103,6 @@
     <span class="intro-strip__item">Atención personalizada</span>
   </div>
 
-  <!-- ===== TIENDA ===== -->
   <section class="section section--light" id="tienda">
     <div class="section__header">
       <div>
@@ -126,7 +114,6 @@
       </a>
     </div>
 
-    <!-- Filtros -->
     <div class="shop-filters" role="group" aria-label="Filtrar productos por categoría">
       <button class="filter-btn active" type="button" data-filter="all" aria-pressed="true">Todo</button>
       <button class="filter-btn" type="button" data-filter="vestidos" aria-pressed="false">Vestidos</button>
@@ -135,7 +122,6 @@
       <button class="filter-btn" type="button" data-filter="faldas" aria-pressed="false">Faldas</button>
     </div>
 
-    <!-- Productos -->
     <div class="products-grid" id="productsGrid">
 
       <article class="product-card" data-category="vestidos" data-id="nocturne"
@@ -294,7 +280,6 @@
     </div>
   </section>
 
-  <!-- ===== BANNER CENTRAL ===== -->
   <section class="section section--dark banner-center">
     <p class="section__label banner-center__label">La filosofía SHESHE</p>
     <h2 class="section__title banner-center__title">
@@ -306,7 +291,6 @@
     <a href="#tienda" class="btn btn--outline banner-center__cta">Explorar colección</a>
   </section>
 
-  <!-- ===== LOOKBOOK ===== -->
   <section class="section section--beige" id="lookbook">
     <div class="section__header">
       <div>
@@ -367,7 +351,6 @@
     </div>
   </section>
 
-  <!-- ===== CONTACTO ===== -->
   <section class="section section--light" id="contacto">
     <div class="section__header section__header--contact">
       <div>
@@ -446,7 +429,6 @@
     </div>
   </section>
 
-  <!-- ===== FOOTER ===== -->
   <footer class="footer">
     <div class="footer__top">
       <div>
@@ -489,7 +471,6 @@
     </div>
   </footer>
 
-  <!-- ===== CARRITO SIDEBAR ===== -->
   <div class="cart-overlay" id="cartOverlay"></div>
   <aside class="cart-sidebar" id="cartSidebar" role="dialog" aria-modal="true" aria-label="Carrito de compras" aria-hidden="true">
     <div class="cart-sidebar__header">
@@ -512,7 +493,6 @@
     </div>
   </aside>
 
-  <!-- ===== MODAL PRODUCTO ===== -->
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal" id="productModal" role="dialog" aria-modal="true" aria-labelledby="modalName">
       <button class="modal__close" id="modalCloseBtn" type="button" aria-label="Cerrar">✕</button>
@@ -535,7 +515,6 @@
     </div>
   </div>
 
-  <!-- ===== TOAST ===== -->
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="app.js" defer></script>

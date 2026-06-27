@@ -1,21 +1,11 @@
 'use strict';
 
-/*
- * Base de datos de pedidos (SQLite).
- * Guarda cada pedido y sus ítems. El estado del pago se actualiza desde
- * el webhook de Mercado Pago una vez confirmado el pago real.
- *
- * El archivo de la base se crea solo. Por defecto en ./data/sheshe.db
- * (configurable con la variable de entorno DB_PATH).
- */
-
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'sheshe.db');
 
-// Aseguramos que exista la carpeta contenedora.
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const db = new Database(DB_PATH);
@@ -66,7 +56,6 @@ const stmtUpdateStatus = db.prepare(
 );
 const stmtListOrders = db.prepare('SELECT * FROM orders ORDER BY created_at DESC LIMIT ?');
 
-// Crea un pedido (pendiente) con sus ítems en una transacción.
 const createOrder = db.transaction(({ ref, total, currency, preferenceId, items }) => {
   stmtInsertOrder.run({ ref, total, currency: currency || 'ARS', preferenceId: preferenceId || null });
   for (const it of items) {
