@@ -6,6 +6,13 @@ node_modules/
 .env.local
 .env.*.local
 
+# Base de datos local (SQLite)
+data/
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+
 # Logs
 *.log
 npm-debug.log*
