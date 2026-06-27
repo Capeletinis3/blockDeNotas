@@ -1,0 +1,23 @@
+{
+  "name": "sheshe-store",
+  "version": "1.0.0",
+  "description": "Tienda SHESHE — front-end estático + backend seguro con Mercado Pago",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "mercadopago": "^3.1.0"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
