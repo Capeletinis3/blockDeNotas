@@ -19,6 +19,12 @@ Objetivo: **patear una pelota, golpear un soporte y provocar que caiga una estru
 | Patear    | F           | Botón PATEAR   |
 | Reiniciar | R           | Botón Reiniciar |
 
+## Abrirlo directo (sin Rojo)
+
+Si tenés `PatadaDemoledora.rbxl`, abrilo con doble clic o desde Studio (File → Open) y dale Play.
+
+Para generarlo desde el repo: `rojo build default.project.json -o PatadaDemoledora.rbxl`
+
 ## Cómo abrirlo en Studio (Rojo)
 
 1. Instalá [Rojo](https://rojo.space) 7.x (CLI) y el plugin de Rojo para Studio.
