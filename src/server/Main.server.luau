@@ -12,7 +12,7 @@ local Aim = require(Shared.Aim)
 
 local remotes = Instance.new("Folder")
 remotes.Name = "Remotes"
-for _, name in { "Patear", "Reiniciar", "Resultado", "Aviso" } do
+for _, name in { "Patear", "Reiniciar", "Resultado", "Aviso", "MejorarPelota" } do
 	local event = Instance.new("RemoteEvent")
 	event.Name = name
 	event.Parent = remotes
@@ -40,6 +40,7 @@ local velocities: { [BasePart]: Vector3 } = {}
 local result = nil
 local bestResist = nil
 local kicker: Player? = nil
+local breakMultiplier = 1 -- del nivel de pelota de quien pateó
 
 local function setState(newState)
 	state = newState
@@ -143,8 +144,11 @@ local function onTouched(part: BasePart, other: BasePart)
 		local a, b = part.AssemblyMass, other.AssemblyMass
 		mass = a * b / (a + b)
 	end
-	local impulse = (vPart - vOther).Magnitude * mass
 	local isBall = other == ball
+	local impulse = (vPart - vOther).Magnitude * mass
+	if isBall then
+		impulse *= breakMultiplier
+	end
 
 	if impulse >= material.Strength then
 		breakPart(part, isBall)
@@ -198,6 +202,9 @@ local function buildScenario()
 	for _, x in { -5, 0, 5 } do
 		addPiece("Caja", Vector3.new(3, 3, 3), CFrame.new(at(x, 12.5, 40)))
 	end
+
+	-- Panel reforzado en el centro, para comparar los niveles de la pelota.
+	addPiece("Reforzado", Vector3.new(8, 6, 1), CFrame.new(at(0, 3, 50)), true)
 
 	-- Pared que frena la pelota si no golpea nada.
 	addPiece("Pared", Vector3.new(40, 8, 2), CFrame.new(at(0, 4, 62)), true)
@@ -273,7 +280,13 @@ local function explain(toppled: boolean): string
 	local broken = #result.broken
 	if toppled then
 		return "¡Estructura derribada!"
-	elseif broken > 0 then
+	end
+	for _, piece in result.broken do
+		if piece.kind == "Reforzado" then
+			return "¡Atravesaste el panel reforzado!"
+		end
+	end
+	if broken > 0 then
 		return "Rompiste algo, pero la estructura sigue en pie. Probá otro ángulo."
 	elseif bestResist then
 		return string.format(
@@ -362,8 +375,11 @@ remotes.Patear.OnServerEvent:Connect(function(player, angle)
 	result = { broken = {}, paid = false }
 	bestResist = nil
 	kicker = player
+	local level = Config.BallLevels[player:GetAttribute("NivelPelota") or 1]
+	breakMultiplier = level.BreakMultiplier
 	setState("Pateando")
 
+	ball.Color = level.Color
 	ball.Anchored = false
 	ball:SetNetworkOwner(nil)
 	ball.AssemblyLinearVelocity = Aim.direction(angle) * Config.KickSpeed
@@ -375,6 +391,29 @@ remotes.Reiniciar.OnServerEvent:Connect(function()
 		return
 	end
 	reset()
+end)
+
+-- El nivel vive en el jugador, así que reiniciar el escenario no lo cambia.
+-- Si se compra durante una patada, rige desde la siguiente.
+remotes.MejorarPelota.OnServerEvent:Connect(function(player)
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not leaderstats then
+		return
+	end
+	local money = leaderstats.Plata
+	local nextLevel = (player:GetAttribute("NivelPelota") or 1) + 1
+	local upgrade = Config.BallLevels[nextLevel]
+	if not upgrade then
+		remotes.Aviso:FireClient(player, "La pelota ya está al nivel máximo.")
+		return
+	end
+	if money.Value < upgrade.Price then
+		remotes.Aviso:FireClient(player, string.format("Te faltan $%d para la mejora.", upgrade.Price - money.Value))
+		return
+	end
+	money.Value -= upgrade.Price
+	player:SetAttribute("NivelPelota", nextLevel)
+	remotes.Aviso:FireClient(player, string.format("¡Pelota mejorada a nivel %d!", nextLevel))
 end)
 
 -- Los jugadores aparecen en la zona de patada, mirando hacia la estructura.
@@ -396,6 +435,7 @@ local function onPlayerAdded(player: Player)
 	money.Value = 0
 	money.Parent = leaderstats
 	leaderstats.Parent = player
+	player:SetAttribute("NivelPelota", 1)
 
 	player.CharacterAdded:Connect(placeCharacter)
 	if player.Character then

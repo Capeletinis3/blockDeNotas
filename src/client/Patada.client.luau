@@ -118,6 +118,53 @@ local resetButton = makeButton(
 	Vector2.new(1, 0)
 )
 
+local upgradeButton = makeButton(
+	"",
+	UDim2.fromOffset(220, 56),
+	UDim2.new(0, 12, 0, 120),
+	Color3.fromRGB(60, 60, 70),
+	Vector2.new(0, 0)
+)
+upgradeButton.TextScaled = false
+upgradeButton.TextSize = 16
+
+local function multiplierText(level)
+	return (string.format("x%g", level.BreakMultiplier):gsub("%.", ","))
+end
+
+local function updateUpgrade()
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local money = leaderstats and leaderstats:FindFirstChild("Plata")
+	local levelIndex = player:GetAttribute("NivelPelota") or 1
+	local current = Config.BallLevels[levelIndex]
+	local nextLevel = Config.BallLevels[levelIndex + 1]
+
+	if not nextLevel then
+		upgradeButton.Text = string.format("Pelota nivel %d (%s)\nNivel máximo", levelIndex, multiplierText(current))
+		upgradeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+		return
+	end
+	local affordable = money ~= nil and money.Value >= nextLevel.Price
+	upgradeButton.Text = string.format(
+		"Pelota nivel %d (%s)\nMejorar a %s: $%d",
+		levelIndex,
+		multiplierText(current),
+		multiplierText(nextLevel),
+		nextLevel.Price
+	)
+	upgradeButton.BackgroundColor3 = if affordable then Color3.fromRGB(40, 140, 60) else Color3.fromRGB(60, 60, 70)
+end
+
+upgradeButton.Activated:Connect(function()
+	remotes.MejorarPelota:FireServer()
+end)
+player:GetAttributeChangedSignal("NivelPelota"):Connect(updateUpgrade)
+task.spawn(function()
+	player:WaitForChild("leaderstats"):WaitForChild("Plata").Changed:Connect(updateUpgrade)
+	updateUpgrade()
+end)
+updateUpgrade()
+
 -- Flecha de apuntado (solo existe en este cliente) ----------------------------
 
 local arrow = Instance.new("Part")

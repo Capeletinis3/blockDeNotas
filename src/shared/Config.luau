@@ -26,6 +26,14 @@ Config.ResetCooldown = 0.5
 Config.MoneyDirect = 10 -- rota por la pelota
 Config.MoneyChain = 25 -- rota por otra pieza del escenario
 
+-- Niveles de la pelota. BreakMultiplier multiplica el impulso de sus impactos
+-- directos al decidir si una pieza se rompe. Price es lo que cuesta pasar a ese nivel.
+Config.BallLevels = {
+	{ Price = 0, BreakMultiplier = 1, Color = Color3.fromRGB(245, 245, 245) },
+	{ Price = 60, BreakMultiplier = 1.5, Color = Color3.fromRGB(90, 160, 255) },
+	{ Price = 150, BreakMultiplier = 2, Color = Color3.fromRGB(255, 200, 50) },
+}
+
 -- La estructura cuenta como derribada si la plataforma se movió más que esto
 Config.ToppleDistance = 3
 
@@ -57,6 +65,16 @@ Config.Materials = {
 		Elasticity = 0.2,
 		Material = Enum.Material.WoodPlanks,
 		Color = Color3.fromRGB(196, 148, 90),
+	},
+	Reforzado = {
+		Label = "El panel reforzado",
+		Strength = 2600, -- pensado para resistir la pelota nivel 1 y ceder con la nivel 2
+		Absorb = 0.5,
+		Density = 1.5,
+		Friction = 0.5,
+		Elasticity = 0.1,
+		Material = Enum.Material.DiamondPlate,
+		Color = Color3.fromRGB(150, 160, 175),
 	},
 	Plataforma = {
 		Density = 0.6,
