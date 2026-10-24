@@ -1,18 +1,33 @@
--- Prototipo 1: patear la pelota, romper un soporte y derribar la estructura.
+-- Fase 1: patear, provocar cadenas, cobrar, entrenar y comprar mejoras.
 local Debris = game:GetService("Debris")
+local PhysicsService = game:GetService("PhysicsService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local Balance = require(Shared.Balance)
 local Aim = require(Shared.Aim)
+local Progression = require(Shared.Progression)
+
+local progression = Progression.new(Balance)
 
 -- Remotos y estado compartido -------------------------------------------------
 
 local remotes = Instance.new("Folder")
 remotes.Name = "Remotes"
-for _, name in { "Patear", "Reiniciar", "Resultado", "Aviso", "MejorarPelota" } do
+for _, name in {
+	"Patear",
+	"Reiniciar",
+	"Resultado",
+	"Aviso",
+	"MejorarPelota",
+	"ComprarZapatillas",
+	"EquiparZapatillas",
+	"Entrenar",
+} do
 	local event = Instance.new("RemoteEvent")
 	event.Name = name
 	event.Parent = remotes
@@ -22,25 +37,37 @@ remotes.Parent = ReplicatedStorage
 -- El piso queda por encima de y = 0 para no superponerse con un Baseplate.
 local GROUND = 1
 local BALL_SPOT = Vector3.new(0, GROUND + Config.Ball.Diameter / 2, 10)
+local TRAIN_SPOT = Vector3.new(-18, GROUND, 6)
 
 remotes:SetAttribute("PelotaPos", BALL_SPOT)
+remotes:SetAttribute("EntrenamientoPos", TRAIN_SPOT)
+
+-- La barrera frena a los personajes pero deja pasar la pelota y las piezas.
+PhysicsService:RegisterCollisionGroup("Escenario")
+PhysicsService:RegisterCollisionGroup("Barrera")
+PhysicsService:CollisionGroupSetCollidable("Escenario", "Barrera", false)
 
 local random = Random.new()
 
 local state = "Reiniciando"
 local attemptId = 0
 local lastReset = 0
+local nextPieceId = 0
 
 local scenario: Folder? = nil
 local ball: Part? = nil
 local platform: Part? = nil
 local platformOrigin: Vector3? = nil
+local dynamic: { BasePart } = {} -- piezas que se sueltan al patear
 local tracked: { BasePart } = {} -- piezas sueltas cuyas velocidades seguimos
 local velocities: { [BasePart]: Vector3 } = {}
-local result = nil
+
+local attempt = nil -- Attempt de Progression
+local breakLog: { { label: string, direct: boolean, kind: string } } = {}
 local bestResist = nil
-local kicker: Player? = nil
-local breakMultiplier = 1 -- del nivel de pelota de quien pateó
+local ballStats = Balance.BallLevels[1]
+
+local players: { [Player]: any } = {} -- estado de progresión de cada jugador en la sesión
 
 local function setState(newState)
 	state = newState
@@ -62,6 +89,68 @@ local function newPart(name, size, cframe)
 	return part
 end
 
+local function addSign(part: BasePart, text: string)
+	local billboard = Instance.new("BillboardGui")
+	billboard.Size = UDim2.fromOffset(200, 40)
+	billboard.StudsOffset = Vector3.new(0, 4, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = 80
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.TextStrokeTransparency = 0.3
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = text
+	label.Parent = billboard
+	billboard.Parent = part
+end
+
+-- Sonido 3D en una posición, con un tope para no saturar cuando se rompe mucho junto.
+local lastSoundAt: { [string]: number } = {}
+local function playSoundAt(kind: string, position: Vector3)
+	local now = os.clock()
+	if now - (lastSoundAt[kind] or 0) < 0.06 then
+		return
+	end
+	lastSoundAt[kind] = now
+	local holder = newPart("Sonido", Vector3.new(0.2, 0.2, 0.2), CFrame.new(position))
+	holder.Transparency = 1
+	holder.CanCollide = false
+	holder.CanQuery = false
+	holder.CanTouch = false
+	local sound = Instance.new("Sound")
+	sound.SoundId = Config.Sounds[kind]
+	sound.RollOffMaxDistance = 150
+	sound.Parent = holder
+	holder.Parent = workspace
+	sound:Play()
+	Debris:AddItem(holder, 3)
+end
+
+-- Progreso de cada jugador ----------------------------------------------------
+
+-- Copia el estado de progresión a lo que ven los clientes.
+local function sync(player: Player)
+	local data = players[player]
+	local leaderstats = player:FindFirstChild("leaderstats")
+	if not data or not leaderstats then
+		return
+	end
+	leaderstats.Plata.Value = data.money
+	leaderstats.Fuerza.Value = data.strength
+	player:SetAttribute("NivelPelota", data.ballLevel)
+	player:SetAttribute("Zapatillas", data.shoeEquipped)
+	local owned = {}
+	for id in data.shoesOwned do
+		table.insert(owned, tostring(id))
+	end
+	table.sort(owned)
+	player:SetAttribute("ZapatillasCompradas", table.concat(owned, ","))
+	player:SetAttribute("VelocidadPatada", math.floor(progression:kickSpeed(data)))
+end
+
 -- Partes fijas -------------------------------------------------------------------
 
 local static = Instance.new("Model")
@@ -78,6 +167,20 @@ pad.Material = Enum.Material.SmoothPlastic
 pad.Color = Color3.fromRGB(240, 200, 60)
 pad.CanCollide = false
 pad.Parent = static
+addSign(pad, "ZONA DE PATADA")
+
+local trainPad = newPart("ZonaDeEntrenamiento", Vector3.new(8, 0.2, 8), CFrame.new(TRAIN_SPOT + Vector3.new(0, 0.1, 0)))
+trainPad.Material = Enum.Material.SmoothPlastic
+trainPad.Color = Color3.fromRGB(80, 160, 230)
+trainPad.CanCollide = false
+trainPad.Parent = static
+addSign(trainPad, "ENTRENAMIENTO")
+
+local barrier = newPart("Barrera", Vector3.new(60, 30, 1), CFrame.new(at(0, 15, 20)))
+barrier.Transparency = 1
+barrier.CanQuery = false
+barrier.CollisionGroup = "Barrera"
+barrier.Parent = static
 
 local fx = Instance.new("Folder")
 fx.Name = "Efectos"
@@ -88,6 +191,9 @@ fx.Parent = workspace
 local function spawnFragments(part: BasePart, velocity: Vector3)
 	local size = part.Size
 	for _ = 1, Config.FragmentsPerBreak do
+		if #fx:GetChildren() >= Config.MaxFragments then
+			return
+		end
 		local fragSize = Vector3.new(
 			math.clamp(size.X * random:NextNumber(0.2, 0.45), 0.3, 2.5),
 			math.clamp(size.Y * random:NextNumber(0.2, 0.45), 0.3, 2.5),
@@ -102,6 +208,7 @@ local function spawnFragments(part: BasePart, velocity: Vector3)
 		frag.Anchored = false
 		frag.CanTouch = false
 		frag.CanQuery = false
+		frag.CollisionGroup = "Escenario"
 		frag.Material = part.Material
 		frag.Color = part.Color
 		frag.CustomPhysicalProperties = PhysicalProperties.new(0.05, 0.5, 0.2)
@@ -113,13 +220,16 @@ end
 
 local function breakPart(part: BasePart, direct: boolean)
 	part:SetAttribute("Roto", true)
-	table.insert(result.broken, { kind = part.Name, direct = direct })
+	if attempt:recordBreak(part:GetAttribute("Id"), direct) then
+		table.insert(breakLog, { label = part:GetAttribute("Label"), direct = direct, kind = part.Name })
+	end
+	playSoundAt("Break", part.Position)
 	spawnFragments(part, velocities[part] or Vector3.zero)
 	part:Destroy()
 end
 
 local function onTouched(part: BasePart, other: BasePart)
-	if state ~= "Pateando" or part:GetAttribute("Roto") then
+	if state ~= "Pateando" or not attempt or part:GetAttribute("Roto") then
 		return
 	end
 	-- Solo cuentan las piezas del escenario y lo anclado (piso, pared).
@@ -147,16 +257,17 @@ local function onTouched(part: BasePart, other: BasePart)
 	local isBall = other == ball
 	local impulse = (vPart - vOther).Magnitude * mass
 	if isBall then
-		impulse *= breakMultiplier
+		impulse *= ballStats.BreakMultiplier
 	end
 
 	if impulse >= material.Strength then
 		breakPart(part, isBall)
 		if isBall then
 			-- La pelota atraviesa lo que rompe, perdiendo parte de su impulso.
-			other.AssemblyLinearVelocity = vOther * (1 - material.Absorb)
+			other.AssemblyLinearVelocity = vOther * (1 - material.Absorb * ballStats.AbsorbMultiplier)
 		end
 	elseif isBall then
+		playSoundAt("Impact", part.Position)
 		local ratio = impulse / material.Strength
 		if not bestResist or ratio > bestResist.ratio then
 			bestResist = { label = material.Label, ratio = ratio }
@@ -164,18 +275,23 @@ local function onTouched(part: BasePart, other: BasePart)
 	end
 end
 
-local function addPiece(kind: string, size: Vector3, cframe: CFrame, anchored: boolean?): Part
+-- Las piezas sueltas quedan ancladas hasta la patada: así la estructura no se
+-- mueve sola ni la empujan los personajes antes de patear.
+local function addPiece(kind: string, size: Vector3, cframe: CFrame, label: string?, fixed: boolean?): Part
 	local material = Config.Materials[kind]
 	local part = newPart(kind, size, cframe)
-	part.Anchored = anchored == true
 	part.Material = material.Material
 	part.Color = material.Color
+	part.CollisionGroup = "Escenario"
 	part.CustomPhysicalProperties =
 		PhysicalProperties.new(material.Density, material.Friction, material.Elasticity)
+	nextPieceId += 1
+	part:SetAttribute("Id", nextPieceId)
+	part:SetAttribute("Label", label or string.lower(material.Label or kind))
 	part.Parent = scenario
 
-	if not part.Anchored then
-		part:SetNetworkOwner(nil)
+	if not fixed then
+		table.insert(dynamic, part)
 		table.insert(tracked, part)
 	end
 	if material.Strength then
@@ -190,33 +306,36 @@ local function buildScenario()
 	scenario = Instance.new("Folder")
 	scenario.Name = "Escenario"
 	scenario.Parent = workspace
+	dynamic = {}
 	tracked = {}
 	velocities = {}
 
 	-- Dos soportes sostienen una plataforma con cajas encima.
-	for _, x in { -8, 8 } do
-		addPiece("Madera", Vector3.new(1.5, 10, 1.5), CFrame.new(at(x, 5, 40)))
-	end
-	platform = addPiece("Plataforma", Vector3.new(20, 1, 6), CFrame.new(at(0, 10.5, 40)))
+	-- Ángulo positivo = derecha del jugador = -X.
+	addPiece("Madera", Vector3.new(1.5, 10, 1.5), CFrame.new(at(8, 5, 40)), "el soporte izquierdo")
+	addPiece("Madera", Vector3.new(1.5, 10, 1.5), CFrame.new(at(-8, 5, 40)), "el soporte derecho")
+	platform = addPiece("Plataforma", Vector3.new(20, 1, 6), CFrame.new(at(0, 10.5, 40)), "la plataforma")
 	platformOrigin = platform.Position
 	for _, x in { -5, 0, 5 } do
-		addPiece("Caja", Vector3.new(3, 3, 3), CFrame.new(at(x, 12.5, 40)))
+		addPiece("Caja", Vector3.new(3, 3, 3), CFrame.new(at(x, 12.5, 40)), "una caja")
 	end
 
 	-- Panel reforzado en el centro, para comparar los niveles de la pelota.
-	addPiece("Reforzado", Vector3.new(8, 6, 1), CFrame.new(at(0, 3, 50)), true)
+	addPiece("Reforzado", Vector3.new(8, 6, 1), CFrame.new(at(0, 3, 50)), "el panel reforzado", true)
 
 	-- Pared que frena la pelota si no golpea nada.
-	addPiece("Pared", Vector3.new(40, 8, 2), CFrame.new(at(0, 4, 62)), true)
+	addPiece("Pared", Vector3.new(40, 8, 2), CFrame.new(at(0, 4, 62)), "la pared", true)
 
 	local d = Config.Ball.Diameter
 	ball = newPart("Pelota", Vector3.new(d, d, d), CFrame.new(BALL_SPOT))
 	ball.Shape = Enum.PartType.Ball
 	ball.Material = Enum.Material.SmoothPlastic
-	ball.Color = Color3.fromRGB(245, 245, 245)
+	ball.Color = Config.BallColors[1]
+	ball.CollisionGroup = "Escenario"
 	ball.CustomPhysicalProperties =
 		PhysicalProperties.new(Config.Ball.Density, Config.Ball.Friction, Config.Ball.Elasticity)
 	ball.Parent = scenario
+	table.insert(dynamic, ball)
 	table.insert(tracked, ball)
 end
 
@@ -230,31 +349,19 @@ RunService.Stepped:Connect(function()
 	end
 end)
 
--- Plata ---------------------------------------------------------------------------
+-- Cobro --------------------------------------------------------------------------
 
-local function countBreaks()
-	local direct, chain = 0, 0
-	for _, piece in result.broken do
-		if piece.direct then
-			direct += 1
-		else
-			chain += 1
-		end
-	end
-	return direct, chain
-end
-
--- Paga una sola vez por intento, aunque se reinicie a mitad de la patada.
+-- Paga una sola vez por intento (lo garantiza Attempt), aunque se reinicie a mitad de la patada.
 local function payAttempt(): number
-	if not result or result.paid then
+	if not attempt then
 		return 0
 	end
-	result.paid = true
-	local direct, chain = countBreaks()
-	local earned = direct * Config.MoneyDirect + chain * Config.MoneyChain
-	local leaderstats = kicker and kicker.Parent and kicker:FindFirstChild("leaderstats")
-	if leaderstats and earned > 0 then
-		leaderstats.Plata.Value += earned
+	local earned = attempt:settle()
+	local kicker = attempt.kicker
+	local data = players[kicker]
+	if data and earned > 0 then
+		data.money += earned
+		sync(kicker)
 	end
 	return earned
 end
@@ -271,26 +378,38 @@ local function reset()
 	end
 	fx:ClearAllChildren()
 	buildScenario()
+	attempt = nil
 	setState("Listo")
 end
 
 -- Intento -------------------------------------------------------------------------
 
-local function explain(toppled: boolean): string
-	local broken = #result.broken
-	if toppled then
-		return "¡Estructura derribada!"
+local function explain(toppled: boolean, chain: number): string
+	local firstDirect = nil
+	for _, entry in breakLog do
+		if entry.direct then
+			firstDirect = entry
+			break
+		end
 	end
-	for _, piece in result.broken do
-		if piece.kind == "Reforzado" then
+
+	if toppled then
+		local cause = if firstDirect then "Rompiste " .. firstDirect.label else "La estructura se desarmó"
+		if chain > 0 then
+			return string.format("¡Derribada! %s y cayeron %d piezas en cadena.", cause, chain)
+		end
+		return string.format("¡Derribada! %s y cayó la plataforma.", cause)
+	end
+	for _, entry in breakLog do
+		if entry.kind == "Reforzado" then
 			return "¡Atravesaste el panel reforzado!"
 		end
 	end
-	if broken > 0 then
-		return "Rompiste algo, pero la estructura sigue en pie. Probá otro ángulo."
+	if firstDirect then
+		return string.format("Rompiste %s, pero la estructura sigue en pie. Probá otro ángulo.", firstDirect.label)
 	elseif bestResist then
 		return string.format(
-			"%s resistió: le llegó el %d%% de la fuerza necesaria.",
+			"%s resistió: le llegó el %d%% de la fuerza necesaria. Entrená o mejorá la pelota.",
 			bestResist.label,
 			math.floor(bestResist.ratio * 100)
 		)
@@ -305,16 +424,16 @@ local function finishAttempt()
 		and platform.Parent ~= nil
 		and (platform.Position - platformOrigin).Magnitude > Config.ToppleDistance
 
-	local direct, chain = countBreaks()
+	local direct, chain = attempt.direct, attempt.chain
 	local earned = payAttempt()
 
 	remotes.Resultado:FireAllClients({
-		message = explain(toppled),
+		message = explain(toppled, chain),
 		direct = direct,
 		chain = chain,
 		toppled = toppled,
 		earned = earned,
-		kicker = kicker,
+		kicker = attempt.kicker,
 	})
 
 	local id = attemptId
@@ -360,8 +479,46 @@ local function watchAttempt(id: number)
 	end
 end
 
+-- Mueve la pierna derecha hacia adelante y la vuelve a su lugar.
+local function playKickAnimation(character: Model, direction: Vector3)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root then
+		local flat = Vector3.new(direction.X, 0, direction.Z)
+		root.CFrame = CFrame.lookAt(root.Position, root.Position + flat)
+	end
+
+	-- R15 usa RightHip; R6 usa "Right Hip", que rota sobre su eje Z local.
+	local hip = character:FindFirstChild("RightHip", true) or character:FindFirstChild("Right Hip", true)
+	if not hip or not hip:IsA("Motor6D") or hip:GetAttribute("Pateando") then
+		return
+	end
+	local swing = if hip.Name == "RightHip" then CFrame.Angles(math.rad(75), 0, 0) else CFrame.Angles(0, 0, math.rad(75))
+	local original = hip.C0
+	hip:SetAttribute("Pateando", true)
+	TweenService:Create(hip, TweenInfo.new(Config.KickWindup, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		C0 = original * swing,
+	}):Play()
+	task.delay(Config.KickWindup + 0.1, function()
+		local back = TweenService:Create(hip, TweenInfo.new(0.2), { C0 = original })
+		back.Completed:Connect(function()
+			hip:SetAttribute("Pateando", nil)
+		end)
+		back:Play()
+	end)
+end
+
 remotes.Patear.OnServerEvent:Connect(function(player, angle)
-	if state ~= "Listo" or typeof(angle) ~= "number" or angle ~= angle then
+	if typeof(angle) ~= "number" or angle ~= angle then
+		return
+	end
+	local data = players[player]
+	if not data then
+		return
+	end
+	if state == "Pateando" or state == "Resultado" then
+		remotes.Aviso:FireClient(player, "Esperá a que termine la patada.")
+		return
+	elseif state ~= "Listo" then
 		return
 	end
 	local character = player.Character
@@ -371,19 +528,34 @@ remotes.Patear.OnServerEvent:Connect(function(player, angle)
 		return
 	end
 
+	-- Cambiar el estado primero hace que una segunda pulsación no patee de nuevo.
 	attemptId += 1
-	result = { broken = {}, paid = false }
-	bestResist = nil
-	kicker = player
-	local level = Config.BallLevels[player:GetAttribute("NivelPelota") or 1]
-	breakMultiplier = level.BreakMultiplier
+	local id = attemptId
 	setState("Pateando")
+	attempt = progression:newAttempt(player)
+	breakLog = {}
+	bestResist = nil
+	ballStats = progression:ballStats(data)
+	local speed = progression:kickSpeed(data)
+	local direction = Aim.direction(angle)
 
-	ball.Color = level.Color
-	ball.Anchored = false
-	ball:SetNetworkOwner(nil)
-	ball.AssemblyLinearVelocity = Aim.direction(angle) * Config.KickSpeed
-	task.spawn(watchAttempt, attemptId)
+	ball.Color = Config.BallColors[data.ballLevel]
+	playKickAnimation(character, direction)
+	playSoundAt("Kick", ball.Position)
+
+	task.delay(Config.KickWindup, function()
+		if attemptId ~= id then
+			return
+		end
+		for _, part in dynamic do
+			if part.Parent then
+				part.Anchored = false
+				part:SetNetworkOwner(nil)
+			end
+		end
+		ball.AssemblyLinearVelocity = direction * speed
+		watchAttempt(id)
+	end)
 end)
 
 remotes.Reiniciar.OnServerEvent:Connect(function()
@@ -393,28 +565,83 @@ remotes.Reiniciar.OnServerEvent:Connect(function()
 	reset()
 end)
 
--- El nivel vive en el jugador, así que reiniciar el escenario no lo cambia.
--- Si se compra durante una patada, rige desde la siguiente.
+-- Compras y entrenamiento ----------------------------------------------------------
+-- El progreso vive en el jugador, así que reiniciar el escenario no lo cambia.
+-- Una compra hecha durante una patada rige desde la siguiente.
+
+local REASONS = {
+	funds = "No te alcanza la plata.",
+	max = "La pelota ya está al nivel máximo.",
+	owned = "Ya tenés esas zapatillas.",
+	notOwned = "Primero tenés que comprar esas zapatillas.",
+	invalid = "Ese modelo no existe.",
+}
+
 remotes.MejorarPelota.OnServerEvent:Connect(function(player)
-	local leaderstats = player:FindFirstChild("leaderstats")
-	if not leaderstats then
+	local data = players[player]
+	if not data then
 		return
 	end
-	local money = leaderstats.Plata
-	local nextLevel = (player:GetAttribute("NivelPelota") or 1) + 1
-	local upgrade = Config.BallLevels[nextLevel]
-	if not upgrade then
-		remotes.Aviso:FireClient(player, "La pelota ya está al nivel máximo.")
-		return
+	local nextLevel = Balance.BallLevels[data.ballLevel + 1]
+	local ok, reason = progression:buyBallLevel(data)
+	if ok then
+		sync(player)
+		remotes.Aviso:FireClient(player, string.format("¡Pelota mejorada a nivel %d!", data.ballLevel))
+	elseif reason == "funds" then
+		remotes.Aviso:FireClient(player, string.format("Te faltan $%d para mejorar la pelota.", nextLevel.Price - data.money))
+	else
+		remotes.Aviso:FireClient(player, REASONS[reason])
 	end
-	if money.Value < upgrade.Price then
-		remotes.Aviso:FireClient(player, string.format("Te faltan $%d para la mejora.", upgrade.Price - money.Value))
-		return
-	end
-	money.Value -= upgrade.Price
-	player:SetAttribute("NivelPelota", nextLevel)
-	remotes.Aviso:FireClient(player, string.format("¡Pelota mejorada a nivel %d!", nextLevel))
 end)
+
+remotes.ComprarZapatillas.OnServerEvent:Connect(function(player, id)
+	local data = players[player]
+	if not data or typeof(id) ~= "number" then
+		return
+	end
+	local ok, reason = progression:buyShoe(data, id)
+	if ok then
+		sync(player)
+		remotes.Aviso:FireClient(player, string.format("¡Compraste %s!", Balance.Shoes[id].Name))
+	elseif reason == "funds" then
+		remotes.Aviso:FireClient(player, string.format("Te faltan $%d para %s.", Balance.Shoes[id].Price - data.money, Balance.Shoes[id].Name))
+	else
+		remotes.Aviso:FireClient(player, REASONS[reason])
+	end
+end)
+
+remotes.EquiparZapatillas.OnServerEvent:Connect(function(player, id)
+	local data = players[player]
+	if not data or typeof(id) ~= "number" then
+		return
+	end
+	local ok, reason = progression:equipShoe(data, id)
+	if ok then
+		sync(player)
+	else
+		remotes.Aviso:FireClient(player, REASONS[reason])
+	end
+end)
+
+remotes.Entrenar.OnServerEvent:Connect(function(player)
+	local data = players[player]
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not data or not root then
+		return
+	end
+	local offset = root.Position - TRAIN_SPOT
+	if Vector3.new(offset.X, 0, offset.Z).Magnitude > Config.TrainRange then
+		remotes.Aviso:FireClient(player, "Andá a la zona azul de entrenamiento.")
+		return
+	end
+	-- El límite de ritmo lo aplica Progression; las pulsaciones de más se ignoran.
+	if progression:train(data, os.clock()) then
+		sync(player)
+	end
+end)
+
+-- Jugadores ---------------------------------------------------------------------------
 
 -- Los jugadores aparecen en la zona de patada, mirando hacia la estructura.
 local function placeCharacter(character: Model)
@@ -427,15 +654,18 @@ local function placeCharacter(character: Model)
 end
 
 local function onPlayerAdded(player: Player)
-	-- leaderstats muestra la plata en la tabla de jugadores de Roblox.
+	-- leaderstats muestra la plata y la fuerza en la tabla de jugadores de Roblox.
 	local leaderstats = Instance.new("Folder")
 	leaderstats.Name = "leaderstats"
-	local money = Instance.new("IntValue")
-	money.Name = "Plata"
-	money.Value = 0
-	money.Parent = leaderstats
+	for _, name in { "Plata", "Fuerza" } do
+		local value = Instance.new("IntValue")
+		value.Name = name
+		value.Parent = leaderstats
+	end
 	leaderstats.Parent = player
-	player:SetAttribute("NivelPelota", 1)
+
+	players[player] = progression:newPlayer()
+	sync(player)
 
 	player.CharacterAdded:Connect(placeCharacter)
 	if player.Character then
@@ -447,5 +677,9 @@ Players.PlayerAdded:Connect(onPlayerAdded)
 for _, player in Players:GetPlayers() do
 	task.spawn(onPlayerAdded, player)
 end
+
+Players.PlayerRemoving:Connect(function(player)
+	players[player] = nil
+end)
 
 reset()

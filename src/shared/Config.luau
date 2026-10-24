@@ -1,12 +1,13 @@
--- Valores ajustables del prototipo. Son de prueba: se calibran jugando.
+-- Valores de física, escenario y presentación. Son de prueba: se calibran jugando.
+-- La economía y la progresión están en Balance.luau.
 local Config = {}
 
--- Patada (potencia fija por ahora; más adelante saldrá de fuerza × zapatillas)
-Config.KickSpeed = 110 -- velocidad inicial de la pelota (studs/s)
+-- Patada (la velocidad sale de la fuerza y las zapatillas, ver Balance)
 Config.KickElevation = 3 -- grados hacia arriba
 Config.MaxAimAngle = 30 -- grados a cada lado del centro
 Config.AimSpeed = 30 -- grados por segundo al mantener apretado
 Config.KickRange = 14 -- distancia máxima entre el jugador y la pelota
+Config.KickWindup = 0.12 -- segundos entre el inicio de la animación y la salida de la pelota
 
 Config.Ball = {
 	Diameter = 3,
@@ -15,24 +16,22 @@ Config.Ball = {
 	Elasticity = 0.4,
 }
 
+-- Color de la pelota según su nivel
+Config.BallColors = {
+	Color3.fromRGB(245, 245, 245),
+	Color3.fromRGB(90, 160, 255),
+	Color3.fromRGB(255, 200, 50),
+}
+
+-- Entrenamiento
+Config.TrainRange = 7 -- distancia máxima al centro de la zona de entrenamiento
+
 -- Intento
 Config.SettleSpeed = 1.5 -- debajo de esta velocidad una pieza se considera quieta
-Config.SettleTime = 1 -- segundos con todo quieto para cerrar el intento
-Config.MaxAttemptTime = 10
-Config.ResetDelay = 3 -- segundos mostrando el resultado antes de reiniciar
+Config.SettleTime = 0.8 -- segundos con todo quieto para cerrar el intento
+Config.MaxAttemptTime = 8
+Config.ResetDelay = 2.5 -- segundos mostrando el resultado antes de reiniciar
 Config.ResetCooldown = 0.5
-
--- Plata por pieza rota
-Config.MoneyDirect = 10 -- rota por la pelota
-Config.MoneyChain = 25 -- rota por otra pieza del escenario
-
--- Niveles de la pelota. BreakMultiplier multiplica el impulso de sus impactos
--- directos al decidir si una pieza se rompe. Price es lo que cuesta pasar a ese nivel.
-Config.BallLevels = {
-	{ Price = 0, BreakMultiplier = 1, Color = Color3.fromRGB(245, 245, 245) },
-	{ Price = 60, BreakMultiplier = 1.5, Color = Color3.fromRGB(90, 160, 255) },
-	{ Price = 150, BreakMultiplier = 2, Color = Color3.fromRGB(255, 200, 50) },
-}
 
 -- La estructura cuenta como derribada si la plataforma se movió más que esto
 Config.ToppleDistance = 3
@@ -41,6 +40,16 @@ Config.ToppleDistance = 3
 Config.FragmentsPerBreak = 6
 Config.FragmentSpeed = 18
 Config.FragmentLifetime = 2.5
+Config.MaxFragments = 120 -- tope de fragmentos a la vez, por rendimiento
+
+-- Sonidos. Son sonidos que vienen con Roblox; se pueden reemplazar por rbxassetid://...
+Config.Sounds = {
+	Kick = "rbxasset://sounds/swoosh.wav",
+	Impact = "rbxasset://sounds/collide.wav",
+	Break = "rbxasset://sounds/collide.wav",
+	Purchase = "rbxasset://sounds/electronicpingshort.wav",
+	Train = "rbxasset://sounds/action_jump.mp3",
+}
 
 -- Materiales. Strength es el impulso mínimo para romper la pieza:
 -- masa reducida de las dos piezas × velocidad relativa al chocar.
@@ -68,7 +77,7 @@ Config.Materials = {
 	},
 	Reforzado = {
 		Label = "El panel reforzado",
-		Strength = 2600, -- pensado para resistir la pelota nivel 1 y ceder con la nivel 2
+		Strength = 2600, -- pensado para resistir la pelota inicial y ceder con la nivel 2
 		Absorb = 0.5,
 		Density = 1.5,
 		Friction = 0.5,
