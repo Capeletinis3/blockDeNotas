@@ -60,6 +60,38 @@ details.Visible = false
 round(details)
 details.Parent = gui
 
+local moneyLabel = Instance.new("TextLabel")
+moneyLabel.AnchorPoint = Vector2.new(0, 0)
+moneyLabel.Position = UDim2.new(0, 12, 0, 56)
+moneyLabel.Size = UDim2.fromOffset(220, 56)
+moneyLabel.BackgroundColor3 = Color3.fromRGB(30, 90, 40)
+moneyLabel.BackgroundTransparency = 0.2
+moneyLabel.TextColor3 = Color3.new(1, 1, 1)
+moneyLabel.Font = Enum.Font.GothamBold
+moneyLabel.TextSize = 20
+moneyLabel.TextXAlignment = Enum.TextXAlignment.Left
+round(moneyLabel)
+local moneyPadding = Instance.new("UIPadding")
+moneyPadding.PaddingLeft = UDim.new(0, 10)
+moneyPadding.Parent = moneyLabel
+moneyLabel.Parent = gui
+
+local lastEarned = 0
+
+local function updateMoney()
+	local leaderstats = player:FindFirstChild("leaderstats")
+	local money = leaderstats and leaderstats:FindFirstChild("Plata")
+	local total = if money then money.Value else 0
+	moneyLabel.Text = string.format("Plata: $%d\nÚltima patada: +$%d", total, lastEarned)
+end
+
+task.spawn(function()
+	local money = player:WaitForChild("leaderstats"):WaitForChild("Plata")
+	money.Changed:Connect(updateMoney)
+	updateMoney()
+end)
+updateMoney()
+
 local function makeButton(text: string, size: UDim2, position: UDim2, color: Color3, anchor: Vector2?): TextButton
 	local button = Instance.new("TextButton")
 	button.Text = text
@@ -205,8 +237,15 @@ onStateChanged()
 
 remotes.Resultado.OnClientEvent:Connect(function(result)
 	status.Text = result.message
-	details.Text = string.format("Roturas: %d directas, %d en cadena", result.direct, result.chain)
+	local earnedText = if result.kicker == player
+		then string.format("Ganaste $%d", result.earned)
+		else "Patada de otro jugador"
+	details.Text = string.format("Roturas: %d directas, %d en cadena\n%s", result.direct, result.chain, earnedText)
 	details.Visible = true
+	if result.kicker == player then
+		lastEarned = result.earned
+		updateMoney()
+	end
 end)
 
 remotes.Aviso.OnClientEvent:Connect(function(text)

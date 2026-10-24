@@ -39,6 +39,7 @@ local tracked: { BasePart } = {} -- piezas sueltas cuyas velocidades seguimos
 local velocities: { [BasePart]: Vector3 } = {}
 local result = nil
 local bestResist = nil
+local kicker: Player? = nil
 
 local function setState(newState)
 	state = newState
@@ -222,7 +223,39 @@ RunService.Stepped:Connect(function()
 	end
 end)
 
+-- Plata ---------------------------------------------------------------------------
+
+local function countBreaks()
+	local direct, chain = 0, 0
+	for _, piece in result.broken do
+		if piece.direct then
+			direct += 1
+		else
+			chain += 1
+		end
+	end
+	return direct, chain
+end
+
+-- Paga una sola vez por intento, aunque se reinicie a mitad de la patada.
+local function payAttempt(): number
+	if not result or result.paid then
+		return 0
+	end
+	result.paid = true
+	local direct, chain = countBreaks()
+	local earned = direct * Config.MoneyDirect + chain * Config.MoneyChain
+	local leaderstats = kicker and kicker.Parent and kicker:FindFirstChild("leaderstats")
+	if leaderstats and earned > 0 then
+		leaderstats.Plata.Value += earned
+	end
+	return earned
+end
+
 local function reset()
+	if state == "Pateando" then
+		payAttempt()
+	end
 	attemptId += 1
 	lastReset = os.clock()
 	setState("Reiniciando")
@@ -259,20 +292,16 @@ local function finishAttempt()
 		and platform.Parent ~= nil
 		and (platform.Position - platformOrigin).Magnitude > Config.ToppleDistance
 
-	local direct, chain = 0, 0
-	for _, piece in result.broken do
-		if piece.direct then
-			direct += 1
-		else
-			chain += 1
-		end
-	end
+	local direct, chain = countBreaks()
+	local earned = payAttempt()
 
 	remotes.Resultado:FireAllClients({
 		message = explain(toppled),
 		direct = direct,
 		chain = chain,
 		toppled = toppled,
+		earned = earned,
+		kicker = kicker,
 	})
 
 	local id = attemptId
@@ -330,8 +359,9 @@ remotes.Patear.OnServerEvent:Connect(function(player, angle)
 	end
 
 	attemptId += 1
-	result = { broken = {} }
+	result = { broken = {}, paid = false }
 	bestResist = nil
+	kicker = player
 	setState("Pateando")
 
 	ball.Anchored = false
@@ -358,6 +388,15 @@ local function placeCharacter(character: Model)
 end
 
 local function onPlayerAdded(player: Player)
+	-- leaderstats muestra la plata en la tabla de jugadores de Roblox.
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	local money = Instance.new("IntValue")
+	money.Name = "Plata"
+	money.Value = 0
+	money.Parent = leaderstats
+	leaderstats.Parent = player
+
 	player.CharacterAdded:Connect(placeCharacter)
 	if player.Character then
 		placeCharacter(player.Character)

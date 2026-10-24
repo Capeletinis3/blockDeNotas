@@ -22,6 +22,10 @@ Config.MaxAttemptTime = 10
 Config.ResetDelay = 3 -- segundos mostrando el resultado antes de reiniciar
 Config.ResetCooldown = 0.5
 
+-- Plata por pieza rota
+Config.MoneyDirect = 10 -- rota por la pelota
+Config.MoneyChain = 25 -- rota por otra pieza del escenario
+
 -- La estructura cuenta como derribada si la plataforma se movió más que esto
 Config.ToppleDistance = 3
 
