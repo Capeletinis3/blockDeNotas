@@ -124,12 +124,9 @@ function Scenes.list(_ctx: any): { any }
 	add("juego-op-mas", "Sede con el menú «Más»", function(c)
 		demo(c, "operacion")
 		go(c, "juego")
-		local Hud = c.App.screens.hud
-		if Hud.openMore then
-			Hud.openMore()
-		else
-			Hud.openMenu(false)
-		end
+		c.App.ui.popX = 1180
+		c.App.ui.pop = "more"
+		c.App.screens.hud.renderPop()
 	end)
 	add("juego-avanzada", "Sede (demostración avanzada)", function(c)
 		demo(c, "avanzada")
@@ -303,7 +300,7 @@ function Scenes.list(_ctx: any): { any }
 		go(c, "autos")
 		for _, u in c.App.g.units do
 			if u.status == "almacen" or u.status == "salon" then
-				c.App.openDialog("wholesale", { unitId = u.id })
+				c.App.screens.autos.askWholesale(c.App.g, u)
 				break
 			end
 		end
@@ -311,16 +308,35 @@ function Scenes.list(_ctx: any): { any }
 	dlg("dlg-publicacion", "Publicación del mercado", function(c)
 		demo(c, "operacion")
 		go(c, "mercado")
+		-- La captura de la V3 muestra una subasta; se elige una para comparar la misma variante.
+		local pick
 		for _, l in c.App.g.market.listings do
-			if l.kind == "vehiculo" then
-				c.App.openDialog("listing", { listingId = l.id, wide = true })
-				break
+			if l.kind == "vehiculo" and (pick == nil or (l.mode == "subasta" and pick.mode ~= "subasta")) then
+				pick = l
 			end
+		end
+		if pick then
+			c.App.openDialog("listing", { listingId = pick.id, wide = true })
 		end
 	end)
 	dlg("dlg-publicar", "Publicar en el mercado", function(c)
 		demo(c, "operacion")
 		go(c, "mercado")
+		-- Como la V3: una unidad del salón vuelve al almacén para poder publicarla.
+		for _, u in c.App.g.units do
+			if u.status == "salon" then
+				c.App.request("returnToWarehouse", { unitId = u.id })
+				c.waitFor(function()
+					for _, x in c.App.g.units do
+						if x.id == u.id then
+							return x.status == "almacen"
+						end
+					end
+					return true
+				end)
+				break
+			end
+		end
 		c.App.openDialog("publish", {})
 	end)
 	dlg("dlg-prueba", "Prueba en pista", function(c)
@@ -383,6 +399,18 @@ function Scenes.list(_ctx: any): { any }
 	end)
 	dlg("dlg-ampliar", "Ampliar sede", function(c)
 		demo(c, "operacion")
+		-- Como la V3: se cumplen los requisitos de la próxima sede.
+		local inst = c.Sessions.instance
+		local s = inst and inst.list[c.player]
+		if s and s.game then
+			s.game.counters.unitsSold = 99
+			s.game.reputation = 4.5
+			s.game.money = 2e6
+			inst:push(s)
+			c.waitFor(function()
+				return c.App.g.money == 2e6
+			end)
+		end
 		go(c, "compania")
 		local b = named(c.App, c.M, "AmpliarSede")
 		if b then

@@ -289,7 +289,7 @@ function Rules.finance(g: any, days: number): any
 	local from = g.time.day - days + 1
 	local f = { days = days, from = from, revenue = 0, cogs = 0, units = 0, fees = 0, margin = 0, cash = 0, inflow = 0, outflow = 0, produced = 0, byType = {}, series = {} }
 	for d = from, g.time.day do
-		local ds = (d >= 0 and g.stats.days[Rules.dayKey(d)]) or EMPTY_DAY
+		local ds = g.stats.days[Rules.dayKey(d)] or EMPTY_DAY
 		f.revenue += ds.revenue
 		f.cogs += ds.cogs
 		f.units += ds.units
@@ -322,6 +322,10 @@ function Rules.finance(g: any, days: number): any
 	f.taxes = spent({ "impuesto" })
 	f.manufacturing = spent({ "fabricacion" })
 	f.opProfit = f.margin - f.opex.salarios - f.opex.promocion - f.opex.mantenimiento - f.opex.comisiones
+	-- Cuota de mercado estimada (fórmula de la V3).
+	f.share = math.clamp(f.units / math.max(1, f.units + 35) * 100 + g.reputation, 0, 60)
+	-- Las demostraciones traen ventas generadas (la V3 lo aclara en los resúmenes).
+	f.demo = g.demo ~= nil and g.demo ~= "tutorial"
 	return f
 end
 

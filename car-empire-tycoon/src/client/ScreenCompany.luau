@@ -38,15 +38,16 @@ end
 
 function Screen.build(parent: Instance)
 	local st = App.ui.newCompany
-	local dif = Catalog.DIFFICULTIES[st.difficulty]
-	local valid, hint = Screen.nameState(st.name)
-	local narrow = App.isNarrow()
+	local phone = App.isPhone()
+	local vw, vh = App.vw, App.vh
+	local dif = Catalog.DIFFICULTIES[st.difficulty] or Catalog.DIFFICULTIES.normal
 
-	local wrap = Ui.new("Frame", {
-		Name = "MenuWrap",
+	local wrap = Ui.new("ScrollingFrame", {
+		Name = "NuevaWrap",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Color3.fromHex("#06070B"),
 		BackgroundTransparency = 0,
+		ScrollBarThickness = 4,
 		Parent = parent,
 	})
 	local grad = Instance.new("UIGradient")
@@ -54,45 +55,51 @@ function Screen.build(parent: Instance)
 		NumberSequenceKeypoint.new(0, 0.07),
 		NumberSequenceKeypoint.new(0.4, 0.35),
 		NumberSequenceKeypoint.new(0.55, 0.4),
+		NumberSequenceKeypoint.new(0.75, 0.1),
 		NumberSequenceKeypoint.new(1, 0.1),
 	})
 	grad.Parent = wrap
+	App.keepScroll(wrap, "nueva")
 
-	local preview = { name = Util.trim(st.name) ~= "" and Util.trim(st.name) or "Tu empresa", color = st.color, logo = st.logo }
-	local previewName = Ui.text(preview.name, { size = 24, weight = W.heavy })
+	-- Vista previa de la marca (se actualiza mientras se escribe).
+	local previewName = Ui.inline(Util.trim(st.name) ~= "" and Util.trim(st.name) or "Tu empresa", { size = 24, weight = W.bold, truncate = true })
 	local left = Ui.col({
 		Ui.button("Volver a mis empresas", "q", function()
 			App.go("menu")
-		end, { small = true, icon = "left" }),
-		Ui.text("Fundá tu empresa", { size = narrow and 30 or 46, weight = W.heavy, lineHeight = 1.0 }),
-		Ui.text("Arrancás con un garaje pequeño. El nombre, el logo y el color aparecen en el cartel del taller, en el HUD y en tus autos.", { size = 16, color = T.tx2, lineHeight = 1.3 }),
-		Ui.card({
-			Ui.logo(preview, 80),
+		end, { icon = "left", name = "VolverEmpresas" }),
+		Ui.text("Fundá tu empresa", { size = phone and 30 or 43, weight = W.heavy, lineHeight = 1.05 }),
+		Ui.text("Arrancás con un garaje pequeño. El nombre y el logo aparecen en el cartel del taller, en el HUD, en tus autos y en la clasificación del servidor.", { size = 16, color = T.tx2, lineHeight = 1.45 }),
+		Ui.card1({
+			Ui.logo({ color = st.color, logo = st.logo }, 80),
 			Ui.grow(Ui.col({
 				Ui.lbl("Vista previa"),
 				previewName,
 				Ui.text("Garaje inicial · " .. dif.label .. " · " .. Util.money(dif.money) .. " iniciales", { size = Ui.S.sm, color = T.mut }),
 			}, 6)),
-		}, { dir = "H", gap = 18, pad = 18, bg = Color3.fromHex("#0E1016"), transparency = 0.1, v = "C", radius = 12, stroke = T.line }),
-	}, 16)
+		}, { dir = "H", v = "C", gap = 18, pad = 18, bg = Color3.fromHex("#0E1016"), transparency = 0.12, name = "VistaPrevia" }),
+	}, 18, { Name = "Presentacion", v = "C" })
 
-	local hintLabel = Ui.text(hint, { size = Ui.S.xs, color = valid and T.gr or T.re2, weight = W.bold })
-	local createBtn: TextButton
+	local createBtn: any = nil
+	local hintLabel = Ui.text("", { size = Ui.S.xs, weight = W.bold })
 	local function refresh()
 		local ok, h = Screen.nameState(st.name)
 		hintLabel.Text = h
 		hintLabel.TextColor3 = ok and T.gr or T.re2
 		previewName.Text = Util.trim(st.name) ~= "" and Util.trim(st.name) or "Tu empresa"
 		if createBtn then
-			Ui.setEnabled(createBtn, ok, "Revisá el nombre: " .. string.gsub(h, "^✕ ", ""))
+			Ui.setEnabled(createBtn, ok, string.gsub(h, "^✕ ", ""))
 		end
 	end
-	local nameBox = Ui.input(st.name, "Por ejemplo: Ruta Norte Motors", function(text: string)
+	local nameBox = Ui.input(st.name, "Por ejemplo: Ruta Norte Motors", function(text: string, enter: boolean?)
 		st.name = text
 		refresh()
+		if enter and createBtn and Ui.isEnabled(createBtn) then
+			Screen.create(createBtn)
+		end
 	end, {
-		size = 18,
+		size = 17,
 		height = 52,
+		name = "NombreEmpresa",
 		onChange = function(text: string)
 			st.name = text
 			refresh()
@@ -102,26 +109,22 @@ function Screen.build(parent: Instance)
 	local logos = {}
 	for _, l in Catalog.LOGOS do
 		local selected = st.logo == l[1]
-		local b = Ui.new("TextButton", {
-			Name = "Logo_" .. l[1],
-			Text = "",
-			BackgroundColor3 = selected and Color3.fromHex("#1E1B3D") or T.input,
-			BackgroundTransparency = 0,
-			Size = UDim2.fromOffset(48, 48),
-			Corner = 9,
-			Stroke = selected and { T.vi, 2 } or T.line,
-		}, { Ui.icon("logo_" .. l[1], 26, selected and T.tx or T.tx2) })
-		local ic = b:FindFirstChild("Icono") :: Frame
-		ic.AnchorPoint = Vector2.new(0.5, 0.5)
-		ic.Position = UDim2.fromScale(0.5, 0.5)
-		b.Activated:Connect(function()
+		local b = Ui.opt("", selected, function()
 			st.logo = l[1]
 			App.forceRender()
-		end)
+		end, { name = "Logo_" .. l[1], fill = true, height = phone and 40 or 88 })
+		local ic = Ui.icon("logo_" .. l[1], 26, selected and T.tx or T.tx2)
+		ic.AnchorPoint = Vector2.new(0.5, 0.5)
+		ic.Position = UDim2.fromScale(0.5, 0.5)
+		ic.Parent = b
+		local pad = b:FindFirstChildOfClass("UIPadding")
+		if pad then
+			pad:Destroy()
+		end
 		table.insert(logos, b)
 	end
 
-	local swatches = {}
+	local swatches: { Instance? } = {}
 	for _, c in Catalog.BRAND_COLORS do
 		table.insert(swatches, Ui.swatch(c[1], st.color == c[1], function()
 			st.color = c[1]
@@ -130,88 +133,77 @@ function Screen.build(parent: Instance)
 	end
 	table.insert(swatches, Ui.inline(Catalog.colorName(Catalog.BRAND_COLORS, st.color) or "", { size = Ui.S.sm, color = T.mut }))
 
-	local difRow = Ui.new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, List = { dir = App.isPhone() and "V" or "H", gap = 10 } })
+	local difs = {}
 	for _, id in Catalog.DIFFICULTY_ORDER do
 		local d = Catalog.DIFFICULTIES[id]
 		local selected = st.difficulty == id
 		local dotsColor = d.dots == 1 and T.gr or (d.dots == 2 and T.ye or T.re2)
-		local b = Ui.new("TextButton", {
-			Name = "Dificultad_" .. id,
-			Text = "",
-			BackgroundColor3 = selected and Color3.fromHex("#1E1B3D") or T.input,
-			BackgroundTransparency = 0,
-			Size = UDim2.new(1, 0, 0, 0),
-			AutomaticSize = Enum.AutomaticSize.Y,
-			Corner = 9,
-			Stroke = selected and { T.vi, 2 } or T.line,
-			Pad = 12,
-			List = { dir = "V", gap = 6 },
-		}, {
-			Ui.row({ Ui.grow(Ui.text(d.label, { size = 16, weight = W.bold })), Ui.inline(string.rep("●", d.dots), { size = Ui.S.xs, color = dotsColor }) }, 6),
-			Ui.text(d.desc, { size = Ui.S.xs, color = T.mut, lineHeight = 1.2 }),
-			Ui.text(Util.money(d.money) .. " iniciales", { size = Ui.S.sm, weight = W.bold, color = T.gr }),
-		})
-		b.Activated:Connect(function()
+		local b = Ui.opt("", selected, function()
 			st.difficulty = id
 			App.forceRender()
-		end)
-		Ui.grow(b, { Size = UDim2.new(App.isPhone() and 1 or 0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }).Parent = difRow
+		end, { name = "Dificultad_" .. id, fill = true, autoY = true, height = 0, pad = 12 })
+		Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6), Parent = b })
+		Ui.row({ Ui.grow(Ui.text(d.label, { size = 15, weight = W.bold })), Ui.inline(string.rep("●", d.dots) .. string.rep("○", 3 - d.dots), { size = Ui.S.xs, color = dotsColor }) }, 6).Parent = b
+		Ui.text(d.desc, { size = Ui.S.xs, color = T.mut, lineHeight = 1.35, weight = W.med }).Parent = b
+		Ui.text(Util.money(d.money) .. " iniciales", { size = Ui.S.sm, weight = W.bold, color = T.gr }).Parent = b
+		table.insert(difs, b)
 	end
 
 	createBtn = Ui.button("Comenzar mi empresa", "p", function()
-		local ok, h = Screen.nameState(st.name)
-		if not ok then
-			App.toast("error", h)
-			return
-		end
-		local r = App.request("createCompany", { slot = st.slot, name = Util.trim(st.name), color = st.color, logo = st.logo, difficulty = st.difficulty }, { button = createBtn })
-		if r.ok then
-			st.name = ""
-			App.go("juego")
-		end
-	end, { name = "Comenzar" })
+		Screen.create(createBtn)
+	end, { name = "Comenzar", kbd = "Enter" })
 	refresh()
 
-	local form = Ui.new("Frame", {
-		Name = "NuevaEmpresa",
-		BackgroundColor3 = Color3.fromHex("#0E1016"),
-		BackgroundTransparency = 0.03,
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		Corner = 12,
-		Stroke = T.line,
-		List = { dir = "V", gap = 0 },
-		ClipsDescendants = true,
-	}, {
-		Ui.row({ Ui.grow(Ui.text("Nueva empresa", { size = Ui.S.h1, weight = W.bold })), Ui.inline("Ranura " .. st.slot .. " de " .. Catalog.RULES.slots, { size = Ui.S.sm, color = T.mut }) }, 10, { Pad = { 18, 18, 6, 18 } }),
+	local form = Ui.card1({
+		Ui.row({ Ui.grow(Ui.text("Nueva empresa", { size = 21, weight = W.bold })), Ui.inline("Ranura " .. st.slot .. " de " .. Catalog.RULES.slots, { size = Ui.S.sm, color = T.mut }) }, 10, { Pad = { 18, 18, 6, 18 } }),
 		Ui.col({
 			Ui.col({ Ui.lbl("Nombre de la empresa"), nameBox, hintLabel }, 8),
-			Ui.col({ Ui.lbl("Logotipo"), Ui.row(logos, 8, { wrap = true }) }, 10),
+			Ui.col({ Ui.lbl("Logotipo"), Ui.grid(logos, phone and 4 or 8, nil, 10) }, 10),
 			Ui.col({ Ui.lbl("Color de marca"), Ui.row(swatches, 10, { wrap = true }) }, 10),
-			Ui.col({ Ui.lbl("Dificultad"), difRow }, 10),
-		}, 20, { Pad = 18 }),
+			Ui.col({ Ui.lbl("Dificultad"), Ui.grid(difs, phone and 1 or 3, nil, 10) }, 10),
+		}, 22, { Pad = 18 }),
+		Ui.new("Frame", { Name = "Borde", Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.line3, BackgroundTransparency = 0 }),
 		Ui.row({
-			Ui.grow(Ui.text("Solo el nombre es obligatorio. Pasa por el filtro de texto de Roblox porque se ve en tu garaje.", { size = Ui.S.sm, color = T.mut })),
+			Ui.grow(Ui.text("Podés renombrarla más adelante.", { size = Ui.S.sm, color = T.mut })),
+			Ui.button("Cancelar", "default", function()
+				App.go("menu")
+			end),
 			createBtn,
-		}, 10, { BackgroundColor3 = Color3.fromHex("#08090D"), BackgroundTransparency = 0.4, Pad = 18, wrap = App.isPhone() }),
-	})
+		}, 10, { BackgroundColor3 = Color3.fromHex("#080A0F"), BackgroundTransparency = 0.4, Pad = 18, wrap = phone }),
+	}, { bg = Color3.fromHex("#0E1016"), transparency = 0.05, pad = 0, gap = 0, clip = true, name = "NuevaEmpresa" })
 
-	-- En pantallas de poca altura todo va en una columna desplazable (el botón siempre es alcanzable).
-	local scroller = Ui.scroll({}, { name = "Formulario", gap = 22, pad = { 18, narrow and 14 or 60, 24, narrow and 14 or 60 } })
-	scroller.Parent = wrap
-	App.keepScroll(scroller, "nueva")
-	if narrow then
-		left.Parent = scroller
-		form.Parent = scroller
+	if phone then
+		Ui.new("UIPadding", { PaddingTop = UDim.new(0, 70), PaddingBottom = UDim.new(0, 80), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), Parent = wrap })
+		Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 22), Parent = wrap })
+		left.Parent = wrap
+		form.Parent = wrap
 	else
-		local cols = Ui.row({}, 40, { Name = "Columnas", v = "T" })
-		cols.Parent = scroller
-		local l = Ui.grow(left, { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y })
-		l.Parent = cols
-		local maxL = Instance.new("UISizeConstraint")
-		maxL.MaxSize = Vector2.new(620, math.huge)
-		maxL.Parent = left
-		Ui.new("Frame", { Size = UDim2.new(0, math.min(760, App.vw * 0.5), 0, 0), AutomaticSize = Enum.AutomaticSize.Y }, { form }).Parent = cols
+		local avail = vw - 160 - 40
+		local rightW = math.min(820, math.max(0, avail))
+		local lw = math.max(0, avail - rightW)
+		local h = math.max(0, vh - 200)
+		left.Position = UDim2.fromOffset(80, 110)
+		left.Size = UDim2.fromOffset(math.min(620, lw), h)
+		left.Parent = wrap
+		local holder = Ui.col({ form }, 0, { Name = "Formulario", v = "C" })
+		holder.Position = UDim2.fromOffset(80 + lw + 40, 110)
+		holder.Size = UDim2.fromOffset(rightW, h)
+		holder.Parent = wrap
+	end
+end
+
+function Screen.create(btn: any)
+	local st = App.ui.newCompany
+	local ok, h = Screen.nameState(st.name)
+	if not ok then
+		App.toast("error", (string.gsub(h, "^✕ ", "")))
+		return
+	end
+	local r = App.request("createCompany", { slot = st.slot, name = Util.trim(st.name), color = st.color, logo = st.logo, difficulty = st.difficulty }, { button = btn })
+	if r.ok then
+		st.name = ""
+		App.ui.enteringGame = true
+		App.go("juego")
 	end
 end
 

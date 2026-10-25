@@ -63,6 +63,12 @@ for _, scene in Scenes.list(ctx) do
 		if not ok then
 			print("✗ " .. scene.name .. ": " .. tostring(err))
 		end
+		-- Los avisos flotantes no se comparan (la V3 se captura sin ellos).
+		for _, d in App.toastLayer:GetDescendants() do
+			if d.Name == "Aviso" then
+				d:Destroy()
+			end
+		end
 		local tree = Dump.tree(App.gui.Parent)
 		fs.writeFile(out .. "/" .. scene.name .. ".json", serde.encode("json", { viewport = { W, H }, scene = scene.name, title = scene.title, tree = tree, errors = M.log }))
 		table.insert(index, { name = scene.name, title = scene.title, ok = ok })

@@ -34,6 +34,8 @@ globals:
     any: true
   ColorSequence:
     any: true
+  ColorSequenceKeypoint:
+    any: true
   TweenInfo:
     any: true
   task:

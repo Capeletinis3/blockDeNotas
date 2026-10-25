@@ -40,14 +40,21 @@ Sessions.RATE_WINDOW = 2
 Sessions.RATE_MAX = 14
 Sessions.PROCESSED_KEPT = 60
 
+-- Opciones de Configuración (las de la V3). camSpeed va de 0,4 a 2 en pasos de 0,1.
+local CAM_SPEEDS = {}
+for i = 4, 20 do
+	table.insert(CAM_SPEEDS, i / 10)
+end
 local SETTINGS_ALLOWED: { [string]: { any } } = {
 	sound = { true, false },
 	reduceMotion = { true, false },
 	keyHints = { true, false },
 	tips = { true, false },
-	textScale = { 0.9, 1, 1.15, 1.3 },
-	camSpeed = { 0.5, 1, 1.5, 2 },
+	shadows = { true, false },
+	textScale = { 1, 1.12, 1.25 },
+	camSpeed = CAM_SPEEDS,
 }
+Sessions.SETTINGS_ALLOWED = SETTINGS_ALLOWED
 
 function Sessions.new(deps: any)
 	local self = setmetatable({}, Sessions)
@@ -55,6 +62,7 @@ function Sessions.new(deps: any)
 	self.list = {} -- player → sesión
 	self.finalPending = 0
 	self.closing = false
+	Sessions.instance = self -- lo usan las escenas de la vista previa para preparar estados
 	return self
 end
 
@@ -84,6 +92,7 @@ function Sessions:payload(s: any): any
 		loadCode = s.loadCode,
 		lastSaved = s.lastSavedAt,
 		today = utcDate(self.deps.now()),
+		yesterday = utcDate(self.deps.now() - 86400),
 		dirty = s.dirty,
 		profile = s.profile and { slots = slots, active = s.activeKey, last = s.profile.active, settings = s.profile.settings } or nil,
 		demo = s.demo,
@@ -479,6 +488,20 @@ function Sessions:menuAction(s: any, action: string, payload: any): any?
 		end
 		s.profile.settings[k] = v
 		return { ok = true, quiet = true }
+	elseif action == "wipeAll" then
+		-- «Borrar todos los datos» de la V3: elimina todas las ranuras de la cuenta (no la configuración del juego).
+		if type(payload) ~= "table" or payload.confirm ~= "BORRAR" then
+			return { ok = false, msg = "Confirmación inválida." }
+		end
+		if s.game then
+			self:deactivate(s)
+		end
+		for _, key in GameState.slotKeys() do
+			s.profile.slots[key] = nil
+			s.damaged[key] = nil
+		end
+		s.profile.active = nil
+		return { ok = true, msg = "Datos borrados." }
 	end
 	return nil
 end
@@ -592,7 +615,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	end
 	if result.ok and not Actions.readOnly[action] then
 		s.dirty = true
-		if Actions.important[action] or action == "createCompany" or action == "deleteCompany" or action == "renameCompany" then
+		if Actions.important[action] or action == "createCompany" or action == "deleteCompany" or action == "renameCompany" or action == "wipeAll" then
 			s.pendingSave = true
 		end
 		if s.game and self.deps.garage and s.hasPlot then
@@ -613,6 +636,9 @@ function Sessions:tick()
 	for player, s in self.list do
 		if s.status == "ready" and not s.leaving then
 			local g = s.game
+			if g and not g.demo then
+				g.playedSeconds = (g.playedSeconds or 0) + 1
+			end
 			if g and not s.blocked and g.time.speed > 0 then
 				local ok, err = pcall(Simulation.simulate, g, s.ctx, Catalog.RULES.minutesPerRealSecond * g.time.speed)
 				if not ok then

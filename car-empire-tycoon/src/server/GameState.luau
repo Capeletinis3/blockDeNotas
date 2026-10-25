@@ -20,7 +20,7 @@ GameState.SCHEMA = 2
 GameState.UNIT_STATUSES = { almacen = true, salon = true, reservado = true, mercado = true, vendido = true }
 GameState.CUSTOMER_STATES = { mirando = true, oferta = true, ["se fue"] = true, ["compró"] = true }
 GameState.PRIORITIES = { alta = 0, media = 1, baja = 2 }
-GameState.DEFAULT_SETTINGS = { sound = true, reduceMotion = false, keyHints = true, textScale = 1, camSpeed = 1, tips = true }
+GameState.DEFAULT_SETTINGS = { sound = true, reduceMotion = false, keyHints = true, textScale = 1, camSpeed = 1, tips = true, shadows = true }
 
 local function freshStations(): any
 	local out = {}
@@ -36,6 +36,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		schema = GameState.SCHEMA,
 		createdAt = opts.now,
 		lastPlayed = opts.now,
+		playedSeconds = 0,
 		nextId = 1,
 		company = { name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
 		sede = 1,
@@ -65,7 +66,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 			unitsSold = 0, researchDone = 0, sedeLevel = 1, serial = 0, revenueTotal = 0, marginTotal = 0,
 		},
 		stats = { days = {} },
-		tutorial = { skipped = false },
+		tutorial = { skipped = false, tips = true },
 		daily = { last = "", streak = 0 },
 		promo = false,
 		market = { seedDay = -1, listings = {}, favorites = {}, mine = {}, offers = {} },
@@ -549,6 +550,11 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 			profile.settings[k] = v
 		end
 	end
+	-- Tamaños de texto de versiones anteriores → los de la V3 (Normal, Grande, Muy grande).
+	local ts = profile.settings.textScale
+	if ts ~= 1 and ts ~= 1.12 and ts ~= 1.25 then
+		profile.settings.textScale = (ts >= 1.27 and 1.25) or (ts >= 1.1 and 1.12) or 1
+	end
 	if not isList(profile.processed) then
 		profile.processed = {}
 	end
@@ -644,6 +650,9 @@ function GameState.summary(g: any): any
 		sede = Rules.sede(g).name,
 		sold = g.counters.unitsSold,
 		lastPlayed = g.lastPlayed,
+		playedSeconds = g.playedSeconds or 0,
+		tutorialDone = (g.claimed.t1 and 1 or 0) + (g.claimed.t2 and 1 or 0) + (g.claimed.t3 and 1 or 0) + (g.claimed.t4 and 1 or 0) + (g.claimed.t5 and 1 or 0),
+		tutorialSkipped = g.tutorial.skipped == true,
 	}
 end
 

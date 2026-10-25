@@ -37,6 +37,11 @@ App.ui = {
 	newCompany = { name = "", color = "#7667FF", logo = "pico", difficulty = "normal", slot = "1" },
 	sidePanel = nil, -- celular: panel lateral abierto ("l" | "r")
 	statRange = 7,
+	pop = nil, -- menú emergente abierto: "more" | "mob"
+	popX = nil,
+	panelsHidden = false, -- «Ocultar paneles» (Tab)
+	newsHidden = false, -- cinta de noticias
+	allSale = false,
 }
 App.screens = {} :: { [string]: any }
 App.dialogBuilders = {} :: { [string]: any }
@@ -85,6 +90,7 @@ App.dialogLayer = layer("Dialogos", 50)
 App.dropLayer = layer("Desplegables", 55)
 App.toastLayer = layer("Avisos", 60)
 
+local toastSeq = 0
 local toastList = Ui.new("Frame", {
 	Name = "Pila",
 	AnchorPoint = Vector2.new(1, 1),
@@ -157,8 +163,6 @@ local function setControls(enabled: boolean)
 end
 
 -- Avisos (toasts) ----------------------------------------------------------------------------
-local TOAST_BORDER = { ok = T.gr, aviso = T.ye, error = T.re, info = T.vi, nivel = T.vi }
-local TOAST_ICON = { ok = "check", aviso = "warn", error = "x", info = "help", nivel = "star" }
 -- Sonido breve de la interfaz (Configuración › Sonidos). Usa un sonido incluido en Roblox.
 local SoundService = game:GetService("SoundService")
 local ping = Instance.new("Sound")
@@ -169,17 +173,27 @@ function App.playSound(kind: string)
 	if not App.settings.sound then
 		return
 	end
-	ping.PlaybackSpeed = kind == "error" and 0.7 or (kind == "aviso" and 0.85 or 1.1)
+	-- Como la V3 (WebAudio): clic corto en cada acción, subida al confirmar y bajada en los errores.
+	ping.PlaybackSpeed = kind == "error" and 0.7 or (kind == "aviso" and 0.85 or (kind == "click" and 1.6 or 1.1))
+	ping.Volume = kind == "click" and 0.12 or 0.35
 	pcall(function()
 		SoundService:PlayLocalSound(ping)
 	end)
 end
 
+-- Avisos flotantes (UI_TOAST de la V3): ícono de color, texto y botón para cerrar; como máximo 4.
+local TOAST_STROKE = { ok = { T.gr, 0.5 }, aviso = { T.ye, 0.5 }, error = { T.re, 0.45 }, info = { T.vi, 0.45 }, nivel = { T.vi, 0.45 } }
+local TOAST_COLOR = { ok = T.gr, aviso = T.ye, error = T.re2, info = T.vi2, nivel = T.vi2 }
+local TOAST_ICON2 = { ok = "check", aviso = "warn", error = "x", info = "bell", nivel = "bell" }
 function App.toast(kind: string, text: string)
 	if not text or text == "" then
 		return
 	end
-	App.playSound(kind)
+	if kind == "ok" or kind == "error" then
+		App.playSound(kind)
+	end
+	local st = TOAST_STROKE[kind] or { T.line, 0 }
+	local close = Ui.button("", "q", nil, { small = true, icon = "x", iconSize = 14, name = "CerrarAviso" })
 	local t = Ui.new("Frame", {
 		Name = "Aviso",
 		BackgroundColor3 = T.p1,
@@ -187,13 +201,20 @@ function App.toast(kind: string, text: string)
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Corner = 12,
-		Stroke = TOAST_BORDER[kind] or T.line,
+		Stroke = { st[1], 1, 1 - st[2] },
 		Pad = { 10, 12 },
 		List = { dir = "H", gap = 10, v = "C" },
 	}, {
-		Ui.icon(TOAST_ICON[kind] or "help", 16, TOAST_BORDER[kind] or T.tx),
-		Ui.grow(Ui.text(text, { size = Ui.S.sm, lineHeight = 1.2 }), { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }),
+		Ui.icon(TOAST_ICON2[kind] or "bell", 16, TOAST_COLOR[kind] or T.vi2),
+		Ui.grow(Ui.text(text, { size = 13, lineHeight = 1.25 }), { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }),
+		close,
 	})
+	close.Activated:Connect(function()
+		t:Destroy()
+	end)
+	-- El más nuevo abajo (column-reverse de la V3); en el editor, arriba al centro y el más nuevo arriba.
+	toastSeq -= 1
+	t.LayoutOrder = App.ui.route == "editor" and toastSeq or -toastSeq
 	t.Parent = toastList
 	Ui.fadeIn(t)
 	local frames = {}
@@ -204,15 +225,30 @@ function App.toast(kind: string, text: string)
 	end
 	if #frames > 4 then
 		table.sort(frames, function(a, b)
-			return a.LayoutOrder < b.LayoutOrder
+			return math.abs(a.LayoutOrder) < math.abs(b.LayoutOrder)
 		end)
 		frames[1]:Destroy()
 	end
-	task.delay(kind == "error" and 6 or 4.5, function()
+	task.delay(kind == "error" and 9 or 4.5, function()
 		if t.Parent then
 			t:Destroy()
 		end
 	end)
+end
+function App.placeToasts()
+	if App.ui.route == "editor" then
+		toastList.AnchorPoint = Vector2.new(0.5, 0)
+		toastList.Position = UDim2.new(0.5, 0, 0, 78)
+	elseif App.layout == "phone" then
+		toastList.AnchorPoint = Vector2.new(1, 1)
+		toastList.Position = UDim2.new(1, -16, 1, -90)
+	else
+		toastList.AnchorPoint = Vector2.new(1, 1)
+		toastList.Position = UDim2.new(1, -16, 1, -56)
+	end
+end
+Ui.onClickSound = function()
+	App.playSound("click")
 end
 Ui.onDisabled = function(why: string)
 	App.toast("aviso", why)
@@ -350,6 +386,7 @@ function App.go(route: string, params: any?)
 		App.ui.route = route
 		App.ui.params = params or {}
 		App.ui.sidePanel = nil
+		App.ui.pop = nil
 		if route == "editor" and App.screens.editor and App.screens.editor.enter then
 			App.screens.editor.enter(App.ui.params)
 		end
@@ -387,6 +424,88 @@ function App.closeAllDialogs()
 	end
 end
 
+-- Volver al menú de empresas (pregunta si el editor tiene cambios sin guardar).
+function App.leaveToMenu()
+	App.ui.pop = nil
+	App.guardEditor(function()
+		App.request("leaveCompany")
+		App.ui.route = "menu"
+		App.closeAllDialogs()
+		App.forceRender()
+	end)
+end
+
+-- Lista desplegable (equivalente a <select>): se abre debajo (o encima) del botón.
+function App.dropdown(anchor: GuiObject, options: { any }, value: any, onPick: (any) -> ())
+	for _, c in App.dropLayer:GetChildren() do
+		c:Destroy()
+	end
+	local function close()
+		for _, c in App.dropLayer:GetChildren() do
+			c:Destroy()
+		end
+	end
+	local catcher = Ui.new("TextButton", { Name = "CerrarLista", Text = "", BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Parent = App.dropLayer })
+	catcher.Activated:Connect(close)
+	local s = scaleObj.Scale
+	local x = (anchor.AbsolutePosition.X - root.AbsolutePosition.X) / s
+	local y = (anchor.AbsolutePosition.Y - root.AbsolutePosition.Y) / s
+	local w = math.max(anchor.AbsoluteSize.X / s, 180)
+	local h = anchor.AbsoluteSize.Y / s
+	local listH = math.min(#options * 38 + 12, 320)
+	local below = y + h + 4 + listH <= App.vh - 8
+	local list = Ui.new("ScrollingFrame", {
+		Name = "Opciones",
+		Position = UDim2.fromOffset(math.clamp(x, 8, math.max(8, App.vw - w - 8)), below and (y + h + 4) or math.max(8, y - listH - 4)),
+		Size = UDim2.fromOffset(w, listH),
+		BackgroundColor3 = T.p1,
+		BackgroundTransparency = 0,
+		Corner = 10,
+		Stroke = T.line,
+		Pad = 6,
+		List = { dir = "V", gap = 2 },
+		Parent = App.dropLayer,
+	})
+	for _, op in options do
+		local selected = op[1] == value
+		local disabled = op[3] == true
+		local b = Ui.new("TextButton", {
+			Name = "Opcion_" .. tostring(op[1]),
+			Text = "",
+			BackgroundColor3 = selected and T.vi or Color3.new(1, 1, 1),
+			BackgroundTransparency = selected and 0.8 or 1,
+			Size = UDim2.new(1, 0, 0, 36),
+			Corner = 7,
+			Pad = { 0, 10 },
+			List = { dir = "H", gap = 8, v = "C" },
+		}, {
+			Ui.grow(Ui.inline(op[2], { size = 14, color = disabled and T.disabledTx or T.tx, truncate = true })),
+			selected and Ui.icon("check", 14, T.vi2) or nil,
+		})
+		if not selected and not disabled then
+			b.MouseEnter:Connect(function()
+				b.BackgroundTransparency = 0.94
+			end)
+			b.MouseLeave:Connect(function()
+				b.BackgroundTransparency = 1
+			end)
+		end
+		b.Activated:Connect(function()
+			if disabled then
+				return
+			end
+			close()
+			if op[1] ~= value then
+				onPick(op[1])
+			end
+		end)
+		b.Parent = list
+	end
+end
+Ui.openDropdown = function(anchor: Instance, options: { any }, value: any, onPick: (any) -> ())
+	App.dropdown(anchor :: GuiObject, options, value, onPick)
+end
+
 function App.topDialog(): any
 	return App.ui.dialogs[#App.ui.dialogs]
 end
@@ -419,14 +538,18 @@ function App.renderDialog()
 		AutoButtonColor = false,
 		Parent = App.dialogLayer,
 	})
-	back.Activated:Connect(function() end)
-	local width = math.min(d.params.wide and 760 or 560, App.vw - 16)
+	-- Como en la V3, tocar el fondo cierra el diálogo de arriba.
+	back.Activated:Connect(function()
+		if d.params.modal ~= true then
+			App.closeDialog()
+		end
+	end)
+	local width = math.min(d.params.wide and 760 or 560, App.vw - 32)
 	local phone = App.isPhone()
-	-- En celular el diálogo va arriba: el teclado en pantalla no tapa los campos.
 	local box = Ui.new("Frame", {
 		Name = "Dialogo",
-		AnchorPoint = phone and Vector2.new(0.5, 0) or Vector2.new(0.5, 0.5),
-		Position = phone and UDim2.new(0.5, 0, 0, 8) or UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(width, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = T.p1,
@@ -437,7 +560,8 @@ function App.renderDialog()
 		ClipsDescendants = true,
 		Parent = App.dialogLayer,
 	})
-	App.dialogMaxBody = (phone and App.vh * 0.55 or App.vh - 200)
+	-- Alto máximo: pantalla − 32 px (− 16 en celular); el cuerpo se desplaza.
+	App.dialogMaxBody = math.max(160, (phone and App.vh - 16 or App.vh - 32) - 150)
 	local ok, err = pcall(builder, box, d.params, d)
 	if not ok then
 		warn("[CarEmpire] Error al construir el diálogo " .. d.kind .. ": " .. tostring(err))
@@ -448,7 +572,10 @@ end
 
 -- Construcción de la pantalla ------------------------------------------------------------------------
 function App.render()
+	App.placeToasts()
 	clearChildren(App.content)
+	clearChildren(App.dropLayer)
+	clearChildren(App.popLayer)
 	table.clear(liveFns)
 	pendingRebuild = false
 	local p = App.payload
@@ -514,6 +641,7 @@ local function applySettings(settings: any)
 		App.settings[k] = v
 	end
 	Ui.reduceMotion = App.settings.reduceMotion == true
+	Ui.showKeys = App.settings.keyHints ~= false
 	if changedScale then
 		updateScale()
 	end

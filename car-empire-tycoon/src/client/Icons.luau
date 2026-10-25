@@ -7,6 +7,9 @@
 ]]
 
 local Icons = {}
+-- Trazos exactos de la V3 (generados desde sus SVG); tienen prioridad sobre las formas aproximadas.
+local DATA: { [string]: { { number } } } = require(script.Parent.IconData) :: any
+local ALIAS = { grip = "drag" }
 
 local SHAPES: { [string]: { any } } = {
 	home = { { "l", 3, 11, 12, 4 }, { "l", 12, 4, 21, 11 }, { "o", 12, 15.5, 13, 9, 1 }, { "r", 12, 17.5, 3.4, 5, 0.5 } },
@@ -96,6 +99,32 @@ function Icons.make(name: string, size: number, color: Color3, strokeWidth: numb
 	root.Size = UDim2.fromOffset(size, size)
 	root:SetAttribute("icon", name)
 	local k = size / 24
+	local data = DATA[ALIAS[name] or name]
+	if data then
+		-- Cada polilínea se dibuja con segmentos rotados de extremos redondos (stroke-linecap: round).
+		local w = (strokeWidth or 2) * k
+		for _, line in data do
+			if #line == 2 then
+				local f = frame(root, color)
+				f.Name = "Punto"
+				f.Size = UDim2.fromOffset(w, w)
+				f.Position = UDim2.fromScale(line[1] / 24, line[2] / 24)
+				corner(f, 0.5)
+			else
+				for i = 1, #line - 3, 2 do
+					local x1, y1, x2, y2 = line[i], line[i + 1], line[i + 2], line[i + 3]
+					local dx, dy = x2 - x1, y2 - y1
+					local f = frame(root, color)
+					f.Name = "Trazo"
+					f.Size = UDim2.fromOffset(math.sqrt(dx * dx + dy * dy) * k + w, w)
+					f.Position = UDim2.fromScale((x1 + x2) / 48, (y1 + y2) / 48)
+					f.Rotation = math.deg(math.atan2(dy, dx))
+					corner(f, 0.5)
+				end
+			end
+		end
+		return root
+	end
 	local sw = math.max(1, math.floor((strokeWidth or 2) * k + 0.5))
 	local shapes = SHAPES[name] or { { "t", "•" } }
 	for _, s in shapes do
@@ -175,7 +204,7 @@ function Icons.recolor(root: Instance, color: Color3)
 end
 
 function Icons.has(name: string): boolean
-	return SHAPES[name] ~= nil
+	return DATA[ALIAS[name] or name] ~= nil or SHAPES[name] ~= nil
 end
 
 return Icons

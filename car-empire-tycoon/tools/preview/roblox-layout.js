@@ -152,7 +152,8 @@
       const r = measureText(t, t.wrap && !ax ? cw : null);
       w = r.w; h = r.h;
     }
-    if (n.c === 'ScrollingFrame') return [w, h];
+    // Un ScrollingFrame con AutomaticSize crece con su contenido (Roblox lo hace; el tope lo pone un UISizeConstraint).
+    if (n.c === 'ScrollingFrame' && !ax && !ay) return [w, h];
     const lay = layoutOf(n);
     if (lay) {
       const r = lay.c === 'UIGridLayout' ? gridLayout(n, lay, ax ? 0 : cw, ch, null) : listLayout(n, lay, ax ? 0 : cw, ch, null, ax);

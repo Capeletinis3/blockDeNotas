@@ -102,6 +102,15 @@ function Util.gameDuration(min: number): string
 	return (h > 0 and (h .. " h ") or "") .. rest .. " min"
 end
 
+-- Tiempo real equivalente (realDur de la V3): «≈ 16 s reales», «≈ 3 min reales» o «en pausa».
+function Util.realDur(min: number, speed: number): string
+	if not speed or speed == 0 then
+		return "en pausa"
+	end
+	local s = math.ceil(min / (10 * speed))
+	return s < 60 and ("≈ " .. s .. " s reales") or ("≈ " .. math.ceil(s / 60) .. " min reales")
+end
+
 function Util.clock(minute: number): string
 	local mm = math.floor(minute)
 	return string.format("%02d:%02d", math.floor(mm / 60), mm % 60)

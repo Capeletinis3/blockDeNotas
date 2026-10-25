@@ -533,6 +533,43 @@ function Actions.upgradeStation(g: any, ctx: any, payload: any): any
 end
 
 -- Compra de materiales al proveedor (precio + impuesto), con tope del depósito (incluye lo que está en fabricación).
+-- «Comprar faltantes» (buyMissing de la V3): compra exactamente lo que le falta a una orden detenida.
+function Actions.buyMissing(g: any, _ctx: any, payload: any): any
+	local o = findById(g.production.orders, arg(payload, "orderId"))
+	if not o or type(o.missing) ~= "table" or #o.missing == 0 then
+		return fail("Esa orden no tiene materiales faltantes.")
+	end
+	local total, qty, lines = 0, 0, {}
+	for _, m in o.missing do
+		if not Catalog.material(m[1]) or not isInt(m[2], 1, 100000) then
+			return fail("Los faltantes de la orden no son válidos.")
+		end
+		local p = Rules.supplierPrice(g, m[1], m[2])
+		total += p.total
+		qty += m[2]
+		table.insert(lines, { m[1], m[2], p })
+	end
+	if g.money < total then
+		return fail("Fondos insuficientes.")
+	end
+	local caps = Rules.caps(g)
+	if Rules.matsUsed(g) + qty > caps.mats then
+		return fail("No hay lugar en el depósito de materiales.")
+	end
+	for _, l in lines do
+		local label = string.lower(Catalog.matLabel(l[1]))
+		Simulation.spend(g, l[3].base, "materiales", "Compra de " .. l[2] .. " " .. label)
+		Simulation.spend(g, l[3].tax, "impuesto", "Impuesto por materiales")
+		g.materials[l[1]] = (g.materials[l[1]] or 0) + l[2]
+	end
+	o.missing = nil
+	if o.status == "detenida" then
+		o.status = "en cola"
+		o.reason = ""
+	end
+	return { ok = true, msg = "Materiales comprados por " .. money(total) .. "." }
+end
+
 function Actions.buyMaterial(g: any, _ctx: any, payload: any): any
 	local mat, qty = arg(payload, "mat"), arg(payload, "qty")
 	if not Catalog.material(mat) then
@@ -710,6 +747,39 @@ local function offerContext(g: any, payload: any): (any, any, string?)
 		return nil, nil, "El auto ya no está en el salón."
 	end
 	return c, u, nil
+end
+
+-- Reciclar una pieza suelta (recyclePart de la V3): devuelve acero (y electrónica en motores y baterías).
+function Actions.recyclePart(g: any, _ctx: any, payload: any): any
+	local cat, id = arg(payload, "cat"), arg(payload, "id")
+	local entry, i = nil, nil
+	for k, p in g.parts do
+		if p.cat == cat and p.id == id then
+			entry, i = p, k
+		end
+	end
+	local p = entry and Catalog.part(cat, id)
+	if not entry or not p or entry.qty < 1 then
+		return fail("No tenés esa pieza.")
+	end
+	entry.qty -= 1
+	if entry.qty <= 0 then
+		table.remove(g.parts, i :: number)
+	end
+	local back = { acero = math.max(1, round(p.unit / 500)), electronica = (cat == "bateria" or cat == "motor") and 1 or 0 }
+	local caps = Rules.caps(g)
+	local left = caps.mats - Rules.matsUsed(g)
+	local lost = false
+	for _, k in { "acero", "electronica" } do
+		local n = back[k]
+		local add = math.min(n, math.max(0, left))
+		g.materials[k] = (g.materials[k] or 0) + add
+		left -= n
+		if add < n then
+			lost = true
+		end
+	end
+	return { ok = true, msg = "Pieza reciclada." .. (lost and " Parte del material se perdió por falta de lugar." or "") }
 end
 
 function Actions.acceptOffer(g: any, ctx: any, payload: any): any
@@ -977,9 +1047,18 @@ function Actions.claimDaily(g: any, ctx: any, _payload: any): any
 	return { ok = true, msg = "Recompensa diaria: " .. Rules.rewardText(r) .. " · racha " .. g.daily.streak }
 end
 
+-- payload = { skipped = bool } (saltar / reactivar guías) o { tips = false } («Entendido» del globo).
 function Actions.setTutorial(g: any, _ctx: any, payload: any): any
+	local tips = arg(payload, "tips")
+	if tips ~= nil then
+		g.tutorial.tips = tips == true
+		return { ok = true, quiet = true }
+	end
 	g.tutorial.skipped = arg(payload, "skipped") == true
-	return { ok = true, msg = g.tutorial.skipped and "Guías ocultas. Las misiones siguen activas en Misiones." or "Guías del tutorial activadas." }
+	if not g.tutorial.skipped then
+		g.tutorial.tips = true
+	end
+	return { ok = true, quiet = not g.tutorial.skipped, msg = g.tutorial.skipped and "Guías ocultas. Las misiones siguen activas en Misiones." or "" }
 end
 
 function Actions.markRead(g: any, _ctx: any, payload: any): any
@@ -1055,7 +1134,7 @@ Actions.readOnly = { quoteCounter = true, marketOpen = false }
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createOrder = true, repeatOrder = true, cancelOrder = true,
-	repairStation = true, upgradeStation = true, buyMaterial = true, wholesale = true, recycle = true, acceptOffer = true,
+	repairStation = true, upgradeStation = true, buyMaterial = true, buyMissing = true, wholesale = true, recycle = true, recyclePart = true, acceptOffer = true,
 	counterOffer = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
 	claimMission = true, claimDaily = true, expandSede = true, marketBuy = true, marketBid = true, marketPublish = true,
 	marketAcceptOffer = true,

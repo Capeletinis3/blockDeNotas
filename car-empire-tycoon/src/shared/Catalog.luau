@@ -92,6 +92,7 @@ Catalog.TYPES = {
 	clasico = "Clásico",
 	electrico = "Eléctrico",
 }
+Catalog.TYPE_ORDER = { "compacto", "sedan", "deportivo", "superdeportivo", "suv", "pickup", "clasico", "electrico" }
 
 -- Vehículos base. En la etapa 1 están disponibles Pixel C1 y Brisa Sedán (nivel 1);
 -- el resto se muestra bloqueado por nivel o investigación, igual que en la V3.
@@ -278,7 +279,7 @@ Catalog.MATERIALS = {
 	{ "baterias", "Baterías", 420 },
 	{ "cuero", "Cuero", 180 },
 }
-Catalog.SUPPLIER_PACKS = { 10, 50 }
+Catalog.SUPPLIER_PACKS = { 10, 20, 50 } -- la interfaz ofrece +20 como la V3
 
 -- Sedes (V3): capacidades y requisitos para ampliar.
 Catalog.SEDES = {
@@ -380,6 +381,7 @@ Catalog.NEWS_POOL = {
 	{ "COMPETENCIA", "#FF8A91", "Kairo Cars baja sus precios un 5 % en la gama de sedanes." },
 	{ "MERCADO", "#F7C95C", "El precio del aluminio baja en el mercado simulado." },
 	{ "DEMANDA", "#42E58D", "Los deportivos suben en la consideración de clientes jóvenes." },
+	{ "COMPETENCIA", "#FF8A91", "Velox Auto inaugura un segundo taller en el servidor." },
 }
 
 Catalog.CUSTOMER_NAMES = { "Martina R.", "Tomás P.", "Lucía G.", "Diego B.", "Valentina S.", "Bruno L.", "Camila F.", "Julián M.", "Sofía K.", "Agustín V.", "Renata O.", "Facundo T.", "Milagros D.", "Lautaro C." }
@@ -391,12 +393,12 @@ Catalog.STAT_DEFS = {
 	{ "hp", "Potencia", "hp", "Fuerza del motor. Más es más rápido.", 1, 800 },
 	{ "top", "Velocidad máxima", "km/h", "Velocidad tope en recta.", 1, 400 },
 	{ "accel", "0 a 100 km/h", "s", "Segundos para llegar a 100 km/h. Menos es mejor.", -1, 16 },
-	{ "handling", "Manejo", "0–100", "Agarre y estabilidad en curvas.", 1, 100 },
-	{ "stop", "Frenado 100→0", "m", "Metros para detenerse. Menos es mejor.", -1, 60 },
-	{ "durability", "Durabilidad", "0–100", "Resistencia al desgaste.", 1, 100 },
+	{ "handling", "Manejo", "índice 0–100", "Agarre y estabilidad en curvas. Más es mejor.", 1, 100 },
+	{ "stop", "Frenado 100→0", "m", "Metros para detenerse desde 100 km/h. Menos es mejor.", -1, 60 },
+	{ "durability", "Durabilidad", "índice 0–100", "Resistencia al desgaste. Más es mejor.", 1, 100 },
 	{ "consumption", "Consumo", "", "Combustible o energía cada 100 km. Menos es mejor.", -1, 25 },
-	{ "comfort", "Comodidad", "0–100", "Confort de marcha.", 1, 100 },
-	{ "quality", "Calidad", "0–100", "Terminación general; sube el precio recomendado.", 1, 100 },
+	{ "comfort", "Comodidad", "índice 0–100", "Confort de marcha. Más es mejor.", 1, 100 },
+	{ "quality", "Calidad", "índice 0–100", "Terminación general; sube el precio recomendado.", 1, 100 },
 	{ "kg", "Peso", "kg", "Menos peso mejora aceleración, frenado y consumo.", -1, 2600 },
 }
 
