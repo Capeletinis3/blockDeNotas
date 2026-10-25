@@ -29,6 +29,7 @@ local Simulation = require(script.Parent.Simulation)
 local Actions = require(script.Parent.Actions)
 local Market = require(script.Parent.Market)
 local DataService = require(script.Parent.DataService)
+local Demo = require(script.Parent.Demo)
 
 local Sessions = {}
 Sessions.__index = Sessions
@@ -84,7 +85,8 @@ function Sessions:payload(s: any): any
 		lastSaved = s.lastSavedAt,
 		today = utcDate(self.deps.now()),
 		dirty = s.dirty,
-		profile = s.profile and { slots = slots, active = s.activeKey, settings = s.profile.settings } or nil,
+		profile = s.profile and { slots = slots, active = s.activeKey, last = s.profile.active, settings = s.profile.settings } or nil,
+		demo = s.demo,
 		game = s.game and GameState.view(s.game) or nil,
 	}
 end
@@ -213,9 +215,7 @@ function Sessions:load(s: any)
 		for _, id in profile.processed do
 			s.processed[id] = { ok = false, msg = "Esa operación ya se procesó.", duplicate = true }
 		end
-		if profile.active and profile.slots[profile.active] and not s.damaged[profile.active] then
-			self:activate(s, profile.active)
-		end
+		-- Como en la V3, siempre se empieza en el menú de empresas; profile.active queda como «última jugada».
 	else
 		s.status = "failed"
 		s.canSave = false
@@ -225,10 +225,15 @@ function Sessions:load(s: any)
 	self:push(s)
 end
 
-function Sessions:activate(s: any, key: string)
+function Sessions:activate(s: any, key: string, demoGame: any?)
 	s.activeKey = key
-	s.profile.active = key
-	s.game = s.profile.slots[key]
+	if demoGame then
+		-- Las demostraciones viven solo en memoria: no se registran como empresa activa ni se guardan.
+		s.game = demoGame
+	else
+		s.profile.active = key
+		s.game = s.profile.slots[key]
+	end
 	Market.refresh(s.game, s.ctx)
 	if #s.game.candidates == 0 then
 		s.game.candidates = Simulation.makeCandidates(s.game, s.ctx, 5)
@@ -249,9 +254,7 @@ end
 function Sessions:deactivate(s: any)
 	s.game = nil
 	s.activeKey = nil
-	if s.profile then
-		s.profile.active = nil
-	end
+	s.demo = nil
 	if self.deps.garage and s.hasPlot then
 		self.deps.garage.release(s.player)
 		s.hasPlot = false
@@ -410,6 +413,18 @@ function Sessions:menuAction(s: any, action: string, payload: any): any?
 			self:activate(s, key)
 		end
 		return { ok = true, quiet = true }
+	elseif action == "playDemo" then
+		local kind = type(payload) == "table" and payload.kind or nil
+		if type(kind) ~= "string" or not Demo.KINDS[kind] then
+			return { ok = false, msg = "Demostración desconocida." }
+		end
+		if s.game then
+			self:deactivate(s)
+		end
+		local g = Demo.make(kind, s.ctx, self.deps.now())
+		s.demo = kind
+		self:activate(s, "demo", g)
+		return { ok = true, msg = "Demostración: los cambios no se guardan y no afectan tus empresas." }
 	elseif action == "leaveCompany" then
 		if s.game then
 			self:deactivate(s)

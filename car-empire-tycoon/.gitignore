@@ -3,3 +3,4 @@ tests/.build/
 *.rbxlx
 *.lock
 tests/.build-ui/
+tests/.preview/

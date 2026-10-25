@@ -58,8 +58,16 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.DisplayOrder = 5
 gui.Parent = player:WaitForChild("PlayerGui")
 
+-- Raíz escalada: un UIScale dentro de un marco de tamaño 1/escala hace que, ya escalado, cubra justo la
+-- pantalla (un UIScale bajo el ScreenGui achicaría también los marcos de tamaño 1,0,1,0).
+local root = Instance.new("Frame")
+root.Name = "Raiz"
+root.BackgroundTransparency = 1
+root.BorderSizePixel = 0
+root.Size = UDim2.fromScale(1, 1)
+root.Parent = gui
 local scaleObj = Instance.new("UIScale")
-scaleObj.Parent = gui
+scaleObj.Parent = root
 
 local function layer(name: string, z: number): Frame
 	local f = Instance.new("Frame")
@@ -67,12 +75,14 @@ local function layer(name: string, z: number): Frame
 	f.BackgroundTransparency = 1
 	f.Size = UDim2.fromScale(1, 1)
 	f.ZIndex = z
-	f.Parent = gui
+	f.Parent = root
 	return f
 end
 
 App.content = layer("Contenido", 1)
+App.popLayer = layer("Menus", 40)
 App.dialogLayer = layer("Dialogos", 50)
+App.dropLayer = layer("Desplegables", 55)
 App.toastLayer = layer("Avisos", 60)
 
 local toastList = Ui.new("Frame", {
@@ -94,23 +104,28 @@ App.touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabl
 local function updateScale()
 	local cam = Workspace.CurrentCamera
 	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-	-- Nunca se reduce por debajo de 0,8: en pantallas chicas cambia la distribución en lugar de achicar todo.
-	local s = math.clamp(math.min(vp.X / 1280, vp.Y / 720), 0.8, 1) * (App.settings.textScale or 1)
+	-- Como la V3, la interfaz no se achica: en pantallas chicas cambia la distribución. El tamaño del
+	-- texto (Configuración) agranda solo los textos, igual que la escala de rem de la V3.
+	local s = 1
 	scaleObj.Scale = s
+	root.Size = UDim2.fromScale(1 / s, 1 / s)
+	Ui.textScale = App.settings.textScale or 1
 	App.vw = vp.X / s
 	App.vh = vp.Y / s
-	if App.vw < 760 or App.vh < 520 then
+	-- Cortes de la V3: ≤900 px celular, ≤600 celular angosto, ≤1100 tableta, ≤1560 escritorio compacto.
+	if App.vw <= 900 or App.vh < 480 then
 		App.layout = "phone"
-	elseif App.vw < 1050 then
+	elseif App.vw <= 1100 then
 		App.layout = "tablet"
-	elseif App.vw < 1350 then
+	elseif App.vw <= 1560 then
 		App.layout = "compact"
 	else
 		App.layout = "desktop"
 	end
+	App.narrowPhone = App.vw <= 600
 	toastList.Size = UDim2.fromOffset(math.min(360, App.vw - 32), 0)
-	toastList.Position = App.layout == "phone" and UDim2.new(1, -16, 0, 60) or UDim2.new(1, -16, 1, -56)
-	toastList.AnchorPoint = App.layout == "phone" and Vector2.new(1, 0) or Vector2.new(1, 1)
+	toastList.Position = App.layout == "phone" and UDim2.new(1, -16, 1, -90) or UDim2.new(1, -16, 1, -56)
+	toastList.AnchorPoint = Vector2.new(1, 1)
 end
 updateScale()
 

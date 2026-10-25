@@ -648,9 +648,13 @@ test("Sesión: crear empresa y recuperarla al volver a entrar", function()
 	mgr2:add(p)
 	local v = pushed2[p]
 	eq(v.status, "ready", "carga en otro servidor")
+	check(v.game == nil, "como en la V3, se empieza en el menú de empresas")
+	eq(v.profile.last, "1", "la última empresa jugada queda recordada")
+	eq(v.profile.slots["1"].name, "Sesion SA", "la ranura aparece en el menú")
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "continuar la empresa")
+	v = pushed2[p]
 	eq(v.game.company.name, "Sesion SA", "empresa recuperada")
 	eq(#v.game.designs, 1, "diseño recuperado")
-	eq(v.profile.active, "1", "empresa activa recordada")
 end)
 
 test("Reenviar la misma operación no la duplica", function()
@@ -806,9 +810,10 @@ test("Migración: registro de la etapa 1 → perfil con ranuras", function()
 	local mgr, pushed = makeServer(store, "A", clock)
 	local p = { UserId = 9 }
 	mgr:add(p)
+	eq(pushed[p].status, "ready", "carga")
+	check(mgr:request(p, "selectSlot", { slot = "1" }).ok, "abrir la empresa migrada")
 	local v = pushed[p]
-	eq(v.status, "ready", "carga")
-	eq(v.game.company.name, "Vieja SA", "empresa migrada y activa")
+	eq(v.game.company.name, "Vieja SA", "empresa migrada")
 	eq(v.game.schema, 2, "esquema 2")
 	eq(Rules.finance(v.game, 7).revenue, 20000, "agregados reconstruidos desde el historial")
 	-- Un registro de una versión futura no se toca.
@@ -840,6 +845,38 @@ test("Menú: varias empresas independientes, renombrar y eliminar con confirmaci
 	eq(pushed[p].profile.slots["2"].name, "Segunda SA", "la otra intacta")
 	check(mgr:request(p, "setSetting", { key = "textScale", value = 1.15 }).ok, "preferencia")
 	check(not mgr:request(p, "setSetting", { key = "textScale", value = 7 }).ok, "valor inválido")
+end)
+
+test("Demostraciones de la V3: se juegan en memoria y no tocan las ranuras", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr, pushed = makeServer(store, "A", clock)
+	local p = { UserId = 31 }
+	mgr:add(p)
+	playThrough(mgr, p)
+	check(mgr:request(p, "leaveCompany", {}).ok, "volver al menú")
+	for _, kind in { "tutorial", "operacion", "avanzada" } do
+		local r = mgr:request(p, "playDemo", { kind = kind })
+		check(r.ok, "demo " .. kind .. ": " .. tostring(r.msg))
+		local v = pushed[p]
+		eq(v.game.demo, kind, "la vista marca la demostración " .. kind)
+		eq(v.demo, kind, "el estado informa la demostración")
+		local ok, err = GameState.validate(mgr.list[p].game)
+		check(ok, "la partida de demostración es válida: " .. tostring(err))
+		if kind ~= "tutorial" then
+			check(#v.game.designs >= 3 and #v.game.units > 0 and #v.game.production.orders >= 2, "demo con diseños, unidades y órdenes")
+			check(Rules.finance(v.game, 7).units > 0, "historial de ventas de demostración en las estadísticas")
+		end
+	end
+	local r = mgr:request(p, "createOrder", { designId = mgr.list[p].game.designs[1].id, qty = 1, requestId = rid() })
+	check(r.ok, "las acciones funcionan en la demostración")
+	mgr:request(p, "leaveCompany", {})
+	mgr:remove(p)
+	local saved = store.data["player_31"].profile
+	eq(saved.slots["1"].company.name, "Sesion SA", "la empresa real sigue igual")
+	check(saved.slots["2"] == nil and saved.slots["3"] == nil, "la demostración no ocupa ranuras")
+	check(saved.active ~= "demo", "la demostración no queda como última empresa")
+	check(not mgr:request(p, "playDemo", { kind = "otra" }).ok, "demo desconocida rechazada")
 end)
 
 test("Dos jugadores en el mismo servidor: sesiones independientes", function()

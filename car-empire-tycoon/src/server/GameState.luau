@@ -353,7 +353,8 @@ function GameState.validate(g: any): (boolean, string?)
 		end
 	end
 	for _, s in g.sales do
-		if type(s) ~= "table" or not isFinite(s.price) or not isFinite(s.cost) or not isInt(s.day, 0) then
+		-- Las demostraciones de la V3 traen 30 días de historial previos al día 0 (días negativos).
+		if type(s) ~= "table" or not isFinite(s.price) or not isFinite(s.cost) or not isInt(s.day, g.demo and -60 or 0) then
 			return fail("El historial de ventas está dañado.")
 		end
 	end
