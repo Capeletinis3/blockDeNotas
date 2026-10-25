@@ -1,0 +1,5 @@
+std = "roblox-lite"
+exclude = ["tests/*"]
+
+[lints]
+shadowing = "allow"

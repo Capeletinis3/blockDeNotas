@@ -1,0 +1,23 @@
+{
+  "name": "CarEmpireTycoon",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "CarEmpireShared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "CarEmpireServer": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "CarEmpireClient": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}
