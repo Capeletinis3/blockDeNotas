@@ -169,16 +169,49 @@ end
 
 -- Ítems de desarrollo: licencia del modelo base + prototipo de cada pieza distinta de la de serie.
 -- Cada ítem se paga una sola vez por empresa (claves en g.devPaid).
+-- Descuento del estudio de diseño (V3): 10 % por diseñador activo asignado, hasta 30 %.
+function DesignCalc.designDiscount(g: any): number
+	if not g or type(g.employees) ~= "table" then
+		return 0
+	end
+	local n = 0
+	for _, e in g.employees do
+		if e.assign == "diseno" and e.status == "activo" then
+			n += 1
+		end
+	end
+	return math.min(0.3, n * 0.1)
+end
+
+-- ¿Hay una pieza suelta en el inventario que cubra el desarrollo de este prototipo?
+function DesignCalc.partInStock(g: any, cat: string, id: string): boolean
+	if not g or type(g.parts) ~= "table" then
+		return false
+	end
+	for _, p in g.parts do
+		if p.cat == cat and p.id == id and (p.qty or 0) > 0 then
+			return true
+		end
+	end
+	return false
+end
+
+-- Ítems de desarrollo: licencia del modelo base + prototipo de cada pieza distinta de la de serie.
+-- Cada ítem se paga una sola vez por empresa (claves en g.devPaid). Una pieza suelta del
+-- inventario cubre su prototipo (se consume al guardar).
 function DesignCalc.devItems(g: any, d: any): { any }
 	local b = Catalog.base(d.baseId)
 	local items = { { key = "base:" .. b.id, label = "Licencia del modelo " .. b.name, cost = b.dev } }
 	for _, p in DesignCalc.designParts(d) do
 		if p.proto > 0 and b.defaults[p.cat] ~= p.id then
-			table.insert(items, { key = p.cat .. ":" .. p.id, label = "Prototipo: " .. p.name, cost = p.proto })
+			table.insert(items, { key = p.cat .. ":" .. p.id, label = "Prototipo: " .. p.name, cost = p.proto, cat = p.cat, part = p.id })
 		end
 	end
+	local disc = DesignCalc.designDiscount(g)
 	for _, it in items do
+		it.cost = round(it.cost * (1 - disc))
 		it.paid = g ~= nil and Util.contains(g.devPaid, it.key)
+		it.stock = (not it.paid) and it.cat ~= nil and DesignCalc.partInStock(g, it.cat, it.part)
 	end
 	return items
 end
@@ -186,7 +219,7 @@ end
 function DesignCalc.devPending(g: any, d: any): number
 	local total = 0
 	for _, it in DesignCalc.devItems(g, d) do
-		if not it.paid then
+		if not it.paid and not it.stock then
 			total += it.cost
 		end
 	end
@@ -454,6 +487,10 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 		if inList(opts, body[group], 1) then
 			d.body[group] = body[group]
 		end
+	end
+	if type(body.plate) == "string" then
+		local plate = string.upper(body.plate):gsub("[^A-Z0-9 %-]", "")
+		d.body.plate = string.sub(plate, 1, 9)
 	end
 	local interior = type(raw.interior) == "table" and raw.interior or {}
 	for group, opts in Catalog.INTERIOR do

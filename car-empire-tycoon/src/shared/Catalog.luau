@@ -9,25 +9,41 @@
 local Catalog = {}
 
 Catalog.RULES = {
-	version = 1,
+	version = 2,
 	minutesPerRealSecond = 10, -- a velocidad 1×, 1 s real = 10 min de juego
 	dayMinutes = 1440,
-	taxRate = 0.05, -- impuesto sobre compras al proveedor
+	taxRate = 0.05, -- impuesto sobre compras (proveedor y mercado)
+	feeRate = 0.02, -- comisión del mercado
+	promoCostPerDay = 3000,
+	promoBoost = 1.35,
 	maxDiscount = 30,
-	noStaffSpeed = 0.5, -- sin personal en la línea: 50 % de velocidad (etapa 1 no tiene personal)
+	wholesaleFactor = 1.12, -- el mayorista paga costo de fabricación × 1,12
+	boostCostFactor = 1.4, -- producción acelerada: +40 % de costo por unidad
+	noStaffSpeed = 0.5, -- sin personal en la línea: 50 % de velocidad
+	breakdownAt = 15, -- condición mínima antes de averiarse
+	wearPerUnit = 3,
+	repairPerLevel = 2500,
 	maxQty = 50,
 	maxDesigns = 30,
+	maxOrders = 12,
 	maxLedger = 300,
 	maxSales = 200,
 	maxSoldUnitsKept = 60,
 	maxCustomers = 6,
+	statsDaysKept = 60,
+	slots = 3, -- empresas por cuenta
+	slotsLocked = 2, -- ranuras visibles pero no habilitadas (función futura)
+	moreCandidatesCost = 1000,
+	assignMax = { station = 2, dept = 4 },
 	speeds = { 0, 1, 2, 4 },
 }
 
+-- Las diferencias son solo las que la simulación aplica de verdad: dinero inicial,
+-- paciencia de los clientes y frecuencia con que llegan al concesionario.
 Catalog.DIFFICULTIES = {
-	facil = { id = "facil", label = "Relajado", money = 100000, desc = "Demanda estable y clientes pacientes. Ideal para aprender.", patience = 1.4, demand = 1.15, dots = 1 },
-	normal = { id = "normal", label = "Normal", money = 50000, desc = "La experiencia recomendada: crisis ocasionales y rivales activos.", patience = 1, demand = 1, dots = 2 },
-	dificil = { id = "dificil", label = "Magnate", money = 20000, desc = "Clientes exigentes, materiales caros y poco margen de error.", patience = 0.75, demand = 0.85, dots = 3 },
+	facil = { id = "facil", label = "Relajado", money = 100000, desc = "Clientes 40 % más pacientes y 15 % más visitas al concesionario.", patience = 1.4, demand = 1.15, dots = 1 },
+	normal = { id = "normal", label = "Normal", money = 50000, desc = "Paciencia y visitas de referencia. La experiencia recomendada.", patience = 1, demand = 1, dots = 2 },
+	dificil = { id = "dificil", label = "Magnate", money = 20000, desc = "Clientes 25 % menos pacientes y 15 % menos visitas. El primer auto se financia con las recompensas del tutorial.", patience = 0.75, demand = 0.85, dots = 3 },
 }
 Catalog.DIFFICULTY_ORDER = { "facil", "normal", "dificil" }
 
@@ -216,7 +232,7 @@ Catalog.BODY_OPTS = {
 	number = { { "none", "Sin número", 0 }, { "27", "Número 27", 150 }, { "8", "Número 8", 150 } },
 	logo = { { "on", "Emblema en el frente", 0 }, { "off", "Sin emblema", 0 } },
 }
-Catalog.BODY_DEFAULTS = { bumper = "serie", hood = "serie", diffuser = "none", skirts = "none", lights = "white", tint = "t30", vinyl = "none", number = "none", logo = "on" }
+Catalog.BODY_DEFAULTS = { bumper = "serie", hood = "serie", diffuser = "none", skirts = "none", lights = "white", tint = "t30", vinyl = "none", number = "none", logo = "on", plate = "CET 001" }
 
 Catalog.INTERIOR = {
 	seats = { { "serie", "De serie", 0, {} }, { "sport", "Baquet deportivos", 1800, { comfort = -3, grip = 1, q = 1 } }, { "lux", "Confort con masaje", 2600, { comfort = 7, q = 2 } } },
@@ -264,9 +280,106 @@ Catalog.MATERIALS = {
 }
 Catalog.SUPPLIER_PACKS = { 10, 50 }
 
--- Etapa 1: solo la primera sede (garaje inicial).
+-- Sedes (V3): capacidades y requisitos para ampliar.
 Catalog.SEDES = {
-	{ level = 1, name = "Garaje inicial", lines = 1, warehouse = 6, showroom = 2, mats = 400 },
+	{ level = 1, name = "Garaje inicial", lines = 1, warehouse = 6, showroom = 2, mats = 400, staff = 3, cost = 0, req = { sold = 0, rep = 0 } },
+	{ level = 2, name = "Taller ampliado", lines = 2, warehouse = 14, showroom = 4, mats = 900, staff = 8, cost = 150000, req = { sold = 10, rep = 3.2 } },
+	{ level = 3, name = "Fábrica industrial", lines = 3, warehouse = 40, showroom = 8, mats = 3000, staff = 20, cost = 1000000, req = { sold = 50, rep = 4.0 } },
+	{ level = 4, name = "Sede automotriz", lines = 4, warehouse = 100, showroom = 12, mats = 8000, staff = 40, cost = 5000000, req = { sold = 200, rep = 4.6 } },
+}
+
+-- Estaciones de montaje: { id, nombre, rol ideal }
+Catalog.STATIONS = {
+	{ "chasis", "Chasis", "Mecánico" },
+	{ "pintura", "Pintura", "Mecánico" },
+	{ "motor", "Motor", "Ingeniero" },
+	{ "interior", "Interior", "Diseñador" },
+	{ "calidad", "Control de calidad", "Inspector" },
+	{ "entrega", "Entrega", "Mecánico" },
+}
+-- Departamentos: { id, nombre, rol ideal, efecto }
+Catalog.DEPARTMENTS = {
+	{ "laboratorio", "Laboratorio", "Ingeniero", "Genera puntos de investigación" },
+	{ "ventas", "Concesionario", "Vendedor", "Sube el interés de los clientes" },
+	{ "marketing", "Marketing", "Marketing", "Atrae más visitantes" },
+	{ "diseno", "Estudio de diseño", "Diseñador", "Baja el costo de desarrollo" },
+}
+
+Catalog.RESEARCH_ORDER = { "motores", "electricos", "aerodinamica", "materiales", "produccion", "marketing", "calidad", "logistica" }
+Catalog.RESEARCH = {
+	motores = { label = "Motores", nodes = {
+		{ id = "m1", name = "Inyección directa", cost = 15000, rp = 20, minutes = 360, req = {}, lab = 1, gain = "+5 % de potencia en todos los motores a combustión" },
+		{ id = "m2", name = "Inducción forzada I", cost = 25000, rp = 40, minutes = 480, req = { "m1" }, lab = 1, gain = "Desbloquea el turbo twin-scroll T2" },
+		{ id = "m3", name = "Motores V8", cost = 60000, rp = 90, minutes = 720, req = { "m1" }, lab = 2, gain = "Desbloquea el Motor V8 4.0 y el Halcón Vento SS" },
+		{ id = "m4", name = "Inducción forzada II", cost = 90000, rp = 140, minutes = 960, req = { "m2" }, lab = 2, gain = "Desbloquea el Supercargador S3" } } },
+	electricos = { label = "Vehículos eléctricos", nodes = {
+		{ id = "e1", name = "Baterías de 60 kWh", cost = 30000, rp = 40, minutes = 480, req = {}, lab = 1, gain = "Desbloquea el Rayo E y su motor eléctrico" },
+		{ id = "e4", name = "Híbrido ligero", cost = 25000, rp = 40, minutes = 360, req = { "e1" }, lab = 1, gain = "Desbloquea el sistema híbrido de 48 V" },
+		{ id = "e2", name = "Baterías de 80 kWh", cost = 70000, rp = 100, minutes = 720, req = { "e1" }, lab = 2, gain = "Desbloquea batería de 80 kWh y motor de 350 kW" },
+		{ id = "e3", name = "Estado sólido", cost = 140000, rp = 200, minutes = 1200, req = { "e2" }, lab = 3, gain = "Desbloquea la batería de estado sólido" } } },
+	aerodinamica = { label = "Aerodinámica", nodes = {
+		{ id = "a1", name = "Túnel de viento", cost = 20000, rp = 30, minutes = 360, req = {}, lab = 1, gain = "+4 % de velocidad máxima" },
+		{ id = "a2", name = "Refrigeración de competición", cost = 45000, rp = 70, minutes = 600, req = { "a1" }, lab = 2, gain = "Desbloquea la refrigeración de competición" },
+		{ id = "a3", name = "Carga aerodinámica activa", cost = 80000, rp = 120, minutes = 900, req = { "a2" }, lab = 3, gain = "+4 de manejo con alerón instalado" } } },
+	materiales = { label = "Materiales", nodes = {
+		{ id = "mt1", name = "Aluminio estructural", cost = 18000, rp = 25, minutes = 360, req = {}, lab = 1, gain = "Desbloquea el aligerado (−40 kg)" },
+		{ id = "mt2", name = "Fibra de carbono", cost = 55000, rp = 80, minutes = 720, req = { "mt1" }, lab = 2, gain = "Desbloquea fibra de carbono y escape de titanio" },
+		{ id = "mt3", name = "Cerámica de frenos", cost = 65000, rp = 90, minutes = 720, req = { "mt2" }, lab = 2, gain = "Desbloquea frenos carbono-cerámicos" } } },
+	produccion = { label = "Producción", nodes = {
+		{ id = "p1", name = "Línea optimizada", cost = 20000, rp = 30, minutes = 360, req = {}, lab = 1, gain = "+10 % de velocidad de producción" },
+		{ id = "p3", name = "Producción automática", cost = 30000, rp = 40, minutes = 480, req = { "p1" }, lab = 1, gain = "Habilita la producción automática" },
+		{ id = "p2", name = "Robots de soldadura", cost = 90000, rp = 120, minutes = 900, req = { "p1" }, lab = 2, gain = "+20 % de velocidad y −1 punto de desgaste por unidad" } } },
+	marketing = { label = "Marketing", nodes = {
+		{ id = "mk1", name = "Redes sociales", cost = 15000, rp = 20, minutes = 300, req = {}, lab = 1, gain = "+15 % de clientes en el concesionario" },
+		{ id = "mk2", name = "Promociones", cost = 20000, rp = 30, minutes = 360, req = { "mk1" }, lab = 1, gain = "Habilita la promoción del concesionario" },
+		{ id = "mk3", name = "Salón premium", cost = 70000, rp = 100, minutes = 720, req = { "mk2" }, lab = 2, gain = "+2 lugares en el salón" } } },
+	calidad = { label = "Calidad", nodes = {
+		{ id = "q1", name = "Control de calidad", cost = 18000, rp = 25, minutes = 360, req = {}, lab = 1, gain = "+3 de calidad en las unidades nuevas" },
+		{ id = "q3", name = "Pintura premium", cost = 35000, rp = 50, minutes = 480, req = { "q1" }, lab = 1, gain = "Desbloquea acabados perlado y cromado" },
+		{ id = "q2", name = "Garantía extendida", cost = 60000, rp = 90, minutes = 720, req = { "q1" }, lab = 2, gain = "Cada venta suma más reputación" } } },
+	logistica = { label = "Logística", nodes = {
+		{ id = "l1", name = "Almacén ampliado", cost = 20000, rp = 25, minutes = 360, req = {}, lab = 1, gain = "+4 lugares en el almacén de vehículos" },
+		{ id = "l2", name = "Compras al por mayor", cost = 30000, rp = 40, minutes = 480, req = { "l1" }, lab = 1, gain = "−10 % en el precio de materiales" },
+		{ id = "l3", name = "Red de entregas", cost = 50000, rp = 70, minutes = 600, req = { "l2" }, lab = 2, gain = "Los clientes esperan 25 % más" } } },
+}
+
+Catalog.ROLES = { "Mecánico", "Ingeniero", "Diseñador", "Inspector", "Vendedor", "Marketing", "Gerente" }
+Catalog.FIRST = { "Sofía", "Mateo", "Lara", "Julián", "Carla", "Ramiro", "Elena", "Diego", "Ana", "Pablo", "Inés", "Tomás", "Valentina", "Bruno", "Camila", "Martina", "Lucía", "Joaquín", "Abril", "Nicolás" }
+Catalog.LAST = { "Arce", "Ruiz", "Sosa", "Paz", "Vega", "Gil", "Bruno", "Mora", "Núñez", "Ortiz", "Ríos", "Pereyra", "Luna", "Ferrari", "Medina", "Romero" }
+
+-- Misiones (V3). go = pantalla a la que lleva el botón «Ir».
+Catalog.MISSIONS = {
+	{ id = "t1", kind = "tutorial", title = "Diseñá y guardá tu primer auto", desc = "Abrí Diseño, elegí una base y guardá el proyecto en Revisión.", counter = "designsSaved", goal = 1, reward = { money = 10000, gems = 5, xp = 200 }, go = "editor" },
+	{ id = "t2", kind = "tutorial", title = "Contratá un empleado", desc = "Sumá a alguien desde Personal › Contratar.", counter = "hires", goal = 1, reward = { money = 15000, gems = 5, xp = 150 }, go = "personal" },
+	{ id = "t3", kind = "tutorial", title = "Fabricá una unidad", desc = "Creá una orden en Fábrica y esperá que termine.", counter = "unitsProduced", goal = 1, reward = { money = 10000, gems = 5, xp = 150 }, go = "fabrica" },
+	{ id = "t4", kind = "tutorial", title = "Colocá un auto en el concesionario", desc = "Desde Mis autos, enviá una unidad terminada al salón.", counter = "sentToShowroom", goal = 1, reward = { money = 5000, gems = 5, xp = 100 }, go = "autos" },
+	{ id = "t5", kind = "tutorial", title = "Completá tu primera venta", desc = "Negociá con un cliente en el concesionario.", counter = "unitsSold", goal = 1, reward = { money = 25000, gems = 20, xp = 300 }, go = "ventas" },
+	{ id = "s1", kind = "historia", title = "Vendé 10 autos", desc = "Primer paso para ampliar el garaje.", counter = "unitsSold", goal = 10, reward = { money = 40000, gems = 20, xp = 500 }, go = "ventas" },
+	{ id = "s2", kind = "historia", title = "Ampliá la sede a Taller", desc = "Desde Compañía › Sede.", counter = "sedeLevel", goal = 2, reward = { money = 60000, gems = 30, xp = 600 }, go = "compania" },
+	{ id = "s3", kind = "historia", title = "Completá 3 investigaciones", desc = "Desbloqueá nuevas piezas y modelos.", counter = "researchDone", goal = 3, reward = { money = 30000, gems = 15, xp = 400 }, go = "investigacion" },
+	{ id = "s4", kind = "historia", title = "Diseñá 3 modelos distintos", desc = "Ampliá tu catálogo.", counter = "designsSaved", goal = 3, reward = { money = 25000, gems = 10, xp = 350 }, go = "editor" },
+	{ id = "d1", kind = "diaria", title = "Vendé 2 autos hoy", desc = "Se reinicia cada día de juego.", counter = "soldToday", goal = 2, reward = { money = 8000, gems = 3, xp = 120 }, go = "ventas" },
+	{ id = "d2", kind = "diaria", title = "Producí 3 unidades hoy", desc = "Se reinicia cada día de juego.", counter = "producedToday", goal = 3, reward = { money = 6000, gems = 2, xp = 100 }, go = "fabrica" },
+	{ id = "d3", kind = "diaria", title = "Ganá $20.000 de margen hoy", desc = "Margen = ingresos por venta − costo de fabricación de lo vendido.", counter = "marginToday", goal = 20000, reward = { money = 5000, gems = 3, xp = 100 }, go = "ventas" },
+}
+
+-- Recompensa diaria por días reales consecutivos (fecha UTC del servidor).
+Catalog.DAILY_REWARDS = {
+	{ money = 5000 }, { money = 8000 }, { gems = 5 }, { money = 15000, gems = 5 }, { money = 20000 }, { gems = 15 }, { money = 40000, gems = 25 },
+}
+
+Catalog.LOGOS = {
+	{ "pico", "Pico" }, { "rayo", "Rayo" }, { "escudo", "Escudo" }, { "corona", "Corona" },
+	{ "pinon", "Piñón" }, { "ala", "Ala" }, { "estrella", "Estrella" }, { "ruta", "Ruta" },
+}
+
+Catalog.NPC_SELLERS = { "TallerNorte", "GarajeSur", "KiloWatt", "Montaña_Pro", "ElPiloto", "RutaLibre", "Pistón89", "AutoLuna" }
+Catalog.NEWS_POOL = {
+	{ "DEMANDA", "#42E58D", "Los compactos económicos son los más buscados por nuevos conductores." },
+	{ "TECNOLOGÍA", "#6FE3F0", "Las baterías de estado sólido prometen +18 % de autonomía." },
+	{ "COMPETENCIA", "#FF8A91", "Kairo Cars baja sus precios un 5 % en la gama de sedanes." },
+	{ "MERCADO", "#F7C95C", "El precio del aluminio baja en el mercado simulado." },
+	{ "DEMANDA", "#42E58D", "Los deportivos suben en la consideración de clientes jóvenes." },
 }
 
 Catalog.CUSTOMER_NAMES = { "Martina R.", "Tomás P.", "Lucía G.", "Diego B.", "Valentina S.", "Bruno L.", "Camila F.", "Julián M.", "Sofía K.", "Agustín V.", "Renata O.", "Facundo T.", "Milagros D.", "Lautaro C." }
@@ -285,16 +398,6 @@ Catalog.STAT_DEFS = {
 	{ "comfort", "Comodidad", "0–100", "Confort de marcha.", 1, 100 },
 	{ "quality", "Calidad", "0–100", "Terminación general; sube el precio recomendado.", 1, 100 },
 	{ "kg", "Peso", "kg", "Menos peso mejora aceleración, frenado y consumo.", -1, 2600 },
-}
-
--- Recorrido guiado de la etapa 1 (sin recompensas: el sistema de misiones llega después).
-Catalog.TUTORIAL = {
-	{ id = "t0", title = "Fundá tu empresa", counter = "companyCreated" },
-	{ id = "t1", title = "Diseñá y guardá tu primer auto", counter = "designsSaved" },
-	{ id = "t2", title = "Creá una orden de producción", counter = "ordersCreated" },
-	{ id = "t3", title = "Fabricá una unidad", counter = "unitsProduced" },
-	{ id = "t4", title = "Colocá un auto en el concesionario", counter = "sentToShowroom" },
-	{ id = "t5", title = "Completá tu primera venta", counter = "unitsSold" },
 }
 
 -- Índices auxiliares ---------------------------------------------------------
@@ -372,6 +475,53 @@ function Catalog.colorName(list: { any }, hex: string): string?
 		end
 	end
 	return nil
+end
+
+local researchIndex: { [string]: any } = {}
+for _, key in Catalog.RESEARCH_ORDER do
+	for _, n in Catalog.RESEARCH[key].nodes do
+		n.cat = key
+		researchIndex[n.id] = n
+		Catalog.RESEARCH_NAMES[n.id] = n.name
+	end
+end
+function Catalog.researchNode(id: any): any
+	return type(id) == "string" and researchIndex[id] or nil
+end
+
+local missionIndex: { [string]: any } = {}
+for _, m in Catalog.MISSIONS do
+	missionIndex[m.id] = m
+end
+function Catalog.mission(id: any): any
+	return type(id) == "string" and missionIndex[id] or nil
+end
+
+function Catalog.station(id: any): any
+	for _, s in Catalog.STATIONS do
+		if s[1] == id then
+			return s
+		end
+	end
+	return nil
+end
+
+function Catalog.department(id: any): any
+	for _, d in Catalog.DEPARTMENTS do
+		if d[1] == id then
+			return d
+		end
+	end
+	return nil
+end
+
+function Catalog.isLogo(id: any): boolean
+	for _, l in Catalog.LOGOS do
+		if l[1] == id then
+			return true
+		end
+	end
+	return false
 end
 
 return Catalog

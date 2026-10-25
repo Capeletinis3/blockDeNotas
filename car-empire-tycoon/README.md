@@ -1,87 +1,184 @@
-# Car Empire Tycoon · Roblox (etapa 1)
+# Car Empire Tycoon · Roblox (etapa 2: revisión y ampliación)
 
-Primera etapa jugable en Roblox basada en el prototipo `reference/Car-Empire-Tycoon-V3.html`.
-La V3 sirve de referencia visual y de reglas: los catálogos, fórmulas de precio y estadísticas,
-la fabricación y el comportamiento de los clientes se portaron con los mismos números.
+Juego tycoon de autos en Roblox (Rojo + Luau) basado en el prototipo `reference/Car-Empire-Tycoon-V3.html`.
+La V3 es la referencia visual y de reglas: catálogos, fórmulas de precio y estadísticas, fabricación,
+clientes, misiones e investigación se portaron con sus números. El servidor valida toda la economía.
+
+> **Importante:** este trabajo se hizo sin poder ejecutar Roblox Studio. Lo verificado es: pruebas de
+> lógica (Lune), pruebas de interfaz sin pantalla sobre un entorno Roblox simulado, análisis estático
+> (Selene) y la generación del `.rbxl` con Rojo. El aspecto visual, la física, las cámaras, el
+> DataStore real y el multijugador real **no están probados**: ver la lista de pruebas en Studio al final.
+> No hay que considerar el juego terminado hasta pasar esa lista.
 
 ## Estructura
 
 ```
 car-empire-tycoon/
-├─ default.project.json      Proyecto Rojo (qué carpeta va a qué servicio)
+├─ default.project.json        Proyecto Rojo
 ├─ src/shared/  → ReplicatedStorage.CarEmpireShared
-│   ├─ Catalog.luau          Bases, piezas, pinturas, materiales, reglas (V3)
-│   ├─ DesignCalc.luau       computeDesign, bloqueos, costo de desarrollo, saneamiento del borrador
-│   ├─ CarModel.luau         Auto provisional hecho con Parts (editor y garaje)
-│   └─ Util.luau             Redondeo como JS, dinero "$28.700", fechas
+│   ├─ Catalog.luau            Catálogos de la V3: bases, piezas, pinturas, materiales, investigación,
+│   │                          personal, sedes, misiones, recompensas diarias, dificultades y reglas
+│   ├─ Rules.luau              Reglas derivadas comunes a cliente y servidor (capacidades, precios
+│   │                          finales, mayorista, interés, misiones, finanzas 7/14/30 días)
+│   ├─ DesignCalc.luau         computeDesign, bloqueos, costo de desarrollo, saneamiento del borrador
+│   ├─ CarModel.luau           Auto provisional con Parts (editor, miniaturas y garaje)
+│   └─ Util.luau               Redondeo como JS, dinero "$28.700", fechas
 ├─ src/server/  → ServerScriptService.CarEmpireServer
-│   ├─ Main.server.luau      Sesiones por jugador, remotos, bucle de simulación, autoguardado
-│   ├─ Actions.luau          Acciones validadas (diseño, órdenes, compras, salón, ventas)
-│   ├─ Simulation.luau       Reloj, fabricación, clientes, venta atómica
-│   ├─ GameState.luau        Partida nueva, validación, migración, vista para el cliente
-│   ├─ DataService.luau      DataStore con candado de sesión, reintentos y protección de datos
-│   └─ Garage.luau           Vestíbulo + 8 garajes básicos con ProximityPrompts
-├─ src/client/  → StarterPlayerScripts.CarEmpireClient
-│   ├─ Main.client.luau      Arranque, eventos del servidor, atajos 0–4 / Esc
-│   ├─ App.luau              Estado, navegación, reconstrucción por firma y valores en vivo
-│   ├─ Ui.luau               Componentes con los tokens de color de la V3
-│   └─ Screen*.luau, Dialogs.luau   Empresa, HUD, Editor, Fábrica, Mis autos, Ventas, diálogos
-├─ tests/run.luau            Pruebas de la lógica del servidor con Lune
-└─ reference/                Prototipo V3 original
+│   ├─ Main.server.luau        Remotos, servicios de Roblox, reloj
+│   ├─ Sessions.luau           Sesiones por jugador: carga, ranuras, candado, guardado, límites
+│   ├─ Actions.luau            Acciones validadas (diseño, fábrica, inventario, ventas, personal…)
+│   ├─ Simulation.luau         Reloj, cambio de día, fabricación, desgaste, clientes, ventas
+│   ├─ Market.luau             Mercado simulado con vendedores ficticios
+│   ├─ GameState.luau          Partida nueva, validación, migración, vista para el cliente
+│   ├─ DataService.luau        DataStore: candado de sesión, reintentos, datos dañados intactos
+│   └─ Garage.luau             Vestíbulo + 8 garajes provisionales con ProximityPrompts
+├─ src/client/  → StarterPlayer.StarterPlayerScripts.CarEmpireClient
+│   ├─ Main.client.luau        Registro de pantallas y diálogos, eventos, atajos
+│   ├─ App.luau                Estado, navegación, distribuciones, diálogos, valores en vivo
+│   ├─ Ui.luau, Icons.luau     Componentes con los colores de la V3 e íconos dibujados
+│   ├─ ScreenMenu/Company      Inicio con ranuras de empresas y creación de empresa
+│   ├─ ScreenHud/Sheet         HUD de la sede y hojas de cada sección
+│   ├─ ScreenEditor            Editor de 4 pasos con vista 3D
+│   ├─ ScreenFactory, ScreenInventory, ScreenSales, ScreenMarket, ScreenResearch,
+│   │  ScreenStaff, ScreenCompania, ScreenMissions, ScreenStats, ScreenStatus
+│   └─ Dialogs.luau            Orden, negociación, detalle, mercado, ajustes, ayuda, menú…
+├─ tests/run.luau              Pruebas de lógica (Lune)
+├─ tests/ui.luau + mock.luau   Pruebas de interfaz sin pantalla (cliente y servidor reales)
+├─ tests/verify_place.luau     Verifica que un .rbxl contenga exactamente los scripts de src/
+└─ reference/                  Prototipo V3 original
 ```
 
 ## Cómo abrir el proyecto
 
-Opción A — sincronizar con Rojo (recomendado para seguir desarrollando):
+**Opción A — archivo listo:** abrir `CarEmpireTycoon.rbxl` en Roblox Studio (generado con
+`rojo build` a partir de estos mismos scripts; se comprobó con `tests/verify_place.luau`).
 
-1. Instalar [Rojo](https://rojo.space) 7 (CLI) y el plugin de Rojo en Roblox Studio.
-2. En esta carpeta: `rojo serve`
-3. En Studio, abrir tu place (o uno nuevo «Baseplate») → plugin Rojo → **Connect**.
-   Rojo solo crea/gestiona `CarEmpireShared`, `CarEmpireServer` y `CarEmpireClient`; el resto del place no se toca.
+**Opción B — Rojo (para seguir desarrollando):**
+1. Instalar [Rojo](https://rojo.space) 7 y su plugin de Studio.
+2. En esta carpeta: `rojo serve`; en Studio: plugin Rojo → **Connect**.
+3. O generar el archivo: `rojo build -o CarEmpireTycoon.rbxl`.
 
-Opción B — generar un archivo de place: `rojo build -o CarEmpire.rbxl` y abrirlo en Studio.
+**Ajustes manuales en Studio**
+- Guardado real: publicar el place y activar *Game Settings › Security › Enable Studio Access to API Services*.
+  Sin esto el juego usa guardado temporal en memoria y lo avisa con una banda amarilla.
+- Recomendado: *Max Players = 8* (hay 8 garajes por servidor; si no hay garaje libre se juega
+  con los paneles y el garaje aparece cuando se libere uno).
 
-### Ajustes necesarios en Studio (acción manual)
-
-- **Guardado real**: publicar el place (File › Publish to Roblox) y activar
-  *Game Settings › Security › Enable Studio Access to API Services*.
-  Sin esto el juego funciona igual, pero usa un guardado temporal en memoria y lo avisa con una banda amarilla.
-- Recomendado: *Game Settings › Places › Max Players = 8* (hay 8 garajes por servidor).
-
-## Cómo probar el recorrido (Play en Studio)
-
-1. Aparecés en el vestíbulo con la pantalla **Fundá tu empresa**: nombre (3–24 caracteres), color y dificultad → *Comenzar mi empresa*.
-2. Te lleva a tu **garaje** (cartel con tu nombre y color). Puntos con la tecla **E**: Escritorio de diseño, Línea de producción, Almacén, Concesionario. También el HUD (Diseño, Mis autos, Fábrica, Ventas) o las teclas 1–4.
-3. **Diseño**: paso 1 elegí *Pixel C1* o *Brisa Sedán*; paso 2 instalá piezas (p. ej. frenos deportivos); paso 3 pintura principal/secundaria, acabado, llantas y alerón; paso 4 *Guardar diseño*.
-4. Se cobra la licencia del modelo y los prototipos **una sola vez** (volver a guardar sin cambios no cobra; una v2 solo cobra piezas nuevas).
-5. *Enviar a producción* (o Fábrica › Nueva orden). La orden muestra «v1» y queda fijada aunque edites el diseño después.
-6. Con velocidad 2×/4× (arriba a la derecha) la unidad avanza: al empezar descuenta dinero y materiales; al terminar aparece en Mis autos y en el almacén del garaje.
-7. Mis autos › *Enviar al salón*. En Ventas aparecen clientes; cuando uno ofrece: *Aceptar*, *Contraofertar* o *Rechazar*.
-8. Revisar dinero (HUD), Mis autos (unidad vendida), Ventas › Historial y Movimientos.
-9. Detener y volver a dar Play (con API activada): la empresa, el dinero, los diseños y el inventario se recuperan.
-
-**Dos jugadores**: pestaña *Test › Clients and Servers*, 2 jugadores → Start. Cada uno crea su empresa y recibe su propio garaje; dinero, diseños e inventario son independientes. Las acciones de cada cliente solo tocan la partida de ese jugador (el servidor la elige por el `Player` del remoto, nunca por un id enviado por el cliente).
-
-## Pruebas automáticas (fuera de Studio)
-
-Requiere [Lune](https://lune-org.github.io/docs) ≥ 0.10:
-
+**Comprobaciones fuera de Studio** (requieren [Lune](https://lune-org.github.io/docs) ≥ 0.10):
 ```
-lune run tests/run.luau
+lune run tests/run.luau                 # lógica del servidor y guardado
+lune run tests/ui.luau                  # interfaz sin pantalla
+lune run tests/verify_place.luau CarEmpireTycoon.rbxl
+selene src                              # análisis estático
 ```
 
-Cubren: fórmulas iguales a la V3, saneamiento del borrador (piezas/bases bloqueadas, precios inventados),
-cobro único del desarrollo, copia independiente de la versión en la orden, consumo de dinero y materiales,
-detención por falta de materiales o fondos y reintegro al cancelar, cliente → oferta → venta, rechazo de dobles ventas,
-contraoferta, independencia de dos jugadores y guardado (ida y vuelta por JSON, candado de sesión,
-fallo de carga sin escritura, datos dañados intactos, partida inválida no se guarda, sesión perdida).
+## Revisión inicial (estado que tenía la etapa 1)
+
+| Estado | Elementos |
+|---|---|
+| Completo | Recorrido base diseño → orden → fabricación → salón → venta; validación en el servidor; dos jugadores independientes; candado de sesión básico. |
+| Parcial | Editor (sin cámaras, deshacer, comparar ni muchas opciones visuales); fábrica (una línea, sin prioridades ni estaciones); inventario y ventas sin filtros, historial ni detalle; negociación con probabilidad aproximada en el cliente. |
+| Faltante | Investigación, personal, compañía y sedes, misiones, mercado, estadísticas, configuración, ayuda, notificaciones, menú de empresas con ranuras, distribución para celular, íconos. |
+| Problemas | Botón *Comenzar mi empresa* que quedaba deshabilitado al escribir (capturaba el estado inicial); Magnate imposible de empezar; textos de dificultad que prometían efectos inexistentes; renovación del candado atada a la simulación; sesión perdida sin bloqueo claro; carreras entre carga, reintento, salida y cierre; validación de datos incompleta; probabilidad de negociación distinta entre cliente y servidor; capacidad de almacén calculada de dos formas; cancelar una orden con depósito lleno perdía materiales; cambio de día después de la fabricación. |
+| Necesita Studio | Aspecto visual, cámaras del editor, garajes, ProximityPrompts, teclado en celular, DataStore real, multijugador real. |
+
+## Qué se hizo, qué se verificó y qué falta (por etapa)
+
+### 1. Bloqueos y guardado
+- **Hecho:** botón de crear empresa reactivo; recompensas del tutorial de la V3 (primer diseño guardado
+  → +$10.000) que hacen viable Magnate; textos de dificultad con solo efectos reales; candado renovado por
+  su propio temporizador (60 s, vence a 300 s) aunque la partida esté en pausa; sesión perdida →
+  estado «lost» que bloquea acciones con explicación; carga/reintento/salida/cierre serializados;
+  validación completa de la partida (nivel, xp, reputación, reloj, contadores, investigación,
+  configuración de diseños, unidades, estados permitidos, órdenes, historiales y referencias) con
+  migración que separa campos viejos recuperables de daño real; ranuras dañadas se conservan sin
+  tocar y no bloquean la pantalla de carga; negociación con probabilidad exacta del servidor, monto
+  redondeado a $100, revisión (`rev`) que invalida consultas viejas y tirada fuera de los mensajes;
+  una sola regla de capacidad; cancelar devuelve todo el material reservado; el cambio de día corre
+  antes de producir.
+- **Verificado:** `tests/run.luau` (204 comprobaciones), incluidas primera venta en las 3 dificultades sin
+  dinero manual, candado en pausa larga, dos sesiones sobre la misma partida, salida durante carga y
+  guardado, fallo de carga sin escritura, ranura dañada, migración y orden del cambio de día.
+- **Falta:** probar con el DataStore real y cierres reales del servidor (Studio/publicado).
+
+### 2. Recorrido básico
+- **Hecho:** entorno Roblox simulado (`tests/mock.luau`) que ejecuta el servidor y el cliente reales.
+- **Verificado:** `tests/ui.luau` (143 comprobaciones): crear empresa escribiendo solo el nombre, recorrido
+  completo con clics (diseñar, reclamar el tutorial una sola vez, orden de 6, fabricar, salón, vender),
+  segunda empresa Magnate en otra ranura hasta su primera orden, independencia entre ranuras,
+  eliminar empresa escribiendo el nombre, límite de acciones seguidas.
+- **Falta:** el mismo recorrido en Studio (lista al final).
+
+### 3. Editor, fábrica, inventario y ventas
+- **Hecho:** cámaras predefinidas sincronizadas con la vista, giro y zoom con límites, restablecer,
+  encuadre por las dimensiones reales, deshacer/rehacer (Ctrl+Z/Ctrl+Y), comparar antes/después,
+  puntos de identificación de piezas, estilos de llanta, intensidad y brillo, paragolpes, capó, difusor,
+  faldones, faros, polarizado, vinilos, número, emblema e interior visibles en el modelo; cambios sin
+  guardar protegidos al salir, crear proyecto, abrir otro y cambiar de empresa (guardar / descartar /
+  seguir editando; si guardar falla se conserva el borrador); nombres duplicados, duplicar y eliminar
+  como la V3 sin tocar unidades ni órdenes. Fábrica con líneas, prioridades, botones para reordenar y
+  arrastre, estaciones con desgaste, averías, reparación y mejoras, producción automática por
+  investigación, aceleración con recargo, repetir «misma versión» o «última versión guardada», cobro
+  real por unidad registrado y limpieza de detenciones resueltas. Inventario con búsqueda, filtros,
+  orden, detalle con vista reconocible, versión y lo cobrado. Ventas con precio de lista, descuentos,
+  precio final, efecto en el interés, promoción, mayorista, detalle e historial con filtros; lista,
+  oferta, ingreso y margen separados; el diálogo se actualiza o se bloquea si el auto se vende o retira;
+  reenvíos idempotentes.
+- **Verificado:** pruebas de lógica (repetir orden, recargo, capacidad, cancelación, probabilidad) y de
+  interfaz (cambios sin guardar, deshacer/rehacer, negociación que se invalida, todos los diálogos).
+- **Falta en Studio:** cámaras, encuadre, puntos sobre el auto, arrastre de órdenes, legibilidad de
+  las miniaturas.
+
+### 4. Misiones, investigación, personal y ampliaciones
+- **Hecho:** tutorial/historia/diarias con reclamo persistente y pago único; recompensa diaria por fecha
+  UTC; árbol de investigación con efectos reales; personal (contratar, despedir, descansar, asignar a
+  estaciones o departamentos); identidad de marca y 4 sedes con requisitos.
+- **Verificado:** pruebas de lógica dedicadas (efectos, salarios, PI, requisitos, doble reclamo).
+
+### 5. Mercado, finanzas y pantallas secundarias
+- **Hecho:** mercado simulado con vendedores ficticios (no hay intercambio entre jugadores reales):
+  compra directa, subastas, publicar y retirar, ofertas; estadísticas de 7/14/30 días desde agregados
+  diarios comunes (no se calculan con listas recortadas); configuración guardada en el servidor
+  (tamaño de interfaz, velocidad de cámara, reducir movimiento, atajos, sonidos); ayuda por pantalla;
+  historial de notificaciones. Amigos, Tienda y Eventos marcados como funciones futuras.
+- **Verificado:** pruebas de lógica (mercado, estadísticas tras recortar historiales) e interfaz
+  (configuración persistida y valores fuera de rango rechazados).
+
+### 6. Interfaz, imagen y mapa
+- **Hecho:** identidad de la V3; distribuciones escritorio / computadora chica / tableta / celular
+  (navegación con menú, columnas que se apilan, paneles plegables, diálogos arriba para no quedar
+  bajo el teclado, áreas seguras, escala mínima 0,8 en lugar de achicar el texto); íconos dibujados
+  en lugar de emojis; miniaturas 3D de los autos; estados de proceso/error sin perder lo escrito.
+  Garajes provisionales que muestran fábrica, almacén y salón; si no hay parcela libre se espera y
+  se asigna al liberarse. Los autos son modelos provisionales, no se conducen; no hay carreras.
+- **Verificado:** todas las pantallas y diálogos se construyen en escritorio y en celular sin errores
+  (prueba de interfaz). **No** verificado: cómo se ven.
+
+## Lista de pruebas pendientes en Roblox Studio
+
+1. Abrir `CarEmpireTycoon.rbxl`, Play: aparece el inicio con 3 ranuras sobre la escena del vestíbulo.
+2. Crear empresa escribiendo solo el nombre: el botón se habilita mientras escribís.
+3. Repetir el recorrido en Relajado, Normal y Magnate hasta la primera venta, sin dinero extra.
+4. Editor: cada cámara, giro con arrastre, zoom con rueda y botones, restablecer; cambiar cada opción
+   visual (llantas, faros, vinilos, número, emblema, interior…) y verla en el auto; comparar; Ctrl+Z/Y.
+5. Intentar salir del editor, abrir otro proyecto y volver al menú con cambios: debe preguntar.
+6. Fábrica: arrastrar órdenes, prioridades, averías y reparación; el garaje muestra lo que se fabrica.
+7. Garaje: ProximityPrompts (tecla E), que el cartel muestre tu empresa, cámara y obstáculos del camino.
+8. Celular (*Device Emulator*, p. ej. iPhone 14 horizontal y vertical): navegación, paneles, diálogos con
+   el teclado abierto, botones alcanzables, áreas seguras.
+9. Con API activada: jugar, salir y volver; cerrar el servidor durante un guardado; abrir la misma
+   cuenta en dos servidores (el segundo debe esperar o informar el candado, nunca pisar datos).
+10. *Test › Clients and Servers* con 2 y con 9 jugadores: empresas independientes y el noveno espera garaje.
+11. Sonido de los avisos y la opción Configuración › Sonidos.
 
 ## Reglas de seguridad y guardado
 
-- El cliente envía solo intenciones e identificadores. El servidor recalcula costos y precios, valida pertenencia, capacidad, dinero y materiales; si algo falla, no cambia nada.
-- Nombres de empresa y de diseños pasan por `TextService` (se ven en el garaje para todos).
-- Una acción por jugador a la vez y límite de 12 solicitudes cada 2 s.
-- Clave por jugador `player_<UserId>`; `UpdateAsync` con candado de sesión (vence a los 300 s sin renovarse).
-- Si la carga falla o los datos están dañados: se muestra el error con *Reintentar* y esa sesión **no guarda** nada.
-- Antes de cada escritura se valida la partida; si otro servidor tomó el candado, se deja de guardar.
-- Autoguardado cada 45 s con cambios, guardado poco después de acciones importantes, al salir y al cerrar el servidor.
+- El cliente envía intenciones e identificadores; el servidor recalcula costos y precios y valida
+  pertenencia, capacidad, dinero y materiales. Si algo falla no se cambia nada.
+- Nombres de empresas y diseños pasan por `TextService` (se ven en el garaje para todos).
+- Una acción por jugador a la vez, límite de 14 solicitudes cada 2 s, identificador por solicitud
+  para que un reenvío no se aplique dos veces.
+- Clave por jugador `player_<UserId>` con 3 ranuras; `UpdateAsync` con candado de sesión.
+- Si la carga falla: se informa con *Reintentar* y esa sesión no guarda nada. Las ranuras dañadas
+  se conservan tal cual.
+- Autoguardado cada 45 s con cambios, guardado tras acciones importantes, al salir y al cerrar.

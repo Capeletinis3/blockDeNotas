@@ -5,6 +5,10 @@
 ]]
 
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
+local CarModel = require(Shared.CarModel)
+local Icons = require(script.Parent.Icons)
 
 local Ui = {}
 
@@ -304,34 +308,84 @@ local VARIANTS = {
 }
 
 --[[
-	opts: { small, disabled, why (motivo visible al pasar el mouse), width, fill (ocupa el ancho), height, name }
+	Botón .btn. El estado (habilitado, motivo, procesando) vive en atributos del propio botón:
+	la apariencia y el clic leen el mismo dato, así un cambio con Ui.setEnabled se aplica a ambos.
+	opts: { small, disabled, why (motivo visible al tocarlo deshabilitado), width, fill, height, name, flex, icon }
 ]]
+local function paintButton(b: TextButton)
+	local v = VARIANTS[b:GetAttribute("kind") or "default"] or VARIANTS.default
+	local enabled = b:GetAttribute("disabled") ~= true and b:GetAttribute("busy") ~= true
+	b.TextColor3 = enabled and v.fg or T.disabledTx
+	b.BackgroundColor3 = enabled and v.bg or T.disabledBg
+	b.BackgroundTransparency = (v.transparent and enabled) and 1 or 0
+	local stroke = b:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = enabled and v.line or hex("#22252E")
+		stroke.Transparency = (v.transparent and enabled) and 1 or 0
+	end
+	local icon = b:FindFirstChild("Icono")
+	if icon and Ui.recolorIcon then
+		Ui.recolorIcon(icon, b.TextColor3)
+	end
+end
+
 function Ui.button(label: string, kind: string?, onClick: (() -> ())?, opts: { [string]: any }?): TextButton
 	local o = opts or {}
 	local v = VARIANTS[kind or "default"] or VARIANTS.default
 	local h = o.height or (o.small and 36 or 44)
-	local disabled = o.disabled == true
 	local b = new("TextButton", {
 		Name = o.name or "Boton",
 		Text = label,
 		TextSize = o.small and Ui.S.sm or 14,
 		Weight = W.bold,
-		TextColor3 = disabled and T.disabledTx or v.fg,
-		BackgroundColor3 = disabled and T.disabledBg or v.bg,
-		BackgroundTransparency = (v.transparent and not disabled) and 1 or 0,
+		TextColor3 = v.fg,
+		BackgroundColor3 = v.bg,
 		TextXAlignment = Enum.TextXAlignment.Center,
 		Size = o.fill and UDim2.new(1, 0, 0, h) or UDim2.new(0, o.width or 0, 0, h),
 		AutomaticSize = (o.fill or o.width) and Enum.AutomaticSize.None or Enum.AutomaticSize.X,
 		Corner = o.small and 8 or 10,
-		Stroke = disabled and hex("#22252E") or v.line,
-		Pad = { 0, o.small and 12 or 16 },
-		Hover = (not disabled) and v.hover or nil,
+		Stroke = v.line,
+		Pad = { 0, (o.width and o.width <= 44) and 0 or (o.small and 12 or 16) },
 		AutoButtonColor = false,
 	})
-	if v.transparent and not disabled then
-		(b:FindFirstChildOfClass("UIStroke") :: UIStroke).Transparency = 1
+	b:SetAttribute("kind", kind or "default")
+	b:SetAttribute("label", label)
+	b:SetAttribute("disabled", o.disabled == true)
+	b:SetAttribute("why", o.why)
+	if o.icon and Ui.icon then
+		local ic = Ui.icon(o.icon, o.small and 15 or 17, v.fg)
+		ic.Name = "Icono"
+		ic.LayoutOrder = -1
+		ic.Parent = b
+		local list = Instance.new("UIListLayout")
+		list.FillDirection = Enum.FillDirection.Horizontal
+		list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		list.VerticalAlignment = Enum.VerticalAlignment.Center
+		list.SortOrder = Enum.SortOrder.LayoutOrder
+		list.Padding = UDim.new(0, label == "" and 0 or 7)
+		list.Parent = b
+		-- El texto pasa a una etiqueta para quedar al lado del ícono.
+		if label ~= "" then
+			b.Text = ""
+			local t = new("TextLabel", { Name = "Etiqueta", Text = label, TextSize = b.TextSize, Weight = W.bold, TextColor3 = v.fg, Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 1 })
+			t.Parent = b
+			b:GetPropertyChangedSignal("TextColor3"):Connect(function()
+				t.TextColor3 = b.TextColor3
+			end)
+		end
 	end
-	b:SetAttribute("disabled", disabled)
+	paintButton(b)
+	local function hover(on: boolean)
+		if b:GetAttribute("disabled") ~= true and b:GetAttribute("busy") ~= true then
+			b.BackgroundColor3 = on and v.hover or v.bg
+		end
+	end
+	b.MouseEnter:Connect(function()
+		hover(true)
+	end)
+	b.MouseLeave:Connect(function()
+		hover(false)
+	end)
 	if o.flex then
 		local flex = Instance.new("UIFlexItem")
 		flex.FlexMode = Enum.UIFlexMode.Grow
@@ -339,9 +393,13 @@ function Ui.button(label: string, kind: string?, onClick: (() -> ())?, opts: { [
 		flex.Parent = b
 	end
 	b.Activated:Connect(function()
-		if disabled then
-			if o.why and Ui.onDisabled then
-				Ui.onDisabled(o.why)
+		if b:GetAttribute("busy") == true then
+			return
+		end
+		if b:GetAttribute("disabled") == true then
+			local why = b:GetAttribute("why")
+			if why and Ui.onDisabled then
+				Ui.onDisabled(why)
 			end
 			return
 		end
@@ -350,6 +408,31 @@ function Ui.button(label: string, kind: string?, onClick: (() -> ())?, opts: { [
 		end
 	end)
 	return b
+end
+
+-- Cambia el estado de un botón ya construido (apariencia y comportamiento a la vez).
+function Ui.setEnabled(b: TextButton, enabled: boolean, why: string?)
+	b:SetAttribute("disabled", not enabled)
+	b:SetAttribute("why", why)
+	paintButton(b)
+end
+
+function Ui.isEnabled(b: TextButton): boolean
+	return b:GetAttribute("disabled") ~= true and b:GetAttribute("busy") ~= true
+end
+
+-- «Procesando…»: el botón queda inactivo mientras el servidor responde, sin perder su texto.
+function Ui.setBusy(b: TextButton, busy: boolean)
+	if not b.Parent then
+		return
+	end
+	b:SetAttribute("busy", busy)
+	local label = b:GetAttribute("label") or ""
+	local target = b:FindFirstChild("Etiqueta") or b
+	if label ~= "" then
+		(target :: any).Text = busy and "Procesando…" or label
+	end
+	paintButton(b)
 end
 
 -- Se asigna desde App: muestra el motivo de un botón deshabilitado (equivalente a .why / title).
@@ -495,10 +578,10 @@ end
 
 -- Notas .note (y, r, b, g)
 local NOTES = {
-	y = { hex("#16140C"), hex("#5E4E26"), hex("#F5DC9A"), "⚠" },
-	r = { hex("#170D10"), hex("#663036"), hex("#FFB3B7"), "⚠" },
-	b = { hex("#0C121C"), hex("#22406E"), hex("#C2D8FF"), "ⓘ" },
-	g = { hex("#0C1712"), hex("#226043"), hex("#B4F3CF"), "✓" },
+	y = { hex("#16140C"), hex("#5E4E26"), hex("#F5DC9A"), "warn" },
+	r = { hex("#170D10"), hex("#663036"), hex("#FFB3B7"), "warn" },
+	b = { hex("#0C121C"), hex("#22406E"), hex("#C2D8FF"), "help" },
+	g = { hex("#0C1712"), hex("#226043"), hex("#B4F3CF"), "check" },
 }
 function Ui.note(kind: string, text: string, extra: Instance?): Frame
 	local n = NOTES[kind] or NOTES.b
@@ -513,7 +596,7 @@ function Ui.note(kind: string, text: string, extra: Instance?): Frame
 		Pad = { 10, 12 },
 		List = { dir = "H", gap = 10, v = "C" },
 	}, {
-		Ui.inline(n[4], { size = 14, color = n[3], weight = W.bold }),
+		Icons.make(n[4], 16, n[3]),
 		Ui.grow(Ui.text(text, { size = Ui.S.sm, color = n[3], lineHeight = 1.25 }), { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }),
 		extra,
 	})
@@ -560,7 +643,7 @@ end
 function Ui.input(value: string, placeholder: string, onCommit: (string) -> (), opts: { [string]: any }?): TextBox
 	local o = opts or {}
 	local box = new("TextBox", {
-		Name = "Campo",
+		Name = o.name or "Campo",
 		Text = value,
 		PlaceholderText = placeholder,
 		PlaceholderColor3 = T.mut2,
@@ -592,67 +675,85 @@ function Ui.input(value: string, placeholder: string, onCommit: (string) -> (), 
 	return box
 end
 
--- Ícono cuadrado de color con un símbolo (reemplazo de los íconos SVG de la V3).
-function Ui.ico(symbol: string, color: Color3, bg: Color3, size: number?): TextLabel
+-- Ícono de línea (Icons) o, si no existe, un símbolo de texto.
+function Ui.icon(name: string, size: number?, color: Color3?): Frame
+	return Icons.make(name, size or 18, color or T.tx)
+end
+Ui.recolorIcon = Icons.recolor
+
+-- Ícono dentro de un cuadrado de color (las «.ico» de la V3).
+function Ui.ico(name: string, color: Color3, bg: Color3, size: number?): Frame
 	local s = size or 32
-	return new("TextLabel", {
-		Name = "Icono",
-		Text = symbol,
-		TextSize = math.floor(s * 0.5),
-		Weight = W.bold,
-		TextColor3 = color,
+	local box = new("Frame", {
+		Name = "Ico",
 		BackgroundColor3 = bg,
 		BackgroundTransparency = 0,
 		Size = UDim2.fromOffset(s, s),
 		Corner = math.floor(s * 0.28),
-		TextXAlignment = Enum.TextXAlignment.Center,
 	})
+	local ic = Icons.make(name, math.floor(s * 0.56), color)
+	ic.AnchorPoint = Vector2.new(0.5, 0.5)
+	ic.Position = UDim2.fromScale(0.5, 0.5)
+	ic.Parent = box
+	return box
 end
 
--- Logotipo de la empresa: cuadrado del color de marca con la inicial.
-function Ui.logo(company: any, size: number?): TextLabel
+local LIGHT_BRANDS = { ["#E8ECF2"] = true, ["#F7C95C"] = true, ["#42E58D"] = true }
+
+-- Logotipo de la empresa: ícono elegido sobre el color de marca (logoSvg de la V3).
+function Ui.logo(company: any, size: number?): Frame
 	local s = size or 32
-	local light = company.color == "#E8ECF2" or company.color == "#F7C95C" or company.color == "#42E58D"
-	local initial = string.upper(string.sub(company.name or "?", 1, 1))
-	local first = utf8.offset(company.name or "?", 2)
-	if first then
-		initial = string.upper(string.sub(company.name, 1, first - 1))
-	end
-	return new("TextLabel", {
+	local box = new("Frame", {
 		Name = "Logo",
-		Text = initial,
-		TextSize = math.floor(s * 0.55),
-		Weight = W.heavy,
-		TextColor3 = light and T.dark or hex("#FFFFFF"),
 		BackgroundColor3 = Color3.fromHex(company.color),
 		BackgroundTransparency = 0,
 		Size = UDim2.fromOffset(s, s),
 		Corner = math.floor(s * 0.28),
-		TextXAlignment = Enum.TextXAlignment.Center,
 	})
+	local name = "logo_" .. tostring(company.logo or "pico")
+	local ic = Icons.make(Icons.has(name) and name or "logo_pico", math.floor(s * 0.6), LIGHT_BRANDS[company.color] and T.dark or hex("#FFFFFF"), 2.2)
+	ic.AnchorPoint = Vector2.new(0.5, 0.5)
+	ic.Position = UDim2.fromScale(0.5, 0.5)
+	ic.Parent = box
+	return box
 end
 
--- Rectángulo con los dos colores de pintura (miniatura de un auto en listas).
-function Ui.paintChip(spec: any, w: number?, h: number?): Frame
-	local f = new("Frame", {
-		Name = "Pintura",
-		Size = UDim2.fromOffset(w or 44, h or 28),
-		BackgroundColor3 = Color3.fromHex(spec.paint.primary),
+-- Miniatura reconocible de un vehículo: su modelo provisional en un ViewportFrame.
+function Ui.carThumb(spec: any, w: number?, h: number?): ViewportFrame
+	local vf = new("ViewportFrame", {
+		Name = "Miniatura",
+		Size = UDim2.fromOffset(w or 72, h or 44),
+		BackgroundColor3 = hex("#1A1F2B"),
 		BackgroundTransparency = 0,
-		Corner = 6,
-		ClipsDescendants = true,
-	}, {
-		new("Frame", {
-			Size = UDim2.new(0.38, 0, 1, 0),
-			Position = UDim2.fromScale(0.62, 0),
-			BackgroundColor3 = Color3.fromHex(spec.paint.secondary),
-			BackgroundTransparency = 0,
-		}),
+		Corner = 8,
+		Ambient = hex("#9CA3B5"),
+		LightColor = hex("#FFF1DC"),
+		LightDirection = Vector3.new(-0.5, -1, -0.6),
 	})
-	return f
+	local ok, model = pcall(CarModel.build, spec)
+	if ok and model then
+		model.Parent = vf
+		local cam = Instance.new("Camera")
+		cam.FieldOfView = 30
+		local ext = CarModel.extent(spec)
+		local target = Vector3.new(0, 1.4, 0)
+		cam.CFrame = CFrame.lookAt(Vector3.new(ext * 2.4, ext * 0.9, -ext * 2.6), target)
+		cam.Parent = vf
+		vf.CurrentCamera = cam
+	end
+	return vf
 end
 
+-- Compatibilidad con listas antiguas: ahora es una miniatura 3D.
+function Ui.paintChip(spec: any, w: number?, h: number?): ViewportFrame
+	return Ui.carThumb(spec, w and math.max(w, 56) or 64, h and math.max(h, 34) or 38)
+end
+
+Ui.reduceMotion = false
 function Ui.fadeIn(obj: GuiObject)
+	if Ui.reduceMotion then
+		return
+	end
 	local scale = Instance.new("UIScale")
 	scale.Scale = 0.98
 	scale.Parent = obj

@@ -159,7 +159,8 @@ function Garage:buildEmptyPlot(i: number)
 end
 
 -- Construye el garaje del dueño. Devuelve el índice de parcela o nil si no hay lugar.
-function Garage:assign(player: Player, company: any): number?
+function Garage:assign(player: Player, g: any): number?
+	local company = g.company
 	local existing = self.byPlayer[player]
 	if existing then
 		self:refreshSign(existing, company)
@@ -331,12 +332,15 @@ local function signature(g: any): string
 end
 
 -- Refleja el estado de la partida en el garaje. Reconstruye lo dinámico solo si cambió.
-function Garage:update(player: Player, g: any)
+function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	local i = self.byPlayer[player]
 	if not i then
 		return
 	end
 	local plot = self.plots[i]
+	if refreshSign then
+		self:refreshSign(i, g.company)
+	end
 	if not plot.dynamic then
 		return
 	end

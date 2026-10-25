@@ -2,7 +2,9 @@
 --[[
 	Núcleo de la interfaz del cliente: recibe el estado del servidor, decide qué pantalla mostrar,
 	reconstruye solo cuando cambia la estructura y actualiza en vivo relojes, barras y dinero.
-	El cliente nunca calcula resultados de dinero: todo pasa por App.request → servidor.
+	El cliente nunca decide resultados: todo pasa por App.request → servidor.
+
+	Distribuciones: "desktop" · "compact" (computadora chica) · "tablet" · "phone".
 ]]
 
 local Players = game:GetService("Players")
@@ -20,18 +22,24 @@ local player = Players.LocalPlayer
 local remotes = ReplicatedStorage:WaitForChild("CarEmpireRemotes")
 local Request = remotes:WaitForChild("Request") :: RemoteFunction
 
-App.payload = nil :: any -- último estado recibido { status, saveMode, saveWarning, loadError, game }
-App.g = nil :: any -- vista de la partida
+App.payload = nil :: any -- último estado { status, saveMode, saveWarning, blocked, loadError, profile, game }
+App.g = nil :: any -- vista de la empresa activa
+App.profile = nil :: any
+App.settings = { sound = true, reduceMotion = false, keyHints = true, textScale = 1, camSpeed = 1, tips = true }
 App.ui = {
-	route = "juego",
+	route = "menu",
+	params = {},
 	tabs = {},
+	filters = {},
+	collapsed = {},
 	editor = nil,
-	dialog = nil,
-	busy = {},
-	newCompany = { name = "", color = "#7667FF", difficulty = "normal" },
+	dialogs = {},
+	newCompany = { name = "", color = "#7667FF", logo = "pico", difficulty = "normal", slot = "1" },
+	sidePanel = nil, -- celular: panel lateral abierto ("l" | "r")
+	statRange = 7,
 }
 App.screens = {} :: { [string]: any }
-App.dialogs = {} :: { [string]: any }
+App.dialogBuilders = {} :: { [string]: any }
 
 local liveFns: { (any) -> () } = {}
 local dialogLive: { (any) -> () } = {}
@@ -40,11 +48,12 @@ local lastSig: string? = nil
 local lastDialogSig: string? = nil
 local pendingRebuild = false
 
--- Raíz ------------------------------------------------------------------------------
+-- Raíz ----------------------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name = "CarEmpireUI"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
+gui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.DisplayOrder = 5
 gui.Parent = player:WaitForChild("PlayerGui")
@@ -69,25 +78,48 @@ App.toastLayer = layer("Avisos", 60)
 local toastList = Ui.new("Frame", {
 	Name = "Pila",
 	AnchorPoint = Vector2.new(1, 1),
-	Position = UDim2.new(1, -16, 1, -24),
+	Position = UDim2.new(1, -16, 1, -56),
 	Size = UDim2.fromOffset(360, 0),
 	AutomaticSize = Enum.AutomaticSize.Y,
 	List = { dir = "V", gap = 8, v = "B" },
 	Parent = App.toastLayer,
 })
 
--- Tamaño virtual (en «píxeles de la V3») para decidir el diseño.
+-- Tamaño virtual y distribución -------------------------------------------------------------
 App.vw = 1280
 App.vh = 720
+App.layout = "desktop"
+App.touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
 local function updateScale()
 	local cam = Workspace.CurrentCamera
 	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-	local s = math.clamp(math.min(vp.X / 1280, vp.Y / 720), 0.55, 1)
+	-- Nunca se reduce por debajo de 0,8: en pantallas chicas cambia la distribución en lugar de achicar todo.
+	local s = math.clamp(math.min(vp.X / 1280, vp.Y / 720), 0.8, 1) * (App.settings.textScale or 1)
 	scaleObj.Scale = s
 	App.vw = vp.X / s
 	App.vh = vp.Y / s
+	if App.vw < 760 or App.vh < 520 then
+		App.layout = "phone"
+	elseif App.vw < 1050 then
+		App.layout = "tablet"
+	elseif App.vw < 1350 then
+		App.layout = "compact"
+	else
+		App.layout = "desktop"
+	end
+	toastList.Size = UDim2.fromOffset(math.min(360, App.vw - 32), 0)
+	toastList.Position = App.layout == "phone" and UDim2.new(1, -16, 0, 60) or UDim2.new(1, -16, 1, -56)
+	toastList.AnchorPoint = App.layout == "phone" and Vector2.new(1, 0) or Vector2.new(1, 1)
 end
 updateScale()
+
+function App.isPhone(): boolean
+	return App.layout == "phone"
+end
+function App.isNarrow(): boolean
+	return App.layout == "phone" or App.layout == "tablet"
+end
 
 -- Controles del personaje: se desactivan con paneles de pantalla completa abiertos.
 local controls: any = nil
@@ -109,13 +141,30 @@ local function setControls(enabled: boolean)
 	end
 end
 
--- Avisos (toasts) ---------------------------------------------------------------------
+-- Avisos (toasts) ----------------------------------------------------------------------------
 local TOAST_BORDER = { ok = T.gr, aviso = T.ye, error = T.re, info = T.vi, nivel = T.vi }
-local TOAST_ICON = { ok = "✓", aviso = "⚠", error = "✕", info = "ⓘ", nivel = "★" }
+local TOAST_ICON = { ok = "check", aviso = "warn", error = "x", info = "help", nivel = "star" }
+-- Sonido breve de la interfaz (Configuración › Sonidos). Usa un sonido incluido en Roblox.
+local SoundService = game:GetService("SoundService")
+local ping = Instance.new("Sound")
+ping.Name = "AvisoInterfaz"
+ping.SoundId = "rbxasset://sounds/electronicpingshort.wav"
+ping.Volume = 0.35
+function App.playSound(kind: string)
+	if not App.settings.sound then
+		return
+	end
+	ping.PlaybackSpeed = kind == "error" and 0.7 or (kind == "aviso" and 0.85 or 1.1)
+	pcall(function()
+		SoundService:PlayLocalSound(ping)
+	end)
+end
+
 function App.toast(kind: string, text: string)
 	if not text or text == "" then
 		return
 	end
+	App.playSound(kind)
 	local t = Ui.new("Frame", {
 		Name = "Aviso",
 		BackgroundColor3 = T.p1,
@@ -127,19 +176,18 @@ function App.toast(kind: string, text: string)
 		Pad = { 10, 12 },
 		List = { dir = "H", gap = 10, v = "C" },
 	}, {
-		Ui.inline(TOAST_ICON[kind] or "•", { color = TOAST_BORDER[kind] or T.tx, weight = Ui.W.bold, size = 15 }),
+		Ui.icon(TOAST_ICON[kind] or "help", 16, TOAST_BORDER[kind] or T.tx),
 		Ui.grow(Ui.text(text, { size = Ui.S.sm, lineHeight = 1.2 }), { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }),
 	})
 	t.Parent = toastList
 	Ui.fadeIn(t)
-	local kids = toastList:GetChildren()
 	local frames = {}
-	for _, k in kids do
+	for _, k in toastList:GetChildren() do
 		if k:IsA("Frame") then
 			table.insert(frames, k)
 		end
 	end
-	if #frames > 5 then
+	if #frames > 4 then
 		table.sort(frames, function(a, b)
 			return a.LayoutOrder < b.LayoutOrder
 		end)
@@ -155,19 +203,34 @@ Ui.onDisabled = function(why: string)
 	App.toast("aviso", why)
 end
 
--- Red ---------------------------------------------------------------------------------
--- Envía una acción al servidor. Evita dobles clics: la misma acción no se repite mientras espera.
-function App.request(action: string, payload: any?): any
-	if App.ui.busy[action] then
-		return { ok = false, msg = "", quiet = true }
+-- Red ----------------------------------------------------------------------------------------
+--[[
+	Envía una acción al servidor con un identificador único (un reenvío nunca se aplica dos veces).
+	opts.button: botón que muestra «Procesando…» mientras espera. Mientras la misma acción está en
+	curso, otro clic no sale de nuevo. El servidor valida todo igual: esto solo evita esperas confusas.
+]]
+local inFlight: { [string]: boolean } = {}
+function App.request(action: string, payload: any?, opts: any?): any
+	local key = action .. (opts and opts.key or "")
+	if inFlight[key] then
+		return { ok = false, msg = "", quiet = true, pending = true }
 	end
-	App.ui.busy[action] = true
+	inFlight[key] = true
+	local btn = opts and opts.button
+	if btn then
+		Ui.setBusy(btn, true)
+	end
+	local body = type(payload) == "table" and table.clone(payload) or {}
+	body.requestId = HttpService:GenerateGUID(false)
 	local ok, result = pcall(function()
-		return Request:InvokeServer(action, payload)
+		return Request:InvokeServer(action, body)
 	end)
-	App.ui.busy[action] = nil
+	inFlight[key] = nil
+	if btn then
+		Ui.setBusy(btn, false)
+	end
 	if not ok or type(result) ~= "table" then
-		App.toast("error", "No hubo respuesta del servidor. Probá de nuevo.")
+		App.toast("error", "No hubo respuesta del servidor. Probá de nuevo: tus datos escritos se conservan.")
 		return { ok = false, msg = "" }
 	end
 	if result.msg and result.msg ~= "" and not result.quiet then
@@ -176,8 +239,7 @@ function App.request(action: string, payload: any?): any
 	return result
 end
 
--- Live bindings -------------------------------------------------------------------------
--- fn(g) se ejecuta en cada actualización del servidor sin reconstruir la pantalla.
+-- Valores en vivo -----------------------------------------------------------------------------
 function App.live(fn: (any) -> ())
 	table.insert(liveFns, fn)
 	if App.g then
@@ -209,11 +271,13 @@ local function structuralSig(p: any): string
 		return "nil"
 	end
 	local g = p.game
-	local stripped: any = { s = p.status, m = p.saveMode, w = p.saveWarning, e = p.loadError }
+	local stripped: any = { s = p.status, m = p.saveMode, w = p.saveWarning, b = p.blocked, e = p.loadError, pr = p.profile, r = App.ui.route }
 	if g then
 		local copy = table.clone(g)
 		copy.time = { day = g.time.day, speed = g.time.speed }
-		copy.notifications = #g.notifications
+		copy.ledger = #g.ledger
+		copy.stats = nil
+		copy.derived = nil
 		local orders = {}
 		for _, o in g.production.orders do
 			local oc = table.clone(o)
@@ -221,7 +285,7 @@ local function structuralSig(p: any): string
 			oc.design = o.design and o.design.version or nil
 			table.insert(orders, oc)
 		end
-		copy.production = { orders = orders, history = g.production.history }
+		copy.production = { orders = orders, history = #g.production.history, boost = g.production.boost, auto = g.production.auto }
 		local customers = {}
 		for _, c in g.customers do
 			local cc = table.clone(c)
@@ -229,42 +293,89 @@ local function structuralSig(p: any): string
 			table.insert(customers, cc)
 		end
 		copy.customers = customers
+		local emps = {}
+		for _, e in g.employees do
+			table.insert(emps, { e.id, e.assign, e.status, math.floor(e.energy / 20) })
+		end
+		copy.employees = emps
+		copy.research = { done = g.research.done, active = g.research.active and g.research.active.id }
+		copy.market = { mine = g.market.mine, offers = g.market.offers, favorites = g.market.favorites, seed = g.market.seedDay, n = #g.market.listings }
 		stripped.g = copy
 	end
 	local ok, enc = pcall(HttpService.JSONEncode, HttpService, stripped)
 	return ok and enc or tostring(os.clock())
 end
 
--- Navegación ----------------------------------------------------------------------------
-local FULLSCREEN = { editor = true, fabrica = true, autos = true, ventas = true }
+-- Navegación ------------------------------------------------------------------------------------
+local FULLSCREEN = {
+	editor = true, fabrica = true, autos = true, ventas = true, mercado = true, investigacion = true,
+	personal = true, compania = true, misiones = true, estadisticas = true, menu = true, nueva = true,
+}
 
-function App.go(route: string, params: any?)
-	if App.ui.route == "editor" and route ~= "editor" and App.screens.editor and App.screens.editor.leave then
-		App.screens.editor.leave()
+-- Si el editor tiene cambios sin guardar, pregunta antes de seguir (guardar, descartar o seguir editando).
+function App.guardEditor(proceed: () -> ())
+	local ed = App.ui.editor
+	if App.ui.route == "editor" and ed and ed.dirty and App.screens.editor and App.screens.editor.askUnsaved then
+		App.screens.editor.askUnsaved(proceed)
+	else
+		proceed()
 	end
-	App.ui.route = route
-	App.ui.params = params or {}
-	if route == "editor" and App.screens.editor and App.screens.editor.enter then
-		App.screens.editor.enter(App.ui.params)
-	end
-	App.closeDialog()
-	App.render()
 end
 
+function App.go(route: string, params: any?)
+	if route == "editor" and App.screens.editor and App.screens.editor.needsConfirm(params) then
+		-- Abrir otro proyecto reemplazaría un borrador con cambios: preguntar primero.
+		App.screens.editor.askReplace(params)
+		return
+	end
+	local function doIt()
+		if App.ui.route == "editor" and route ~= "editor" and App.screens.editor and App.screens.editor.leave then
+			App.screens.editor.leave()
+		end
+		App.ui.route = route
+		App.ui.params = params or {}
+		App.ui.sidePanel = nil
+		if route == "editor" and App.screens.editor and App.screens.editor.enter then
+			App.screens.editor.enter(App.ui.params)
+		end
+		if route == "mercado" then
+			task.spawn(App.request, "marketOpen")
+		end
+		App.closeAllDialogs()
+		App.forceRender()
+	end
+	if App.ui.route == "editor" and route ~= "editor" then
+		App.guardEditor(doIt)
+	else
+		doIt()
+	end
+end
+
+-- Diálogos (pila: un diálogo puede abrir una confirmación encima) ----------------------------------
 function App.openDialog(kind: string, params: any?)
-	App.ui.dialog = { kind = kind, params = params or {} }
+	table.insert(App.ui.dialogs, { kind = kind, params = params or {} })
 	lastDialogSig = nil
 	App.renderDialog()
 end
 
 function App.closeDialog()
-	if App.ui.dialog then
-		App.ui.dialog = nil
+	if #App.ui.dialogs > 0 then
+		table.remove(App.ui.dialogs)
 		App.renderDialog()
 	end
 end
 
--- Construcción ---------------------------------------------------------------------------
+function App.closeAllDialogs()
+	if #App.ui.dialogs > 0 then
+		table.clear(App.ui.dialogs)
+		App.renderDialog()
+	end
+end
+
+function App.topDialog(): any
+	return App.ui.dialogs[#App.ui.dialogs]
+end
+
 local function clearChildren(f: Instance)
 	for _, c in f:GetChildren() do
 		if not c:IsA("UIBase") then
@@ -276,11 +387,11 @@ end
 function App.renderDialog()
 	clearChildren(App.dialogLayer)
 	table.clear(dialogLive)
-	local d = App.ui.dialog
-	if not d or not App.g then
+	local d = App.topDialog()
+	if not d then
 		return
 	end
-	local builder = App.dialogs[d.kind]
+	local builder = App.dialogBuilders[d.kind]
 	if not builder then
 		return
 	end
@@ -294,12 +405,14 @@ function App.renderDialog()
 		Parent = App.dialogLayer,
 	})
 	back.Activated:Connect(function() end)
-	local width = d.params.wide and 760 or 560
+	local width = math.min(d.params.wide and 760 or 560, App.vw - 16)
+	local phone = App.isPhone()
+	-- En celular el diálogo va arriba: el teclado en pantalla no tapa los campos.
 	local box = Ui.new("Frame", {
 		Name = "Dialogo",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(math.min(width, App.vw - 32), 0),
+		AnchorPoint = phone and Vector2.new(0.5, 0) or Vector2.new(0.5, 0.5),
+		Position = phone and UDim2.new(0.5, 0, 0, 8) or UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(width, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = T.p1,
 		BackgroundTransparency = 0,
@@ -309,72 +422,115 @@ function App.renderDialog()
 		ClipsDescendants = true,
 		Parent = App.dialogLayer,
 	})
-	local maxH = Instance.new("UISizeConstraint")
-	maxH.MaxSize = Vector2.new(width, App.vh - 32)
-	maxH.Parent = box
-	builder(box, d.params)
+	App.dialogMaxBody = (phone and App.vh * 0.55 or App.vh - 200)
+	local ok, err = pcall(builder, box, d.params, d)
+	if not ok then
+		warn("[CarEmpire] Error al construir el diálogo " .. d.kind .. ": " .. tostring(err))
+	end
 	Ui.fadeIn(box)
-	lastDialogSig = d.sig and d.sig(App.g) or nil
+	lastDialogSig = d.sig and App.g and d.sig(App.g) or nil
 end
 
+-- Construcción de la pantalla ------------------------------------------------------------------------
 function App.render()
 	clearChildren(App.content)
 	table.clear(liveFns)
 	pendingRebuild = false
 	local p = App.payload
-	if not p then
-		App.screens.status.loading(App.content)
-		return
-	end
-	if p.status == "loading" then
+	local status = App.screens.status
+	if not p or p.status == "loading" then
 		setControls(false)
-		App.screens.status.loading(App.content)
+		status.loading(App.content)
 		return
 	end
 	if p.status == "failed" then
 		setControls(false)
-		App.screens.status.failed(App.content, p)
+		status.failed(App.content, p)
 		return
 	end
-	if not App.g then
+	if p.status == "lost" then
 		setControls(false)
-		App.screens.company.build(App.content)
+		status.lost(App.content, p)
 		return
 	end
 	local route = App.ui.route
-	setControls(not FULLSCREEN[route])
-	if route == "editor" then
-		App.screens.editor.build(App.content)
-	else
-		App.screens.hud.build(App.content, route)
-		if route ~= "juego" and App.screens[route] then
-			App.screens.sheet.build(App.content, route)
+	if not App.g then
+		if route ~= "menu" and route ~= "nueva" then
+			route = "menu"
+			App.ui.route = "menu"
+		end
+	elseif route == "menu" or route == "nueva" then
+		-- Hay empresa activa pero el jugador está en el menú (por ejemplo, tras crearla): seguir al juego.
+		if App.ui.enteringGame then
+			App.ui.enteringGame = false
+			route = "juego"
+			App.ui.route = "juego"
 		end
 	end
-	App.screens.status.banners(App.content, p)
+	setControls(not FULLSCREEN[route])
+	local ok, err = pcall(function()
+		if route == "menu" then
+			App.screens.menu.build(App.content)
+		elseif route == "nueva" then
+			App.screens.company.build(App.content)
+		elseif route == "editor" then
+			App.screens.editor.build(App.content)
+		else
+			App.screens.hud.build(App.content, route)
+			if route ~= "juego" and App.screens[route] then
+				App.screens.sheet.build(App.content, route)
+			end
+		end
+	end)
+	if not ok then
+		warn("[CarEmpire] Error al construir la pantalla " .. route .. ": " .. tostring(err))
+		App.renderError = err
+	end
+	status.banners(App.content, p)
 end
 
--- Estado entrante --------------------------------------------------------------------------
+-- Estado entrante -------------------------------------------------------------------------------
+local function applySettings(settings: any)
+	if not settings then
+		return
+	end
+	local changedScale = settings.textScale ~= App.settings.textScale
+	for k, v in settings do
+		App.settings[k] = v
+	end
+	Ui.reduceMotion = App.settings.reduceMotion == true
+	if changedScale then
+		updateScale()
+	end
+end
+
 function App.onState(payload: any)
 	local hadGame = App.g ~= nil
 	App.payload = payload
 	App.g = payload.game
-	if not hadGame and App.g then
+	App.profile = payload.profile
+	if payload.profile then
+		applySettings(payload.profile.settings)
+	end
+	if App.g and not hadGame and App.ui.route ~= "editor" then
 		App.ui.route = "juego"
+	elseif not App.g and hadGame then
+		App.ui.route = "menu"
+		App.ui.editor = nil
 	end
 	local sig = structuralSig(payload)
 	local focused = UserInputService:GetFocusedTextBox()
 	if sig ~= lastSig or pendingRebuild then
+		lastSig = sig
 		if focused and focused:IsDescendantOf(gui) then
+			-- No se reconstruye mientras se escribe: se aplica al soltar el campo.
 			pendingRebuild = true
-			lastSig = sig
 		else
-			lastSig = sig
 			App.render()
-			if App.ui.dialog then
-				local d = App.ui.dialog
+			local d = App.topDialog()
+			if d then
 				local ds = d.sig and App.g and d.sig(App.g) or nil
-				if d.rebuildAlways or ds ~= lastDialogSig then
+				if ds ~= lastDialogSig then
 					App.renderDialog()
 				end
 			end
@@ -399,10 +555,9 @@ function App.forceRender()
 	end
 end
 
--- Al soltar un campo de texto se aplican las reconstrucciones pendientes.
 UserInputService.TextBoxFocusReleased:Connect(function()
 	task.defer(function()
-		if pendingRebuild and App.payload then
+		if pendingRebuild and App.payload and not UserInputService:GetFocusedTextBox() then
 			App.render()
 		end
 	end)
@@ -413,11 +568,14 @@ if cam then
 	cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
 		updateScale()
 		App.forceRender()
-		if App.ui.dialog then
+		if App.topDialog() then
 			App.renderDialog()
 		end
 	end)
 end
 
 App.gui = gui
+App.scale = function(): number
+	return scaleObj.Scale
+end
 return App
