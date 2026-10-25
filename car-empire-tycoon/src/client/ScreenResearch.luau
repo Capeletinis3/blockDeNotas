@@ -24,7 +24,7 @@ local Screen = {
 local STATE_CHIP = { hecha = { "✓ Hecha", "cg" }, activa = { "En curso", "cv" }, disponible = { "Disponible", "cb" }, bloqueada = { "Bloqueada", "cn" } }
 
 function Screen.head(g: any): { Instance }
-	return { Ui.chip(math.floor(g.rp) .. " PI", "cv"), Ui.chip(#g.research.done .. " completadas", "cg") }
+	return { Ui.chip(math.floor(g.rp) .. " PI", "cv") }
 end
 
 local function depth(n: any): number
@@ -56,36 +56,38 @@ local function nodeCard(g: any, n: any): Frame
 		why = "Faltan puntos de investigación (" .. math.floor(g.rp) .. "/" .. n.rp .. ")"
 	end
 	local reqs: { Instance? } = {}
-	for _, r in n.req do
-		table.insert(reqs, Ui.text((Rules.has(g, r) and "✓ " or "✕ ") .. Catalog.researchNode(r).name, { size = Ui.S.xs, color = Rules.has(g, r) and T.gr or T.mut }))
+	if #n.req > 0 then
+		local names = {}
+		for _, r in n.req do
+			table.insert(names, (Rules.has(g, r) and "✓ " or "✕ ") .. Catalog.researchNode(r).name)
+		end
+		table.insert(reqs, Ui.text("Requiere: " .. table.concat(names, ", "), { size = Ui.S.xs, color = T.mut }))
 	end
 	if n.lab > 1 then
-		table.insert(reqs, Ui.text(((g.sede >= n.lab) and "✓ " or "✕ ") .. "Laboratorio de la sede " .. Catalog.SEDES[n.lab].name, { size = Ui.S.xs, color = g.sede >= n.lab and T.gr or T.mut }))
+		table.insert(reqs, Ui.text(((g.sede >= n.lab) and "✓ " or "✕ ") .. "Laboratorio de la sede " .. Catalog.SEDES[n.lab].name, { size = Ui.S.xs, color = T.mut }))
 	end
 	local action: Instance? = nil
 	if st == "activa" then
 		local bar, fill = Ui.bar(0, T.vi)
-		local lbl = Ui.inline("", { size = Ui.S.xs, color = T.tx2 })
 		App.live(function(gg: any)
 			local a = gg.research.active
 			if a and a.id == n.id then
 				Ui.setBar(fill, a.progress / n.minutes * 100)
-				lbl.Text = math.floor(a.progress / n.minutes * 100) .. "% · faltan " .. Util.gameDuration(n.minutes - a.progress)
 			end
 		end)
-		action = Ui.col({ bar, lbl }, 4)
+		action = bar
 	elseif st ~= "hecha" then
 		local b
 		b = Ui.button("Investigar", "p", function()
 			App.request("startResearch", { id = n.id }, { button = b })
-		end, { small = true, disabled = why ~= nil, why = why, name = "Investigar_" .. n.id })
-		action = Ui.col({ b, why and Ui.text(why, { size = Ui.S.xs, color = T.ye }) or nil }, 4)
+		end, { small = true, fill = true, disabled = why ~= nil, why = why, name = "Investigar_" .. n.id })
+		action = Ui.col({ b, why and Ui.why(why) or nil }, 6)
 	end
 	local chip = STATE_CHIP[st]
 	return Ui.card({
-		Ui.row({ Ui.grow(Ui.text(n.name, { size = 14, weight = W.bold })), Ui.chip(chip[1], chip[2]) }, 6),
-		Ui.text(n.gain, { size = Ui.S.xs, color = T.tx2 }),
-		Ui.text(Util.money(n.cost) .. " · " .. n.rp .. " PI · " .. Util.gameDuration(n.minutes) .. " de juego", { size = Ui.S.xs, color = T.mut }),
+		Ui.row({ Ui.grow(Ui.text(n.name, { size = Ui.S.sm, weight = W.bold })), Ui.chip(chip[1], chip[2]) }, 10),
+		Ui.text(n.gain, { size = Ui.S.xs, color = T.mut }),
+		Ui.text(Util.money(n.cost) .. " · " .. n.rp .. " PI · " .. Util.gameDuration(n.minutes) .. " de juego", { size = Ui.S.xs }),
 		#reqs > 0 and Ui.col(reqs, 2) or nil,
 		action,
 	}, { gap = 6, stroke = st == "activa" and T.vi or (st == "hecha" and Color3.fromHex("#226043") or nil), name = "Nodo_" .. n.id })
@@ -132,12 +134,13 @@ function Screen.build(main: Frame, side: Frame)
 	if a then
 		local n = Catalog.researchNode(a.id)
 		local bar, fill = Ui.bar(a.progress / n.minutes * 100, T.vi)
-		local lbl = Ui.inline("", { size = Ui.S.xs })
+		local lbl = Ui.text("", { size = Ui.S.xs })
 		App.live(function(gg: any)
 			local ra = gg.research.active
 			if ra and ra.id == n.id then
 				Ui.setBar(fill, ra.progress / n.minutes * 100)
-				lbl.Text = "Faltan " .. Util.gameDuration(n.minutes - ra.progress) .. " de juego"
+				-- V3 (data-live="research"): porcentaje y tiempo de juego restante.
+				lbl.Text = math.floor(ra.progress / n.minutes * 100) .. "% · faltan " .. Util.gameDuration(n.minutes - ra.progress) .. " de juego"
 			end
 		end)
 		table.insert(current, Ui.text(n.name, { size = 15, weight = W.bold }))
@@ -154,16 +157,17 @@ function Screen.build(main: Frame, side: Frame)
 				end,
 			})
 		end, { small = true }))
+		table.insert(current, Ui.text("Cancelar devuelve el dinero y los PI; se pierde el avance.", { size = Ui.S.xs, color = T.mut }))
 	else
 		table.insert(current, Ui.text("El laboratorio está libre. Elegí una investigación disponible.", { size = Ui.S.sm, color = T.mut }))
 	end
 	Ui.card(current, { gap = 8 }).Parent = side
 	Ui.card({
 		Ui.lbl("Puntos de investigación (PI)"),
-		Ui.line("Disponibles", math.floor(g.rp) .. " PI", { leftColor = T.mut }),
-		Ui.line("Se generan por día de juego", Rules.rpPerDay(g) .. " PI", { leftColor = T.mut }),
-		Ui.text("Asigná ingenieros al Laboratorio en Personal para generar más. Las mejoras afectan a los cálculos nuevos: no cambian unidades fabricadas ni órdenes ya confirmadas.", { size = Ui.S.xs, color = T.mut }),
-	}, { gap = 4 }).Parent = side
+		Ui.between("Disponibles", math.floor(g.rp) .. " PI"),
+		Ui.between("Se generan por día de juego", Rules.rpPerDay(g) .. " PI"),
+		Ui.text("Asigná ingenieros al Laboratorio en Personal para generar más PI.", { size = Ui.S.xs, color = T.mut }),
+	}, { gap = 6 }).Parent = side
 	local done = {}
 	for _, id in g.research.done do
 		table.insert(done, Catalog.researchNode(id).name)

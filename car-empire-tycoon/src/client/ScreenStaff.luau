@@ -24,67 +24,52 @@ function Screen.head(g: any): { Instance }
 	return { Ui.chip(#g.employees .. "/" .. g.derived.caps.staff .. " empleados", "cn"), Ui.chip("Salarios " .. Util.money(Rules.salaries(g)) .. "/día", "cy") }
 end
 
-local function areaLabel(id: string?): string
-	if not id then
-		return "Sin asignar"
-	end
-	local s = Catalog.station(id)
-	if s then
-		return "Estación: " .. s[2]
-	end
-	local d = Catalog.department(id)
-	return d and d[2] or id
-end
-
 local function empRow(g: any, e: any): Frame
 	local energyBar, fill = Ui.bar(e.energy, e.energy < 20 and T.re or (e.energy < 50 and T.ye or T.gr))
-	local energyLabel = Ui.inline(math.floor(e.energy) .. "%", { size = Ui.S.xs, weight = W.bold })
+	local energyLabel = Ui.inline(math.floor(e.energy + 0.5) .. "%", { size = Ui.S.xs, weight = W.bold })
 	App.live(function(gg: any)
 		for _, x in gg.employees do
 			if x.id == e.id then
 				Ui.setBar(fill, x.energy)
-				energyLabel.Text = math.floor(x.energy) .. "%"
+				energyLabel.Text = math.floor(x.energy + 0.5) .. "%"
 			end
 		end
 	end)
-	local open = App.ui.assigning == e.id
-	local options: { Instance? } = {}
-	if open then
-		local areas = { { "", "Sin asignar", 0 } }
-		for _, s in Catalog.STATIONS do
-			table.insert(areas, { s[1], s[2] .. (s[3] == e.role and " ★" or ""), Catalog.RULES.assignMax.station })
-		end
-		for _, d in Catalog.DEPARTMENTS do
-			table.insert(areas, { d[1], d[2] .. (d[3] == e.role and " ★" or ""), Catalog.RULES.assignMax.dept })
-		end
-		for _, a in areas do
-			local n = a[1] ~= "" and Rules.assignedCount(g, a[1], e.id) or 0
-			local full = a[1] ~= "" and n >= a[3]
-			table.insert(options, Ui.opt(a[2] .. (a[1] ~= "" and (" " .. n .. "/" .. a[3]) or ""), (e.assign or "") == a[1], function()
-				App.ui.assigning = nil
-				App.request("assign", { employeeId = e.id, area = a[1] })
-			end, { height = 34, disabled = full, why = "Ese puesto está completo" }))
-		end
+	-- <select> «Puesto»: ★ marca el rol ideal y «(completo)» los puestos sin lugar.
+	local options = { { "", "Sin asignar" } }
+	local function add(id: string, label: string, max: number)
+		local n = Rules.assignedCount(g, id, e.id)
+		local full = n >= max
+		table.insert(options, { id, label .. (full and " (completo)" or ""), full })
 	end
+	for _, st in Catalog.STATIONS do
+		add(st[1], "Estación: " .. st[2] .. (st[3] == e.role and " ★" or ""), Catalog.RULES.assignMax.station)
+	end
+	for _, d in Catalog.DEPARTMENTS do
+		add(d[1], d[2] .. (d[3] == e.role and " ★" or ""), Catalog.RULES.assignMax.dept)
+	end
+	local resting = e.status == "descanso"
+	local chipText = resting and "Descansando" or (e.energy < 20 and "Agotado/a" or "Activo/a")
+	local chipKind = resting and "cy" or (e.energy < 20 and "cr" or "cg")
 	return Ui.card({
 		Ui.row({
-			Ui.ico("user", T.pink, Color3.fromHex("#33182A"), 32),
+			Ui.ico("users", T.pink, Ui.hex("#FF78AA"), 32, { alpha = 0.14, iconSize = 16 }),
 			Ui.grow(Ui.col({
-				Ui.text(e.name, { size = 15, weight = W.bold }),
+				Ui.text(e.name, { size = Ui.S.base, weight = W.bold }),
 				Ui.text(e.role .. " · nivel " .. e.level .. " · habilidad " .. e.skill .. " · " .. Util.money(e.salary) .. "/día", { size = Ui.S.xs, color = T.mut }),
 			}, 2)),
-			Ui.chip(e.status == "descanso" and "Descansando" or areaLabel(e.assign), e.status == "descanso" and "cy" or (e.assign and "cg" or "cn")),
-		}, 10),
-		Ui.row({ Ui.inline("Energía", { size = Ui.S.xs, color = T.mut }), Ui.grow(energyBar, { Size = UDim2.new(0, 0, 0, 7) }), energyLabel }, 8),
+			Ui.chip(chipText, chipKind),
+		}, 10, { wrap = true }),
 		Ui.row({
-			Ui.button(open and "Cerrar puestos" or "Asignar puesto", "default", function()
-				App.ui.assigning = open and nil or e.id
-				App.forceRender()
-			end, { small = true, disabled = e.status == "descanso", why = "Está descansando" }),
-			Ui.button(e.status == "descanso" and "Volver al trabajo" or "Dar descanso", "default", function()
+			Ui.inline("Energía", { size = Ui.S.xs, color = T.mut, width = 56 }),
+			Ui.grow(energyBar, { Size = UDim2.new(0, 0, 0, 7) }),
+			energyLabel,
+			Ui.selectF("Puesto", e.assign or "", options, function(v: any)
+				App.request("assign", { employeeId = e.id, area = v })
+			end, { height = 34, name = "Puesto_" .. e.id, disabled = resting, why = "Está descansando" }),
+			Ui.button(resting and "Volver al trabajo" or "Dar descanso", "default", function()
 				App.request("toggleRest", { employeeId = e.id })
-			end, { small = true, disabled = e.status ~= "descanso" and e.energy >= 100, why = "Tiene la energía completa" }),
-			Ui.spacer(),
+			end, { small = true, disabled = not resting and e.energy >= 100, why = "Tiene la energía completa" }),
 			Ui.button("Despedir", "q", function()
 				App.openDialog("confirm", {
 					title = "¿Despedir a " .. e.name .. "?",
@@ -96,8 +81,7 @@ local function empRow(g: any, e: any): Frame
 					end,
 				})
 			end, { small = true }),
-		}, 6, { wrap = true }),
-		open and Ui.row(options, 6, { wrap = true }) or nil,
+		}, 10, { wrap = App.isNarrow() }),
 	}, { gap = 8, name = "Empleado_" .. e.id })
 end
 
@@ -107,7 +91,7 @@ function Screen.build(main: Frame, side: Frame)
 	tabs.Parent = main
 	if tab == "team" then
 		if #g.employees == 0 then
-			Ui.note("b", "Todavía no contrataste a nadie. Sin personal, las líneas trabajan al 50 %.", Ui.button("Ver candidatos", "p", function()
+			Ui.empty("users", "Todavía no contrataste a nadie. Sin personal, las líneas trabajan al 50%.", Ui.button("Ver candidatos", "p", function()
 				App.ui.tabs.personal = "hire"
 				App.forceRender()
 			end, { small = true })).Parent = main
@@ -122,19 +106,19 @@ function Screen.build(main: Frame, side: Frame)
 		end
 		for _, c in g.candidates do
 			local b
-			b = Ui.button("Contratar · " .. Util.money(c.fee), "p", function()
+			b = Ui.button("Contratar", "p", function()
 				App.request("hire", { candidateId = c.id }, { button = b })
-			end, { small = true, disabled = full or g.money < c.fee, why = full and "La sede está completa" or "Fondos insuficientes", name = "Contratar_" .. c.id })
+			end, { small = true, disabled = full or g.money < c.fee, why = full and "Sede completa" or "Fondos insuficientes", name = "Contratar_" .. c.id })
 			Ui.card({
-				Ui.row({
-					Ui.ico("user", T.pink, Color3.fromHex("#33182A"), 32),
-					Ui.grow(Ui.col({
-						Ui.text(c.name, { size = 15, weight = W.bold }),
-						Ui.text(c.role .. " · nivel " .. c.level .. " · habilidad " .. c.skill .. " · salario " .. Util.money(c.salary) .. "/día", { size = Ui.S.xs, color = T.mut }),
-					}, 2)),
-					b,
-				}, 10, { wrap = true }),
-			}).Parent = main
+				Ui.ico("users", T.pink, Ui.hex("#FF78AA"), 32, { alpha = 0.14, iconSize = 16 }),
+				Ui.grow(Ui.col({
+					Ui.text(c.name, { size = Ui.S.base, weight = W.bold }),
+					Ui.text(c.role .. " · nivel " .. c.level .. " · habilidad " .. c.skill .. " · salario " .. Util.money(c.salary) .. "/día", { size = Ui.S.xs, color = T.mut }),
+				}, 2)),
+				Ui.inline("Costo de contratación", { size = Ui.S.xs, color = T.mut }),
+				Ui.inline(Util.money(c.fee), { size = Ui.S.base, weight = W.bold }),
+				b,
+			}, { dir = "H", v = "C", gap = 10, wrap = true, name = "Candidato_" .. c.id }).Parent = main
 		end
 		local more
 		more = Ui.button("Buscar más candidatos · " .. Util.money(Catalog.RULES.moreCandidatesCost), "default", function()
@@ -144,24 +128,21 @@ function Screen.build(main: Frame, side: Frame)
 	end
 
 	local rows: { Instance? } = { Ui.lbl("Áreas y efecto actual") }
-	local function areaRow(id: string, label: string, role: string, effect: string, max: number)
-		local n = Rules.assignedCount(g, id)
-		table.insert(rows, Ui.line(label .. "  <font color=\"#7D8493\">· ideal " .. string.lower(role) .. " · " .. effect .. "</font>", n .. "/" .. max .. " · +" .. Util.num(Rules.staffBonus(g, id), 2), { size = Ui.S.xs }))
+	local function areaRow(id: string, label: string, role: string)
+		table.insert(rows, Ui.row({
+			Ui.grow(Ui.text(label .. " <font color=\"#A3AAB8\" size=\"11\">· ideal " .. string.lower(role) .. "</font>", { size = Ui.S.sm })),
+			Ui.inline(tostring(Rules.assignedCount(g, id)), { size = Ui.S.sm, weight = W.bold }),
+			Ui.inline("+" .. Util.num(Rules.staffBonus(g, id), 1), { size = Ui.S.xs, color = T.mut, width = 44, align = "R" }),
+		}, 10))
 	end
-	for _, s in Catalog.STATIONS do
-		areaRow(s[1], s[2], s[3], "velocidad", Catalog.RULES.assignMax.station)
+	for _, st in Catalog.STATIONS do
+		areaRow(st[1], st[2], st[3])
 	end
 	for _, d in Catalog.DEPARTMENTS do
-		areaRow(d[1], d[2], d[3], string.lower(d[4]), Catalog.RULES.assignMax.dept)
+		areaRow(d[1], d[2], d[3])
 	end
-	table.insert(rows, Ui.text("El aporte es habilidad × afinidad (la mitad si no es el rol ideal o si está agotado). Estaciones: velocidad de la línea. Laboratorio: PI por día. Concesionario: interés de los clientes. Marketing: visitas. Estudio de diseño: −10 % de desarrollo por persona (hasta 30 %).", { size = Ui.S.xs, color = T.mut }))
-	Ui.card(rows, { gap = 2 }).Parent = side
-	Ui.card({
-		Ui.lbl("Efecto en la producción"),
-		Ui.line("Velocidad de las líneas", "×" .. Util.num(g.derived.lineSpeed, 2), { leftColor = T.mut }),
-		Ui.line("PI por día", tostring(Rules.rpPerDay(g)), { leftColor = T.mut }),
-		Ui.line("Salarios por día", Util.money(Rules.salaries(g)), { leftColor = T.mut, color = T.or_ }),
-	}, { gap = 2 }).Parent = side
+	table.insert(rows, Ui.text("El número de la derecha es el aporte (habilidad × afinidad con el puesto; la mitad si no es el rol ideal o si está agotado). Cada estación admite " .. Catalog.RULES.assignMax.station .. " personas y cada departamento " .. Catalog.RULES.assignMax.dept .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }))
+	Ui.card(rows, { gap = 6 }).Parent = side
 end
 
 return Screen

@@ -9,7 +9,6 @@ local Rules = require(Shared.Rules)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
-local Factory = require(script.Parent.ScreenFactory)
 local T = Ui.T
 local W = Ui.W
 
@@ -20,41 +19,59 @@ local Screen = {
 	bg = Color3.fromHex("#22252D"),
 }
 
-function Screen.head(g: any): { Instance }
-	return { Ui.chip("Sede " .. g.sede .. " · " .. g.derived.sedeName, "cy") }
+function Screen.head(_g: any): { Instance }
+	return {}
+end
+
+local function nameValid(text: string): boolean
+	local n = utf8.len(Util.trim(text)) or 0
+	return n >= 3 and n <= 24
 end
 
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
+	local phone = App.isPhone()
 	local draft = App.ui.coName
 	if draft == nil then
 		draft = g.company.name
 	end
+	local saveName: TextButton
 	local nameBox = Ui.input(draft, "Nombre de la empresa", function(text: string)
 		App.ui.coName = text
-	end, { onChange = function(text: string)
-		App.ui.coName = text
-	end })
-	local saveName
+	end, {
+		name = "NombreEmpresa",
+		invalid = not nameValid(draft),
+		onChange = function(text: string)
+			App.ui.coName = text
+			local ok = nameValid(text) and Util.trim(text) ~= g.company.name
+			Ui.setEnabled(saveName, ok, not nameValid(text) and "Entre 3 y 24 caracteres" or "Sin cambios")
+		end,
+	})
 	saveName = Ui.button("Guardar nombre", "p", function()
 		local r = App.request("renameCompany", { slot = App.profile.active, name = App.ui.coName or g.company.name }, { button = saveName })
 		if r.ok then
 			App.ui.coName = nil
 		end
-	end, { small = true })
+	end, {
+		small = true,
+		name = "GuardarNombre",
+		disabled = not nameValid(draft) or Util.trim(draft) == g.company.name,
+		why = not nameValid(draft) and "Entre 3 y 24 caracteres" or "Sin cambios",
+	})
 	local logos = {}
 	for _, l in Catalog.LOGOS do
 		local sel = g.company.logo == l[1]
-		local b = Ui.new("TextButton", {
-			Name = "Logo_" .. l[1], Text = "", BackgroundColor3 = sel and Color3.fromHex("#1E1B3D") or T.input, BackgroundTransparency = 0,
-			Size = UDim2.fromOffset(46, 46), Corner = 9, Stroke = sel and { T.vi, 2 } or T.line,
-		}, { Ui.icon("logo_" .. l[1], 24, sel and T.tx or T.tx2) })
-		local ic = b:FindFirstChild("Icono") :: Frame
+		local b = Ui.opt("", sel, function()
+			App.request("setIdentity", { logo = l[1] })
+		end, { width = 46, height = 46, pad = { 0, 0 }, name = "Logo_" .. l[1] })
+		local ic = Ui.icon("logo_" .. l[1], 22, sel and T.tx or T.tx2)
 		ic.AnchorPoint = Vector2.new(0.5, 0.5)
 		ic.Position = UDim2.fromScale(0.5, 0.5)
-		b.Activated:Connect(function()
-			App.request("setIdentity", { logo = l[1] })
-		end)
+		local pad = b:FindFirstChildOfClass("UIPadding")
+		if pad then
+			pad:Destroy()
+		end
+		ic.Parent = b
 		table.insert(logos, b)
 	end
 	local colors = {}
@@ -65,27 +82,28 @@ function Screen.build(main: Frame, side: Frame)
 	end
 	Ui.card({
 		Ui.lbl("Marca"),
-		Ui.row({ Ui.logo(g.company, 72), Ui.grow(Ui.col({ Ui.text("Nombre de la empresa", { size = Ui.S.sm, color = T.tx2, weight = W.semi }), Ui.row({ Ui.grow(nameBox), saveName }, 8) }, 6)) }, 16),
-		Ui.text("Logotipo", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		Ui.row(logos, 8, { wrap = true }),
-		Ui.text("Color de marca", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		Ui.row(colors, 8, { wrap = true }),
-		Ui.text("El nombre pasa por el filtro de Roblox y cambia en el cartel del garaje, el HUD y las unidades nuevas.", { size = Ui.S.xs, color = T.mut }),
-	}, { gap = 10, pad = 18 }).Parent = main
+		Ui.row({
+			Ui.logo(g.company, 72),
+			Ui.grow(Ui.col({
+				Ui.fl("Nombre de la empresa"),
+				Ui.row({ Ui.grow(nameBox), saveName }, 10),
+				Ui.text("El nombre aparece en el HUD, el cartel del taller, el menú y los números de serie nuevos.", { size = Ui.S.xs, color = T.mut }),
+			}, 6)),
+		}, 16, { wrap = phone }),
+		Ui.col({ Ui.fl("Logotipo"), Ui.row(logos, 10, { wrap = true }) }, 6),
+		Ui.col({ Ui.fl("Color de marca"), Ui.row(colors, 10, { wrap = true }) }, 6),
+	}, { gap = 14, pad = 18, name = "Marca" }).Parent = main
 
 	local caps = g.derived.caps
 	local next = Rules.nextSede(g)
 	local sedeRows: { Instance? } = {
-		Ui.row({ Ui.lbl("Sede y capacidad"), Ui.spacer(), Ui.chip("Nivel " .. g.sede .. " · " .. g.derived.sedeName, "cy") }, 8),
+		Ui.row({ Ui.grow(Ui.lbl("Sede y capacidad")), Ui.chip("Nivel " .. g.sede .. " · " .. g.derived.sedeName, "cy") }, 10),
 		Ui.grid({
 			(Ui.kv("Líneas de producción", tostring(caps.lines))),
 			(Ui.kv("Almacén", g.derived.warehouseUsed .. "/" .. caps.warehouse)),
 			(Ui.kv("Salón", g.derived.showroomUsed .. "/" .. caps.showroom)),
 			(Ui.kv("Personal", #g.employees .. "/" .. caps.staff)),
-			(Ui.kv("Depósito", g.derived.matsUsed .. "/" .. caps.mats)),
-			(Ui.kv("Estaciones (nivel máx.)", tostring(Rules.maxStationLevel(g)))),
-		}, App.isPhone() and 2 or 3, 64),
-		Ui.text("Almacén: " .. Factory.warehouseText(g) .. ".", { size = Ui.S.xs, color = T.mut }),
+		}, phone and 2 or 4),
 	}
 	if next then
 		local checks = Rules.expandChecks(g)
@@ -95,29 +113,32 @@ function Screen.build(main: Frame, side: Frame)
 			ok = ok and c[1]
 			table.insert(lines, Ui.text((c[1] and "✓ " or "✕ ") .. c[2], { size = Ui.S.sm, color = c[1] and T.gr or T.re2 }))
 		end
-		local expand
-		expand = Ui.button("Ampliar a «" .. next.name .. "» · " .. Util.money(next.cost), "p", function()
+		local expand = Ui.button("Ampliar sede · " .. Util.money(next.cost), "p", function()
 			App.openDialog("confirm", {
 				title = "¿Ampliar a «" .. next.name .. "»?",
-				body = "Cuesta " .. Util.money(next.cost) .. ". Obtenés " .. next.lines .. " líneas, almacén " .. next.warehouse .. ", salón " .. next.showroom .. ", depósito " .. next.mats .. " y lugar para " .. next.staff .. " empleados. Tu partida se conserva: el garaje crece con las nuevas líneas.",
+				body = "Cuesta " .. Util.money(next.cost) .. ". Obtenés " .. next.lines .. " líneas, almacén " .. next.warehouse .. ", salón " .. next.showroom .. " y lugar para " .. next.staff .. " empleados. La escena 3D cambia.",
 				okLabel = "Ampliar",
 				onOk = function()
 					App.request("expandSede")
 				end,
 			})
-		end, { disabled = not ok, why = "Faltan requisitos" })
-		table.insert(sedeRows, Ui.card({
-			Ui.text("Próxima sede: " .. next.name, { size = 15, weight = W.bold }),
-			Ui.text(next.lines .. " líneas · almacén " .. next.warehouse .. " · salón " .. next.showroom .. " · " .. next.staff .. " empleados · depósito " .. next.mats, { size = Ui.S.xs, color = T.mut }),
-			Ui.col(lines, 2),
-			expand,
-		}, { gap = 6, bg = T.p2 }))
+		end, { disabled = not ok, why = "Faltan requisitos", name = "AmpliarSede" })
+		local items: { Instance? } = {
+			Ui.text("Próxima sede: " .. next.name, { size = Ui.S.base, weight = W.bold }),
+			Ui.text(next.lines .. " líneas · almacén " .. next.warehouse .. " · salón " .. next.showroom .. " · " .. next.staff .. " empleados · materiales " .. next.mats, { size = Ui.S.xs, color = T.mut }),
+		}
+		for _, l in lines do
+			table.insert(items, l)
+		end
+		table.insert(items, expand)
+		table.insert(sedeRows, Ui.card(items, { gap = 6, bg = T.p2, name = "ProximaSede" }))
 	else
 		table.insert(sedeRows, Ui.note("g", "Tenés la sede máxima."))
 	end
-	Ui.card(sedeRows, { gap = 10, pad = 18 }).Parent = main
+	Ui.card(sedeRows, { gap = 12, pad = 18, name = "Sede" }).Parent = main
 
 	local dif = Catalog.DIFFICULTIES[g.company.difficulty]
+	local tot = Rules.finance(g, 100000)
 	local summary: { Instance? } = { Ui.lbl("Resumen de la empresa") }
 	for _, r in {
 		{ "Dificultad", dif.label },
@@ -127,22 +148,21 @@ function Screen.build(main: Frame, side: Frame)
 		{ "Gemas", tostring(g.gems) },
 		{ "Diseños", tostring(#g.designs) },
 		{ "Unidades fabricadas", tostring(g.counters.unitsProduced) },
-		{ "Autos vendidos", tostring(g.counters.unitsSold) },
-		{ "Ingresos totales", Util.money(g.counters.revenueTotal or 0) },
+		{ "Unidades vendidas", tostring(g.counters.unitsSold) },
 		{ "Investigaciones", tostring(#g.research.done) },
+		{ "Ingresos por ventas (total)", Util.money(tot.revenue) },
+		{ "Margen bruto (total)", Util.money(tot.margin) },
 	} do
-		table.insert(summary, Ui.line(r[1], r[2], { leftColor = T.mut }))
+		table.insert(summary, Ui.between(r[1], r[2]))
 	end
-	Ui.card(summary, { gap = 0 }).Parent = side
+	Ui.card(summary, { gap = 6 }).Parent = side
 	Ui.card({
-		Ui.lbl("Empresas"),
-		Ui.text("Cada empresa tiene su propio dinero, diseños, fábrica e historial. Volver al menú guarda esta empresa y te deja elegir otra.", { size = Ui.S.xs, color = T.mut }),
+		Ui.lbl("Datos"),
+		g.demo and Ui.text("Demostración: no se guarda ni se exporta.", { size = Ui.S.xs, color = T.ye })
+			or Ui.text("Se guarda automáticamente en tu cuenta de Roblox.", { size = Ui.S.xs, color = T.mut }),
 		Ui.button("Volver al menú de empresas", "default", function()
-			App.guardEditor(function()
-				App.request("leaveCompany")
-				App.go("menu")
-			end)
-		end, { small = true, icon = "left" }),
+			App.leaveToMenu()
+		end, { small = true, fill = true, name = "VolverMenu" }),
 	}, { gap = 8 }).Parent = side
 end
 
