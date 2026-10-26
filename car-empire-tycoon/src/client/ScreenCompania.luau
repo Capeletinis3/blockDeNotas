@@ -1,5 +1,5 @@
 --!strict
--- Compañía (SCREENS.compania de la V3): identidad de la marca, sede y capacidades, ampliación y resumen.
+-- Compañía (SCREENS.compania de la V3): identidad de la marca, sede (PI/min, producción y alcance), ampliación y resumen.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -97,11 +97,11 @@ function Screen.build(main: Frame, side: Frame)
 	local caps = g.derived.caps
 	local next = Rules.nextSede(g)
 	local sedeRows: { Instance? } = {
-		Ui.row({ Ui.grow(Ui.lbl("Sede y capacidad")), Ui.chip("Nivel " .. g.sede .. " · " .. g.derived.sedeName, "cy") }, 10),
+		Ui.row({ Ui.grow(Ui.lbl("Sede")), Ui.chip("Nivel " .. g.sede .. " · " .. g.derived.sedeName, "cy") }, 10),
 		Ui.grid({
-			(Ui.kv("Líneas de producción", tostring(caps.lines))),
-			(Ui.kv("Almacén", g.derived.warehouseUsed .. "/" .. caps.warehouse)),
-			(Ui.kv("Salón", g.derived.showroomUsed .. "/" .. caps.showroom)),
+			(Ui.kv("Investigación", Util.num(g.derived.piPerMinute, 1) .. " PI/min")),
+			(Ui.kv("Producción", caps.lines .. " × " .. Util.num(caps.perLine, 1) .. " autos/min")),
+			(Ui.kv("Alcance comercial", "×" .. Util.num(caps.reach, 1))),
 			(Ui.kv("Personal", #g.employees .. "/" .. caps.staff)),
 		}, phone and 2 or 4),
 	}
@@ -116,7 +116,7 @@ function Screen.build(main: Frame, side: Frame)
 		local expand = Ui.button("Ampliar sede · " .. Util.money(next.cost), "p", function()
 			App.openDialog("confirm", {
 				title = "¿Ampliar a «" .. next.name .. "»?",
-				body = "Cuesta " .. Util.money(next.cost) .. ". Obtenés " .. next.lines .. " líneas, almacén " .. next.warehouse .. ", salón " .. next.showroom .. " y lugar para " .. next.staff .. " empleados. La escena 3D cambia.",
+				body = "Cuesta " .. Util.money(next.cost) .. ". La investigación pasa a " .. next.pi .. " PI por minuto, la fábrica a " .. next.lines .. " líneas de " .. next.perLine .. " autos/min de base, el alcance comercial a ×" .. Util.num(next.reach, 1) .. " y el lugar para " .. next.staff .. " empleados. La escena 3D cambia.",
 				okLabel = "Ampliar",
 				onOk = function()
 					App.request("expandSede")
@@ -125,7 +125,7 @@ function Screen.build(main: Frame, side: Frame)
 		end, { disabled = not ok, why = "Faltan requisitos", name = "AmpliarSede" })
 		local items: { Instance? } = {
 			Ui.text("Próxima sede: " .. next.name, { size = Ui.S.base, weight = W.bold }),
-			Ui.text(next.lines .. " líneas · almacén " .. next.warehouse .. " · salón " .. next.showroom .. " · " .. next.staff .. " empleados · materiales " .. next.mats, { size = Ui.S.xs, color = T.mut }),
+			Ui.text(next.pi .. " PI/min · " .. next.lines .. " líneas × " .. next.perLine .. " autos/min · alcance ×" .. Util.num(next.reach, 1) .. " · " .. next.staff .. " empleados", { size = Ui.S.xs, color = T.mut }),
 		}
 		for _, l in lines do
 			table.insert(items, l)
@@ -133,8 +133,15 @@ function Screen.build(main: Frame, side: Frame)
 		table.insert(items, expand)
 		table.insert(sedeRows, Ui.card(items, { gap = 6, bg = T.p2, name = "ProximaSede" }))
 	else
-		table.insert(sedeRows, Ui.note("g", "Tenés la sede máxima."))
+		table.insert(sedeRows, Ui.note("g", "Tenés la sede máxima: Imperio automotriz."))
 	end
+	-- Todas las sedes (para planificar)
+	local ladder: { Instance? } = { Ui.lbl("Las cinco sedes") }
+	for _, s in Catalog.SEDES do
+		local cur = s.level == g.sede
+		table.insert(ladder, Ui.between((cur and "▶ " or (s.level < g.sede and "✓ " or "")) .. s.name, s.pi .. " PI/min · " .. s.lines .. "×" .. s.perLine .. "/min · ×" .. Util.num(s.reach, 1) .. (s.cost > 0 and (" · " .. Util.money(s.cost)) or ""), { size = Ui.S.xs, color = cur and T.ye or T.mut, leftColor = cur and T.tx or T.mut }))
+	end
+	table.insert(sedeRows, Ui.col(ladder, 4))
 	Ui.card(sedeRows, { gap = 12, pad = 18, name = "Sede" }).Parent = main
 
 	local dif = Catalog.DIFFICULTIES[g.company.difficulty]
@@ -145,13 +152,13 @@ function Screen.build(main: Frame, side: Frame)
 		{ "Fecha", Util.gameDate(g.time.day) },
 		{ "Nivel", g.level .. " (" .. g.xp .. "/" .. g.derived.xpNext .. " XP)" },
 		{ "Reputación", Util.num(g.reputation, 2) .. " / 5" },
-		{ "Gemas", tostring(g.gems) },
 		{ "Diseños", tostring(#g.designs) },
-		{ "Unidades fabricadas", tostring(g.counters.unitsProduced) },
-		{ "Unidades vendidas", tostring(g.counters.unitsSold) },
+		{ "Unidades fabricadas", Util.num(g.counters.unitsProduced) },
+		{ "Unidades vendidas", Util.num(g.counters.unitsSold) },
+		{ "Lotes agotados / retirados", Util.num(g.counters.lotsSoldOut or 0) .. " / " .. Util.num(g.counters.lotsRetired or 0) },
 		{ "Investigaciones", tostring(#g.research.done) },
-		{ "Ingresos por ventas (total)", Util.money(tot.revenue) },
-		{ "Margen bruto (total)", Util.money(tot.margin) },
+		{ "Ingresos por ventas (total)", Util.money(g.counters.revenueTotal or tot.revenue) },
+		{ "Margen de lo vendido (total)", Util.money(g.counters.marginTotal or tot.margin) },
 	} do
 		table.insert(summary, Ui.between(r[1], r[2]))
 	end

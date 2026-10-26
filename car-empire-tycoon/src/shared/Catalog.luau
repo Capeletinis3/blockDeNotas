@@ -448,6 +448,9 @@ Catalog.RESEARCH = {
 
 --[[ Marcas rivales controladas por el juego. Cada una vende en ciertos tipos desde cierto año. offset =
 	atractivo respecto de lo que espera el mercado (puede cambiar con los años: { año, valor }). ]]
+-- Precio típico de cada tipo de vehículo (referencia para los modelos rivales, en dólares del juego).
+Catalog.RIVAL_PRICE = { compacto = 2900, sedan = 3500, clasico = 4500, pickup = 4300, deportivo = 5500, suv = 5200, superdeportivo = 10800, electrico = 8200 }
+
 Catalog.RIVALS = {
 	{ id = "kodiak", name = "Kodiak Motors", color = "#8D6E4F", types = { pickup = 1970, suv = 1984, sedan = 1970 }, offset = { { 1970, 2 }, { 2030, 2 } },
 		models = { pickup = "Grizzly", suv = "Yukon", sedan = "Marshal" } },

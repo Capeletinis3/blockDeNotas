@@ -1,5 +1,5 @@
 --!strict
--- Misiones y recompensas (SCREENS.misiones de la V3): tutorial, historia, diarias y recompensa diaria.
+-- Misiones y recompensas (SCREENS.misiones de la V3): tutorial, historia, del año y recompensa diaria.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -29,8 +29,9 @@ local STATE = { reclamada = { "✓ Reclamada", "cn" }, lista = { "Lista para rec
 local function missionCard(g: any, m: any): Frame
 	local v = Rules.missionValue(g, m)
 	local st = Rules.missionState(g, m)
-	local money = m.counter == "marginToday"
-	local bar = Ui.bar(math.min(1, v / m.goal) * 100, st ~= "progreso" and T.gr or nil)
+	local money = m.counter == "marginYear"
+	local goal = Rules.missionGoal(g, m)
+	local bar = Ui.bar(math.min(1, v / goal) * 100, st ~= "progreso" and T.gr or nil)
 	local action: Instance? = nil
 	if st == "lista" then
 		local claim
@@ -43,13 +44,13 @@ local function missionCard(g: any, m: any): Frame
 			App.go(m.go)
 		end, { small = true, name = "Ir_" .. m.id })
 	end
-	local amount = (money and Util.money(math.min(v, m.goal)) or tostring(math.min(v, m.goal))) .. "/" .. (money and Util.money(m.goal) or tostring(m.goal))
+	local amount = (money and Util.money(math.min(v, goal)) or Util.num(math.min(v, goal))) .. "/" .. (money and Util.money(goal) or Util.num(goal))
 	return Ui.card({
 		Ui.row({ Ui.grow(Ui.text(m.title, { size = Ui.S.base, weight = W.bold })), Ui.chip(STATE[st][1], STATE[st][2]) }, 10, { wrap = true }),
 		Ui.text(m.desc, { size = Ui.S.xs, color = T.mut }),
 		Ui.row({ Ui.grow(bar, { Size = UDim2.new(0, 0, 0, 7) }), Ui.inline(amount, { size = Ui.S.sm, weight = W.bold }) }, 10),
 		Ui.row({
-			Ui.grow(Ui.text("Recompensa: <b><font color=\"#42E58D\">" .. Rules.rewardText(m.reward) .. "</font></b>", { size = Ui.S.sm })),
+			Ui.grow(Ui.text("Recompensa: <b><font color=\"#42E58D\">" .. Rules.rewardText(Rules.missionReward(g, m)) .. "</font></b>", { size = Ui.S.sm })),
 			action,
 		}, 10, { wrap = true }),
 	}, { gap = 8, stroke = st == "lista" and Color3.fromHex("#2A7550") or nil, name = "Mision_" .. m.id })
@@ -66,28 +67,19 @@ function Screen.build(main: Frame, side: Frame)
 		end
 		return n
 	end
-	local tabs, tab = Sheet.tabs("misiones", { { "tutorial", "Tutorial", ready("tutorial") }, { "historia", "Historia", ready("historia") }, { "diaria", "Diarias", ready("diaria") }, { "evento", "Eventos" } }, "tutorial")
+	local tabs, tab = Sheet.tabs("misiones", { { "tutorial", "Tutorial", ready("tutorial") }, { "historia", "Historia", ready("historia") }, { "anual", "Del año", ready("anual") } }, "tutorial")
 	tabs.Parent = main
 	if tab == "tutorial" and g.tutorial.skipped then
 		Ui.note("y", "Saltaste el tutorial: las guías están ocultas, pero las misiones siguen activas y solo se completan haciendo cada acción.", Ui.button("Reactivar guías", "default", function()
 			App.request("setTutorial", { skipped = false })
 		end, { small = true, name = "ReactivarGuias" })).Parent = main
 	end
-	if tab == "diaria" then
-		Ui.note("b", "Las misiones diarias se reinician al empezar cada día de juego (día " .. (g.time.day + 1) .. " ahora).").Parent = main
+	if tab == "anual" then
+		Ui.note("b", "Las misiones del año se reinician cada enero (ahora " .. Rules.year(g) .. "). La meta crece con el alcance de tu sede.").Parent = main
 	end
-	if tab == "evento" then
-		local news = App.screens.menu and App.screens.menu.NEWS
-		Ui.card({
-			Ui.row({ Ui.grow(Ui.text(news and news.event or "Evento de temporada", { size = Ui.S.base, weight = W.bold })), Ui.chip("Demostración", "cy") }, 10),
-			Ui.text("Ejemplo de cómo se vería un evento de temporada: los eléctricos tendrían más demanda durante 7 días. Todavía no otorga recompensas.", { size = Ui.S.sm, color = T.mut }),
-			Ui.button("Disponible en una versión futura", "default", function() end, { small = true, disabled = true, why = "Función futura", name = "EventoFuturo" }),
-		}, { gap = 8, pad = 18, name = "Evento" }).Parent = main
-	else
-		for _, m in Catalog.MISSIONS do
-			if m.kind == tab then
-				missionCard(g, m).Parent = main
-			end
+	for _, m in Catalog.MISSIONS do
+		if m.kind == tab then
+			missionCard(g, m).Parent = main
 		end
 	end
 	local canDaily = g.daily.last ~= App.payload.today
@@ -102,7 +94,7 @@ function Screen.build(main: Frame, side: Frame)
 	}, { gap = 8 }).Parent = side
 	Ui.card({
 		Ui.lbl("Cómo funcionan"),
-		Ui.text("Las misiones avanzan solo con acciones reales de la partida (guardar diseños, contratar, fabricar, vender…). Una recompensa reclamada queda registrada y no se puede volver a cobrar.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }),
+		Ui.text("Las misiones avanzan solo con acciones reales de la partida (guardar diseños, lanzar lotes, vender, investigar…). Las recompensas dan dinero y puntos de investigación (PI). Una recompensa reclamada queda registrada y no se puede volver a cobrar.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }),
 	}, { gap = 4 }).Parent = side
 end
 

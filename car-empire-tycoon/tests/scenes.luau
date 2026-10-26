@@ -143,12 +143,12 @@ function Scenes.list(_ctx: any): { any }
 		go(c, "fabrica")
 	end)
 	local tabsList = {
-		{ "autos-op-piezas", "autos", "autos", "parts" }, { "autos-op-materiales", "autos", "autos", "mats" }, { "autos-op-disenos", "autos", "autos", "designs" },
-		{ "ventas-op-historial", "ventas", "ventas", "hist" },
-		{ "mercado-op-pieza", "mercado", "mercado", "pieza" }, { "mercado-op-diseno", "mercado", "mercado", "diseno" }, { "mercado-op-material", "mercado", "mercado", "material" },
-		{ "mercado-op-fav", "mercado", "mercado", "fav" }, { "mercado-op-mine", "mercado", "mercado", "mine" }, { "mercado-op-offers", "mercado", "mercado", "offers" },
+		{ "autos-op-historia", "autos", "autos", "historia" },
+		{ "ventas-op-historial", "ventas", "ventas", "historial" },
+		{ "mercado-op-rivales", "mercado", "mercado", "rivales" },
+		{ "investigacion-op-produccion", "investigacion", "investigacion", "produccion" },
 		{ "personal-op-contratar", "personal", "personal", "hire" },
-		{ "misiones-op-historia", "misiones", "misiones", "historia" }, { "misiones-op-diarias", "misiones", "misiones", "diaria" }, { "misiones-op-eventos", "misiones", "misiones", "evento" },
+		{ "misiones-op-historia", "misiones", "misiones", "historia" }, { "misiones-op-anual", "misiones", "misiones", "anual" },
 	}
 	for _, t in tabsList do
 		add(t[1], t[1], function(c)
@@ -157,10 +157,22 @@ function Scenes.list(_ctx: any): { any }
 			tab(c, t[3], t[4])
 		end)
 	end
-	add("estadisticas-op-30", "Estadísticas a 30 días", function(c)
+	add("ventas-avanzada", "Ventas (demostración avanzada)", function(c)
+		demo(c, "avanzada")
+		go(c, "ventas")
+	end)
+	add("mercado-avanzada", "Mercado (demostración avanzada, 1992)", function(c)
+		demo(c, "avanzada")
+		go(c, "mercado")
+	end)
+	add("investigacion-avanzada", "Investigación (demostración avanzada)", function(c)
+		demo(c, "avanzada")
+		go(c, "investigacion")
+	end)
+	add("estadisticas-op-24", "Estadísticas a 24 meses", function(c)
 		demo(c, "operacion")
 		go(c, "estadisticas")
-		c.App.ui.statRange = 30
+		c.App.ui.statRange = 24
 		c.App.forceRender()
 	end)
 
@@ -253,91 +265,33 @@ function Scenes.list(_ctx: any): { any }
 		go(c, "juego")
 		c.App.openDialog("daily", {})
 	end)
-	dlg("dlg-orden", "Nueva orden", function(c)
+	dlg("dlg-lote", "Lanzar lote", function(c)
 		demo(c, "operacion")
 		go(c, "fabrica")
-		c.App.ui.orderDraft = nil
-		c.App.openDialog("order", { wide = true })
+		c.App.ui.lotDraft = nil
+		c.App.openDialog("lot", { wide = true })
 	end)
-	dlg("dlg-negociar", "Negociación", function(c)
+	dlg("dlg-lote-grande", "Lanzar lote de 50.000", function(c)
+		demo(c, "operacion")
+		go(c, "fabrica")
+		c.App.ui.lotDraft = { designId = c.App.g.designs[1].id, qty = 50000, touched = true }
+		c.App.openDialog("lot", { wide = true })
+	end)
+	dlg("dlg-precio", "Modificar precio", function(c)
 		demo(c, "operacion")
 		go(c, "ventas")
-		local g = c.App.g
-		local cust = nil
-		for _ = 1, 200 do
-			for _, x in c.App.g.customers do
-				if x.state == "oferta" then
-					cust = x
-				end
-			end
-			if cust then
-				break
-			end
-			c.M.step(1)
-			c.M.task.wait()
-		end
-		g = c.App.g
-		if cust then
-			c.App.openDialog("counter", { customerId = cust.id, wide = true })
-			c.waitFor(function()
-				return c.App.ui.counterDraft and c.App.ui.counterDraft.quote ~= nil
-			end)
-		end
-		local _ = g
-	end)
-	dlg("dlg-unidad", "Detalle de unidad", function(c)
-		demo(c, "operacion")
-		go(c, "autos")
-		for _, u in c.App.g.units do
-			if u.status ~= "vendido" then
-				c.App.openDialog("unitDetail", { unitId = u.id, wide = true })
-				break
-			end
+		local l = c.App.g.lots[1]
+		if l then
+			c.App.openDialog("price", { lotId = l.id, price = l.price + 300 })
 		end
 	end)
-	dlg("dlg-mayorista", "Vender al mayorista", function(c)
+	dlg("dlg-cerrar-venta", "Cerrar venta", function(c)
 		demo(c, "operacion")
-		go(c, "autos")
-		for _, u in c.App.g.units do
-			if u.status == "almacen" or u.status == "salon" then
-				c.App.screens.autos.askWholesale(c.App.g, u)
-				break
-			end
+		go(c, "ventas")
+		local b = named(c.App, c.M, "CerrarVenta")
+		if b then
+			c.M.click(b)
 		end
-	end)
-	dlg("dlg-publicacion", "Publicación del mercado", function(c)
-		demo(c, "operacion")
-		go(c, "mercado")
-		-- La captura de la V3 muestra una subasta; se elige una para comparar la misma variante.
-		local pick
-		for _, l in c.App.g.market.listings do
-			if l.kind == "vehiculo" and (pick == nil or (l.mode == "subasta" and pick.mode ~= "subasta")) then
-				pick = l
-			end
-		end
-		if pick then
-			c.App.openDialog("listing", { listingId = pick.id, wide = true })
-		end
-	end)
-	dlg("dlg-publicar", "Publicar en el mercado", function(c)
-		demo(c, "operacion")
-		go(c, "mercado")
-		-- Como la V3: una unidad del salón vuelve al almacén para poder publicarla.
-		for _, u in c.App.g.units do
-			if u.status == "salon" then
-				c.App.request("returnToWarehouse", { unitId = u.id })
-				c.waitFor(function()
-					for _, x in c.App.g.units do
-						if x.id == u.id then
-							return x.status == "almacen"
-						end
-					end
-					return true
-				end)
-				break
-			end
-		end
-		c.App.openDialog("publish", {})
 	end)
 	dlg("dlg-prueba", "Prueba en pista", function(c)
 		editorStep(c, 4)
@@ -375,40 +329,18 @@ function Scenes.list(_ctx: any): { any }
 			c.M.click(b)
 		end
 	end)
-	dlg("dlg-cancelar-orden", "Cancelar orden", function(c)
-		demo(c, "operacion")
-		go(c, "fabrica")
-		local b = nil
-		for _, d in c.App.gui:GetDescendants() do
-			if d.Name == "CancelarOrden" or (d:GetAttribute("label") == "Cancelar" and string.find(d:GetFullName(), "Contenido", 1, true)) then
-				b = d
-				break
-			end
-		end
-		if b then
-			c.M.click(b)
-		end
-	end)
-	dlg("dlg-comprar-material", "Comprar material", function(c)
-		demo(c, "operacion")
-		go(c, "fabrica")
-		local b = named(c.App, c.M, "Comprar_acero")
-		if b then
-			c.M.click(b)
-		end
-	end)
 	dlg("dlg-ampliar", "Ampliar sede", function(c)
 		demo(c, "operacion")
 		-- Como la V3: se cumplen los requisitos de la próxima sede.
 		local inst = c.Sessions.instance
 		local s = inst and inst.list[c.player]
 		if s and s.game then
-			s.game.counters.unitsSold = 99
+			s.game.counters.unitsSold = 5000
 			s.game.reputation = 4.5
-			s.game.money = 2e6
+			s.game.money = 3e6
 			inst:push(s)
 			c.waitFor(function()
-				return c.App.g.money == 2e6
+				return c.App.g.money == 3e6
 			end)
 		end
 		go(c, "compania")

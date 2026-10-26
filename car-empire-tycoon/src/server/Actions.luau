@@ -196,6 +196,9 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 		if not parent or parent.template then
 			return fail("El modelo del que querías crear una nueva generación ya no existe.")
 		end
+		if (parent.modelYear or year) >= year then
+			return fail("Una nueva generación necesita un año de modelo posterior a " .. tostring(parent.modelYear) .. ". Esperá al año próximo.")
+		end
 		d.lineage = parent.lineage or parent.id
 		d.gen = maxGen(g, d.lineage) + 1
 	end
@@ -327,7 +330,7 @@ local function findLot(g: any, payload: any): any
 end
 
 local function priceRange(lot: any): (number, number)
-	return math.max(10, round(lot.unitCost * Catalog.ECON.priceMin / 10) * 10), round(lot.refPrice * Catalog.ECON.priceMax / 10) * 10
+	return Rules.priceRange(lot.unitCost, lot.refPrice)
 end
 Actions.priceRange = priceRange
 

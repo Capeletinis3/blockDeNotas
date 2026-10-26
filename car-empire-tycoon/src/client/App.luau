@@ -13,6 +13,9 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
+local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
+local Catalog = require(Shared.Catalog)
+local Rules = require(Shared.Rules)
 local Ui = require(script.Parent.Ui)
 local T = Ui.T
 
@@ -36,7 +39,7 @@ App.ui = {
 	dialogs = {},
 	newCompany = { name = "", color = "#7667FF", logo = "pico", difficulty = "normal", slot = "1" },
 	sidePanel = nil, -- celular: panel lateral abierto ("l" | "r")
-	statRange = 7,
+	statRange = 12,
 	pop = nil, -- menú emergente abierto: "more" | "mob"
 	popX = nil,
 	panelsHidden = false, -- «Ocultar paneles» (Tab)
@@ -331,28 +334,36 @@ local function structuralSig(p: any): string
 		copy.ledger = #g.ledger
 		copy.stats = nil
 		copy.derived = nil
-		local orders = {}
-		for _, o in g.production.orders do
-			local oc = table.clone(o)
-			oc.progress = nil
-			oc.design = o.design and o.design.version or nil
-			table.insert(orders, oc)
+		-- Lotes: solo lo que cambia la estructura (estado, precio, si hay stock); los contadores se
+		-- actualizan en vivo sin reconstruir.
+		local lots = {}
+		for _, l in g.lots do
+			table.insert(lots, { l.id, l.prodState, l.saleState, l.price, l.produced < l.qty, l.produced - l.sold - l.discarded > 0 })
 		end
-		copy.production = { orders = orders, history = #g.production.history, boost = g.production.boost, auto = g.production.auto }
-		local customers = {}
-		for _, c in g.customers do
-			local cc = table.clone(c)
-			cc.waited = nil
-			table.insert(customers, cc)
+		copy.lots = lots
+		copy.lotHistory = #g.lotHistory > 0 and g.lotHistory[1].id or nil
+		-- Contadores que cambian con cada venta: van en tramos (las misiones se recalculan al cruzar uno).
+		local counters = table.clone(g.counters)
+		for _, k in { "unitsSold", "unitsProduced", "revenueTotal", "marginTotal" } do
+			counters[k] = counters[k] and math.floor(math.log(counters[k] + 1) / math.log(1.25)) or nil
 		end
-		copy.customers = customers
+		copy.counters = counters
+		copy.rp = math.floor(g.rp / 5)
+		-- El dinero cambia cada segundo: se reconstruye solo cuando cambia un 25 % (botones habilitados).
+		copy.money = math.floor(math.log(math.max(1, g.money)) / math.log(1.25))
+		copy.reputation = math.floor(g.reputation * 10)
+		-- Misiones que pasan a «lista para reclamar» (botones de recompensa).
+		local ready = {}
+		for _, m in Catalog.MISSIONS do
+			table.insert(ready, Rules.missionState(g, m) == "lista" and 1 or 0)
+		end
+		copy.ready = table.concat(ready)
 		local emps = {}
 		for _, e in g.employees do
-			table.insert(emps, { e.id, e.assign, e.status, math.floor(e.energy / 20) })
+			table.insert(emps, { e.id, e.assign })
 		end
 		copy.employees = emps
 		copy.research = { done = g.research.done, active = g.research.active and g.research.active.id }
-		copy.market = { mine = g.market.mine, offers = g.market.offers, favorites = g.market.favorites, seed = g.market.seedDay, n = #g.market.listings }
 		stripped.g = copy
 	end
 	local ok, enc = pcall(HttpService.JSONEncode, HttpService, stripped)
@@ -391,9 +402,6 @@ function App.go(route: string, params: any?)
 		App.ui.pop = nil
 		if route == "editor" and App.screens.editor and App.screens.editor.enter then
 			App.screens.editor.enter(App.ui.params)
-		end
-		if route == "mercado" then
-			task.spawn(App.request, "marketOpen")
 		end
 		App.closeAllDialogs()
 		App.forceRender()

@@ -136,7 +136,7 @@ function Rules.piPerMinute(g: any): number
 	return base + lab
 end
 
--- Tope del banco de PI: 10 minutos de generación (investigar sigue siendo el modo de aprovecharlos).
+-- Tope del banco de PI sin proyecto activo: unos minutos de generación (Catalog.RULES.piBankMinutes).
 function Rules.piCap(g: any): number
 	return Rules.piPerMinute(g) * Catalog.RULES.piBankMinutes
 end
@@ -241,10 +241,15 @@ function Rules.rivalOffers(type: string, yearFrac: number): { any }
 			local cycle = (age % 6) / 6
 			local offset = Catalog.interp(r.offset, yearFrac) + 2 - cycle * 4 + math.sin(i * 1.7 + gen) * 1.5
 			local appeal = baseline + offset
+			local seg = offset >= 3.5 and "Premium" or (offset >= 0 and "Masivo" or "Económico")
 			table.insert(out, {
 				rival = r,
 				name = r.models[type] .. (gen > 1 and (" '" .. string.sub(tostring(math.floor(since + (gen - 1) * 6)), 3)) or ""),
 				since = since,
+				gen = gen,
+				segment = seg,
+				-- Precio de lista: el típico del tipo, más caro cuanto mejor posicionado y más moderno.
+				price = math.floor((Catalog.RIVAL_PRICE[type] or 4000) * (1 + offset * 0.03) * (1 + (yearFrac - 1970) * 0.006) / 10 + 0.5) * 10,
 				appeal = appeal,
 				weight = math.exp((appeal - baseline) / ECON.appealScale),
 			})
@@ -266,6 +271,11 @@ end
 -- Factor de precio: vender por encima del precio de referencia baja las ventas (y al revés).
 function Rules.priceFactor(price: number, ref: number): number
 	return Util.clamp(math.pow(ref / math.max(1, price), ECON.priceElasticity), 0.02, 3)
+end
+
+-- Precio permitido para un lote: desde la mitad del costo hasta 3 veces el precio de referencia, de a $10.
+function Rules.priceRange(unitCost: number, refPrice: number): (number, number)
+	return math.max(10, Util.round(unitCost * ECON.priceMin / 10) * 10), Util.round(refPrice * ECON.priceMax / 10) * 10
 end
 
 -- Peso de un lote del jugador en el reparto de la demanda de su tipo.

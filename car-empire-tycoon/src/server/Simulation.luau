@@ -99,7 +99,7 @@ function Simulation.addXp(g: any, ctx: any, n: number)
 	end
 end
 
--- Puntos de investigación al banco (con tope de 10 minutos de generación).
+-- Puntos de investigación al banco (con tope de Catalog.RULES.piBankMinutes minutos de generación).
 function Simulation.addPi(g: any, n: number)
 	g.rp = math.min(Rules.piCap(g), g.rp + n)
 end

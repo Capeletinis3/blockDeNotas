@@ -18,11 +18,11 @@ local W = Ui.W
 local Screen = {}
 
 Screen.NEWS = {
-	version = "Actualización 1.3 · «Línea de montaje»",
-	title = "Fábrica conectada y mercado simulado",
-	body = "Ahora tus diseños se fabrican de verdad: las órdenes consumen materiales, ocupan el almacén y las unidades llegan al concesionario. También se sumaron catálogos de piezas por categoría y un mercado con subastas simuladas.",
-	event = "Semana de los eléctricos (evento de demostración)",
-	when = "Comienza el día 30 de cada partida",
+	version = "Actualización 2.0 · «Desde 1970»",
+	title = "Lotes, ventas automáticas y 60 años de historia",
+	body = "Tu empresa empieza en 1970. Diseñás un auto, elegís cuántas unidades fabricar y se venden solas según la demanda, el precio y la competencia. La sede genera puntos de investigación por minuto y las tecnologías llegan en su época, hasta los eléctricos.",
+	event = "Eventos de temporada (función futura)",
+	when = "Todavía no implementado",
 }
 
 local rename = { slot = nil :: string?, draft = "", err = "" }
@@ -90,7 +90,13 @@ local function slotCard(key: string, s: any): Frame
 		}, { bg = Ui.hex("#0E1016"), transparency = 0.08, radius = 16, stroke = Ui.hex("#663036"), pad = 18, gap = 14, name = "Ranura_" .. key })
 	end
 	local t = s.tutorialDone or 0
-	local tut = s.tutorialSkipped and "Tutorial omitido" or (t >= 5 and "✓ Tutorial completo" or ("Tutorial · paso " .. (t + 1) .. " de 5"))
+	local total = 0
+	for _, m in Catalog.MISSIONS do
+		if m.kind == "tutorial" then
+			total += 1
+		end
+	end
+	local tut = s.tutorialSkipped and "Tutorial omitido" or (t >= total and "✓ Tutorial completo" or ("Tutorial · paso " .. (t + 1) .. " de " .. total))
 	local nameNode: Instance
 	if rename.slot == key then
 		local save

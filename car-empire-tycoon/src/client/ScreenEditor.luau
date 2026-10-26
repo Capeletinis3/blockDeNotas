@@ -15,6 +15,7 @@ local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local DesignCalc = require(Shared.DesignCalc)
+local Rules = require(Shared.Rules)
 local CarModel = require(Shared.CarModel)
 
 local Ui = require(script.Parent.Ui)
@@ -345,7 +346,7 @@ function Screen.needsConfirm(params: any): boolean
 	if not e or not e.dirty or not params or params.force then
 		return false
 	end
-	if params.new or params.fromTemplate then
+	if params.new or params.fresh or params.fromTemplate or params.newGenOf then
 		return true
 	end
 	if params.designId and params.designId ~= e.sourceId then
@@ -371,7 +372,17 @@ function Screen.enter(params: any)
 			nd.name = Util.truncateChars(string.gsub(nd.name, " %(plantilla%)$", ""), 18) .. " nuevo"
 			e = newEditor(nd, nil, nil, 1)
 		end
-	elseif params.new or not e then
+	elseif params.newGenOf then
+		-- Nueva generación: parte del diseño anterior; al guardar toma el año actual y el número siguiente.
+		local p = findDesign(params.newGenOf)
+		if p and not p.template then
+			local nd = Util.deepCopy(p)
+			nd.id, nd.version = nil, 0
+			e = newEditor(nd, nil, nil, 1)
+			e.newGenOf = p.id
+			e.dirty = true
+		end
+	elseif params.new or params.fresh or not e then
 		local b = DesignCalc.firstBase(g)
 		e = newEditor(DesignCalc.newDraft(g, b.id), nil, nil, 1)
 	end
@@ -389,16 +400,66 @@ function Screen.enter(params: any)
 	end
 	App.ui.editor = e
 	view3d.Enabled = true
+	if RunService:IsStudio() then
+		task.delay(1.5, function()
+			if not view3d.Enabled then
+				return
+			end
+			local r = Screen.diagnose()
+			if r.ok then
+				print("[CarEmpire] Editor 3D: el auto se ve (" .. r.parts .. " piezas, vista de " .. math.floor(r.size.X) .. "×" .. math.floor(r.size.Y) .. ").")
+			else
+				warn("[CarEmpire] Editor 3D: posible auto invisible: " .. table.concat(r.problems, "; "))
+			end
+		end)
+	end
 end
 
 function Screen.leave()
 	view3d.Enabled = false
 end
 
+--[[ Diagnóstico de la vista 3D: comprueba lo necesario para que el auto se vea dentro del ViewportFrame
+	(ScreenGui activa, ViewportFrame visible y con tamaño, cámara asignada, modelo con piezas dentro del
+	WorldModel y centro del auto delante de la cámara y dentro del encuadre). En Studio se imprime en la
+	ventana Output al abrir el editor; las pruebas sin Roblox lo usan también. ]]
+function Screen.diagnose(): any
+	local problems = {}
+	local function need(cond: boolean, text: string)
+		if not cond then
+			table.insert(problems, text)
+		end
+	end
+	need(view3d.Enabled, "la ScreenGui de la vista 3D está desactivada")
+	need(viewport.Visible, "el ViewportFrame no está visible")
+	local size = viewport.AbsoluteSize
+	need(size.X > 10 and size.Y > 10, "el ViewportFrame no tiene tamaño (" .. tostring(size) .. ")")
+	need(viewport.CurrentCamera == vpCamera, "el ViewportFrame no tiene la cámara asignada")
+	local parts = 0
+	if currentModel then
+		for _, d in currentModel:GetDescendants() do
+			if d:IsA("BasePart") and d.Transparency < 1 then
+				parts += 1
+			end
+		end
+	end
+	need(currentModel ~= nil and currentModel.Parent == world, "el modelo del auto no está dentro del WorldModel")
+	need(parts > 0, "el modelo del auto no tiene piezas visibles")
+	local cf = vpCamera.CFrame
+	local pos = cf.Position
+	need(pos.X == pos.X and pos.Magnitude < 1e4, "la posición de la cámara no es válida")
+	local center = Vector3.new(0, dims.Y * 0.42, 0)
+	local seen = project(cf, center, Vector2.new(math.max(1, size.X), math.max(1, size.Y)))
+	need(seen ~= nil, "el centro del auto queda fuera del encuadre de la cámara")
+	need((pos - center).Magnitude > dims.Magnitude / 2, "la cámara está dentro del auto")
+	return { ok = #problems == 0, problems = problems, parts = parts, size = size }
+end
+
 local function save(btn: any?, after: (() -> ())?)
 	local e = ed()
-	local r = App.request("saveDesign", { draft = e.draft, sourceId = e.sourceId }, { button = btn })
+	local r = App.request("saveDesign", { draft = e.draft, sourceId = e.sourceId, newGenOf = (e.sourceId == nil) and e.newGenOf or nil }, { button = btn })
 	if r.ok then
+		e.newGenOf = nil
 		e.sourceId = r.designId
 		e.draft.id = r.designId
 		e.draft.version = r.version
@@ -779,7 +840,7 @@ local function baseCard(g: any, d: any, x: any): TextButton
 		thumb,
 		Ui.grow(Ui.col({
 			Ui.row({ Ui.grow(Ui.text(x.name, { size = Ui.S.base, weight = W.bold })), Ui.chip(RAR_PIPS[x.rarity] .. " " .. x.rarity, RAR[x.rarity]) }, 10),
-			Ui.text(Catalog.TYPES[x.type] .. "   Nv. " .. x.level .. "   Licencia " .. (paid and "<font color=\"#42E58D\"><b>pagada</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(x.dev) .. "</b></font>")) .. "   Base/u " .. Util.money(x.unit), { size = Ui.S.xs, color = T.mut }),
+			Ui.text(Catalog.TYPES[x.type] .. "   Desde " .. tostring(x.year or 1970) .. "   Licencia " .. (paid and "<font color=\"#42E58D\"><b>pagada</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(x.dev) .. "</b></font>")) .. "   Base/u " .. Util.money(x.unit), { size = Ui.S.xs, color = T.mut }),
 			Ui.text(st.hp .. " hp   0–100 en " .. Util.num(st.accel, 1) .. " s   Manejo " .. st.handling .. "   " .. table.concat(tags, " · "), { size = Ui.S.xs, color = T.mut }),
 			block and Ui.why("🔒 " .. block) or nil,
 		}, 5)),
@@ -817,10 +878,23 @@ local function panelBase(g: any, d: any, body: Instance)
 	Ui.col({ Ui.fl("Nombre del proyecto"), nameBox }, 6).Parent = body
 	local company = g.company.name
 	local brands = { { company, company }, { company .. " Sport", company .. " Sport" }, { company .. " Lux", company .. " Lux" } }
-	local gens = {}
-	for _, gen in DesignCalc.GENERATIONS do
-		table.insert(gens, { gen, gen })
+	-- Año de modelo y generación: los fija el servidor al guardar (año actual; nueva generación = la siguiente).
+	local year = Rules.year(g)
+	local genText
+	if e.newGenOf then
+		local parent = nil
+		for _, x in g.designs do
+			if x.id == e.newGenOf then
+				parent = x
+			end
+		end
+		genText = year .. " · nueva generación" .. (parent and (" de «" .. parent.name .. "» (" .. tostring(parent.generation) .. ")") or "")
+	elseif e.sourceId then
+		genText = tostring(d.generation) .. " · nueva versión"
+	else
+		genText = DesignCalc.generationLabel(year, 1)
 	end
+	local genBox = Ui.col({ Ui.fl("Año de modelo y generación"), Ui.text(genText, { size = Ui.S.sm, weight = W.bold, name = "Generacion" }), Ui.text("Se fija al guardar: año en curso.", { size = Ui.S.xs, color = T.mut }) }, 4)
 	local b = Catalog.base(d.baseId)
 	local offroad = Util.contains(b.tags, "offroad")
 	local chassis = {}
@@ -842,7 +916,7 @@ local function panelBase(g: any, d: any, body: Instance)
 	end
 	Ui.grid({
 		sel("Marca", d.brand, brands, "brand"),
-		sel("Año o generación", d.generation, gens, "generation"),
+		genBox,
 		sel("Chasis", d.chassis, chassis, "chassis"),
 		sel("Segmento de mercado", d.segment, segs, "segment"),
 	}, 2, nil, 12).Parent = body
@@ -851,7 +925,7 @@ local function panelBase(g: any, d: any, body: Instance)
 		table.insert(objs, { k, k })
 	end
 	Ui.col({
-		Ui.text("<b>Objetivo del vehículo</b> <font size=\"11\" color=\"#A3AAB8\">(atrae a clientes con esa preferencia)</font>", { size = Ui.S.fl, color = T.tx2 }),
+		Ui.text("<b>Objetivo del vehículo</b> <font size=\"11\" color=\"#A3AAB8\">(define qué estadísticas pesan en el atractivo y las ventas)</font>", { size = Ui.S.fl, color = T.tx2 }),
 		optRow(nil, objs, d.objective, function(v)
 			change(function(dd)
 				dd.objective = v
@@ -917,24 +991,17 @@ local function partCard(g: any, d: any, e: any, p: any, selId: string): TextButt
 	local on = p.id == selId
 	local eq = p.id == d.parts[cat]
 	local paid = Util.contains(g.devPaid, cat .. ":" .. p.id)
-	local stk = nil
-	for _, x in g.parts do
-		if x.cat == cat and x.id == p.id then
-			stk = x
-		end
-	end
 	local devText
 	if b.defaults[cat] == p.id then
 		devText = "<font color=\"#42E58D\"><b>incluido en la licencia</b></font>"
 	elseif p.proto > 0 then
-		devText = paid and "<font color=\"#42E58D\"><b>pagado</b></font>" or (stk and "<font color=\"#42E58D\"><b>cubierto con tu pieza</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(p.proto) .. "</b></font>"))
+		devText = paid and "<font color=\"#42E58D\"><b>pagado</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(p.proto) .. "</b></font>")
 	else
 		devText = "<font color=\"#42E58D\"><b>sin costo</b></font>"
 	end
 	local chips: { Instance? } = {
 		eq and Ui.chip("✓ Equipada", "cb") or (bl and Ui.chip("🔒 Bloqueada", "cy") or Ui.chip("● Disponible", "cg")),
-		Ui.chip("Nv. " .. p.level, "cn"),
-		stk and Ui.chip(stk.qty .. " en inventario", "cv") or nil,
+		Ui.chip("Desde " .. tostring(p.year or 1970), "cn"),
 	}
 	local card = Ui.new("TextButton", {
 		Name = "Pieza_" .. p.id, Text = "", BackgroundColor3 = on and T.vi or T.p2, BackgroundTransparency = on and 0.9 or 0,
@@ -1171,7 +1238,8 @@ local function panelDesign(g: any, d: any, body: Instance)
 						table.insert(fx, (v > 0 and "+" or "") .. v .. " " .. ({ comfort = "comodidad", q = "calidad", grip = "manejo" })[k])
 					end
 				end
-				table.insert(opts, { o[1], o[2] .. (#fx > 0 and (" (" .. table.concat(fx, ", ") .. ")") or ""), o[3] })
+				local why = DesignCalc.optionBlock(g, Catalog.interiorOpt(grp[1], o[1]))
+				table.insert(opts, { o[1], o[2] .. (#fx > 0 and (" (" .. table.concat(fx, ", ") .. ")") or ""), o[3], why and { disabled = why } or nil })
 			end
 			optRow(grp[2], opts, d.interior[grp[1]], function(v)
 				change(function(dd)
@@ -1220,11 +1288,12 @@ local function panelDesign(g: any, d: any, body: Instance)
 			dd.paint[target] = hsv2hex(v, math.max(cs, 0.05), math.max(cv, 0.05))
 		end, final)
 	end, { color = Color3.fromHex(hsv2hex(h, 0.9, 1)), name = "Tono" })
+	local maxW = DesignCalc.maxWheel(g)
 	local finishes = {}
 	for _, k in Catalog.FINISH_ORDER do
 		local f = Catalog.FINISHES[k]
-		local locked = f.research and not DesignCalc.has(g, f.research)
-		table.insert(finishes, { k, k, f.unit, locked and { disabled = "Requiere investigar «" .. DesignCalc.researchName(f.research) .. "»" } or nil })
+		local why = DesignCalc.finishBlock(g, k)
+		table.insert(finishes, { k, k, f.unit, why and { disabled = why } or nil })
 	end
 	section("Pintura", {
 		target == "secondary" and Ui.text("El color secundario pinta el techo, los pilares, los faldones y los vinilos.", { size = Ui.S.xs, color = T.mut }) or nil,
@@ -1279,9 +1348,9 @@ local function panelDesign(g: any, d: any, body: Instance)
 				dd.wheels.rim = c
 			end)
 		end, "Llanta") }, 6),
-		labeledSlider("Tamaño de las ruedas", d.wheels.size .. "″ · +" .. Util.money(math.max(0, d.wheels.size - 17) * 150) .. "/u", Ui.slider(d.wheels.size, 16, 22, 1, function(v: number, final: boolean)
+		labeledSlider("Tamaño de las ruedas (hasta " .. maxW .. "″ en " .. Rules.year(g) .. ")", d.wheels.size .. "″ · +" .. Util.money(math.max(0, d.wheels.size - 15) * 150) .. "/u", Ui.slider(d.wheels.size, Catalog.WHEEL_SIZE.min, maxW, 1, function(v: number, final: boolean)
 			liveEdit(function(dd)
-				dd.wheels.size = math.clamp(Util.round(v), 16, 22)
+				dd.wheels.size = math.clamp(Util.round(v), Catalog.WHEEL_SIZE.min, maxW)
 			end, final)
 		end, { name = "Rodado" })),
 		Ui.col({ Ui.fl("Pinzas de freno"), swatchRow(Catalog.CALIPER_COLORS, d.caliper, function(c)
@@ -1304,7 +1373,8 @@ local function panelDesign(g: any, d: any, body: Instance)
 	for _, grp in BODY_LABELS do
 		local opts = {}
 		for _, o in Catalog.BODY_OPTS[grp[1]] do
-			table.insert(opts, { o[1], o[2], o[3] })
+			local why = DesignCalc.optionBlock(g, Catalog.bodyOpt(grp[1], o[1]))
+			table.insert(opts, { o[1], o[2], o[3], why and { disabled = why } or nil })
 		end
 		table.insert(bodyRows, optRow(grp[2], opts, d.body[grp[1]], function(v)
 			change(function(dd)
@@ -1331,31 +1401,21 @@ local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 	local items = DesignCalc.devItems(g, d)
 	local pend = DesignCalc.devPending(g, d)
 	local saved = e.sourceId ~= nil and not e.dirty
-	local unit = nil
-	for _, u in g.units do
-		if u.designId == e.sourceId and u.status == "almacen" then
-			unit = u
-			break
-		end
-	end
 	local margin = c.price - c.unitCost
+	local est = Rules.designSalesEstimate(g, c, d, c.price)
 	local paintName = Catalog.colorName(Catalog.PAINTS, d.paint.primary) or d.paint.primary
 	Ui.card({
 		Ui.text(d.name, { size = 17, weight = W.bold }),
-		Ui.text(d.brand .. " · " .. b.name .. " (" .. Catalog.TYPES[b.type] .. ") · " .. d.generation .. " · " .. d.chassis .. " · " .. d.segment .. " · objetivo " .. string.lower(d.objective), { size = Ui.S.sm, color = T.mut }),
+		Ui.text(d.brand .. " · " .. b.name .. " (" .. Catalog.TYPES[b.type] .. ") · " .. tostring(d.generation) .. " · " .. d.chassis .. " · " .. d.segment .. " · objetivo " .. string.lower(d.objective), { size = Ui.S.sm, color = T.mut }),
 		Ui.text("Pintura " .. paintName .. " " .. string.lower(d.paint.finish) .. " · secundario " .. d.paint.secondary .. " · llantas " .. d.wheels.size .. "″ · " .. (d.spoiler and "con alerón" or "sin alerón") .. " · calidad " .. Catalog.QUALITY_TIERS[d.quality + 1], { size = Ui.S.sm, color = T.mut }),
 	}, { gap = 4, name = "Resumen" }).Parent = body
-	local mats = {}
-	for _, k in Util.keys(c.mats) do
-		table.insert(mats, c.mats[k] .. " " .. string.lower(Catalog.matLabel(k)))
-	end
 	section("Economía del modelo", {
 		Ui.grid({
 			(Ui.kv("Fabricación por unidad", Util.money(c.unitCost))),
 			(Ui.kv("Precio recomendado", Util.money(c.price))),
 			(Ui.kv("Margen por unidad", (margin >= 0 and "▲ " or "▼ ") .. Util.money(margin), { color = margin >= 0 and T.gr or T.re2 })),
-			(Ui.kv("Producción", Util.gameDuration(c.build), { sub = "de juego por unidad a velocidad base" })),
-			(Ui.kv("Materiales por unidad", table.concat(mats, ", "), { valueSize = Ui.S.sm })),
+			(Ui.kv("Ventas estimadas", Util.num(est.rate, 1) .. " por minuto", { color = T.gr, sub = "al precio recomendado, hoy" })),
+			(Ui.kv("Atractivo", Util.round(est.appeal) .. " (el mercado espera " .. Util.round(est.baseline) .. ")", { color = est.appeal >= est.baseline and T.gr or T.ye })),
 			(Ui.kv("Calidad", c.quality .. " / 100")),
 		}, 2, nil, 10),
 	}, 8).Parent = body
@@ -1384,18 +1444,11 @@ local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 	if c.hp < 200 and (d.objective == "Deportivo" or d.objective == "Competición") then
 		table.insert(warns, "Con " .. c.hp .. " hp va a costar convencer a clientes que buscan potencia.")
 	end
-	if margin < 3000 then
-		table.insert(warns, "El margen por unidad es bajo: subí el precio en el concesionario o bajá costos.")
+	if margin < c.unitCost * 0.2 then
+		table.insert(warns, "El margen por unidad es bajo: al lanzar el lote podés subir el precio, o bajá costos.")
 	end
-	local miss = {}
-	for _, k in Util.keys(c.mats) do
-		local have = g.materials[k] or 0
-		if have < c.mats[k] then
-			table.insert(miss, (c.mats[k] - have) .. " de " .. string.lower(Catalog.matLabel(k)))
-		end
-	end
-	if #miss > 0 then
-		table.insert(warns, "Hoy no tenés materiales para fabricar una unidad: faltan " .. table.concat(miss, ", ") .. ".")
+	if est.appeal < est.baseline then
+		table.insert(warns, "El atractivo (" .. Util.round(est.appeal) .. ") está por debajo de lo que espera el mercado en " .. Rules.year(g) .. " (" .. Util.round(est.baseline) .. "): va a vender lento frente a los rivales.")
 	end
 	if #warns > 0 then
 		local nodes = {}
@@ -1408,36 +1461,15 @@ local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 	tpl = Ui.button("Guardar como plantilla", "default", function()
 		App.request("saveDesign", { draft = e.draft, template = true }, { button = tpl })
 	end, { small = true, name = "GuardarPlantilla" })
-	local one
-	one = Ui.button("Crear una unidad", "default", function()
-		-- Como la V3: una unidad con prioridad alta en la línea con menos órdenes.
-		local best, bn = 1, math.huge
-		for l = 1, g.derived.caps.lines do
-			local n = 0
-			for _, o in g.production.orders do
-				if o.line == l then
-					n += 1
-				end
-			end
-			if n < bn then
-				best, bn = l, n
-			end
-		end
-		App.request("createOrder", { designId = e.sourceId, qty = 1, line = best, priority = "alta" }, { button = one })
-	end, { small = true, disabled = not saved, why = "Guardá el diseño primero", name = "CrearUnidad" })
 	section("Acciones", {
 		Ui.grid({
 			tpl,
 			Ui.button("Probar el vehículo", "default", function()
 				App.openDialog("testDrive", {})
 			end, { small = true, name = "ProbarVehiculo" }),
-			one,
-			Ui.button("Enviar a producción", "default", function()
-				App.openDialog("order", { designId = e.sourceId, wide = true })
-			end, { small = true, disabled = not saved, why = "Guardá el diseño primero", name = "EnviarProduccion" }),
-			Ui.button("Publicar en el mercado", "default", function()
-				App.openDialog("publish", { unitId = unit and unit.id })
-			end, { small = true, disabled = unit == nil, why = "Necesitás una unidad terminada de este diseño en el almacén", name = "PublicarMercado" }),
+			Ui.button("Lanzar lote", "p", function()
+				App.openDialog("lot", { designId = e.sourceId, wide = true })
+			end, { small = true, disabled = not saved, why = "Guardá el diseño primero", name = "LanzarLote" }),
 			Ui.button("Cancelar cambios", "d", function()
 				App.openDialog("confirm", {
 					title = "¿Descartar los cambios?",
@@ -1454,8 +1486,8 @@ local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 				})
 			end, { small = true, disabled = not e.dirty and e.sourceId ~= nil, why = "No hay cambios", name = "CancelarCambios" }),
 		}, 2, nil, 8),
-		not saved and Ui.text("Crear una unidad, producir y publicar requieren el diseño guardado.", { size = Ui.S.xs, color = T.mut }) or nil,
-		(saved and not unit) and Ui.text("Para publicar, primero fabricá una unidad.", { size = Ui.S.xs, color = T.mut }) or nil,
+		not saved and Ui.text("Para lanzar un lote, primero guardá el diseño.", { size = Ui.S.xs, color = T.mut }) or nil,
+		saved and Ui.text("El lote elige cuántas unidades fabricar y a qué precio venderlas.", { size = Ui.S.xs, color = T.mut }) or nil,
 	}, 8).Parent = body
 	local sb
 	sb = Ui.button((e.sourceId and "Guardar cambios" or "Guardar diseño") .. (pend > 0 and (" · " .. Util.money(pend)) or ""), "p", function()
@@ -1778,7 +1810,7 @@ function Screen.build(parent: Instance)
 					Ui.inline(Util.money(c.unitCost), { size = 17, weight = W.bold }),
 					Ui.text("Desarrollo pendiente (una vez)", { size = Ui.S.xs, color = T.mut }),
 					Ui.inline(pend > 0 and Util.money(pend) or "Nada pendiente", { size = Ui.S.base, weight = W.bold, color = pend > 0 and T.or_ or T.gr }),
-					Ui.text("Producción: " .. Util.gameDuration(c.build) .. " de juego", { size = Ui.S.xs, color = T.mut }),
+					Ui.text("Ventas estimadas: " .. Util.num(Rules.designSalesEstimate(g, c, d, c.price).rate, 1) .. " por minuto", { size = Ui.S.xs, color = T.mut }),
 				}, { Name = "CostosEditor", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = GLASS, BackgroundTransparency = 0.1, Corner = 12, Pad = 14, List = { dir = "V", gap = 4 } }),
 				Ui.text("Arrastrá sobre el auto para girarlo y usá la rueda o el pellizco para acercar.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }),
 			}, 14, { Name = "HerramientasEditor", Position = UDim2.fromOffset(phone and 8 or 14, phone and 64 or 78), Size = UDim2.fromOffset(190, 0) })

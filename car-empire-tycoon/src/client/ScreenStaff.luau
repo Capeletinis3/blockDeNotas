@@ -1,5 +1,7 @@
 --!strict
--- Personal (SCREENS.personal de la V3): equipo (asignación, energía, descanso, despido) y candidatos.
+-- Personal (SCREENS.personal de la V3): equipo (asignación y despido) y candidatos. El personal es un
+-- extra opcional: suma velocidad a la fábrica (máx. +30 %), PI al laboratorio (máx. +30 %) y alcance
+-- comercial (máx. +25 %). No hay cansancio ni descansos que atender.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -21,20 +23,10 @@ local Screen = {
 }
 
 function Screen.head(g: any): { Instance }
-	return { Ui.chip(#g.employees .. "/" .. g.derived.caps.staff .. " empleados", "cn"), Ui.chip("Salarios " .. Util.money(Rules.salaries(g)) .. "/día", "cy") }
+	return { Ui.chip(#g.employees .. "/" .. g.derived.caps.staff .. " empleados", "cn"), Ui.chip("Salarios " .. Util.money(Rules.salaries(g)) .. "/mes", "cy") }
 end
 
 local function empRow(g: any, e: any): Frame
-	local energyBar, fill = Ui.bar(e.energy, e.energy < 20 and T.re or (e.energy < 50 and T.ye or T.gr))
-	local energyLabel = Ui.inline(math.floor(e.energy + 0.5) .. "%", { size = Ui.S.xs, weight = W.bold })
-	App.live(function(gg: any)
-		for _, x in gg.employees do
-			if x.id == e.id then
-				Ui.setBar(fill, x.energy)
-				energyLabel.Text = math.floor(x.energy + 0.5) .. "%"
-			end
-		end
-	end)
 	-- <select> «Puesto»: ★ marca el rol ideal y «(completo)» los puestos sin lugar.
 	local options = { { "", "Sin asignar" } }
 	local function add(id: string, label: string, max: number)
@@ -48,28 +40,21 @@ local function empRow(g: any, e: any): Frame
 	for _, d in Catalog.DEPARTMENTS do
 		add(d[1], d[2] .. (d[3] == e.role and " ★" or ""), Catalog.RULES.assignMax.dept)
 	end
-	local resting = e.status == "descanso"
-	local chipText = resting and "Descansando" or (e.energy < 20 and "Agotado/a" or "Activo/a")
-	local chipKind = resting and "cy" or (e.energy < 20 and "cr" or "cg")
+	local assigned = e.assign ~= nil and e.assign ~= ""
 	return Ui.card({
 		Ui.row({
 			Ui.ico("users", T.pink, Ui.hex("#FF78AA"), 32, { alpha = 0.14, iconSize = 16 }),
 			Ui.grow(Ui.col({
 				Ui.text(e.name, { size = Ui.S.base, weight = W.bold }),
-				Ui.text(e.role .. " · nivel " .. e.level .. " · habilidad " .. e.skill .. " · " .. Util.money(e.salary) .. "/día", { size = Ui.S.xs, color = T.mut }),
+				Ui.text(e.role .. " · nivel " .. e.level .. " · habilidad " .. e.skill .. " · " .. Util.money(e.salary) .. "/mes", { size = Ui.S.xs, color = T.mut }),
 			}, 2)),
-			Ui.chip(chipText, chipKind),
+			Ui.chip(assigned and "Asignado/a" or "Sin puesto", assigned and "cg" or "cy"),
 		}, 10, { wrap = true }),
 		Ui.row({
-			Ui.inline("Energía", { size = Ui.S.xs, color = T.mut, width = 56 }),
-			Ui.grow(energyBar, { Size = UDim2.new(0, 0, 0, 7) }),
-			energyLabel,
 			Ui.selectF("Puesto", e.assign or "", options, function(v: any)
 				App.request("assign", { employeeId = e.id, area = v })
-			end, { height = 34, name = "Puesto_" .. e.id, disabled = resting, why = "Está descansando" }),
-			Ui.button(resting and "Volver al trabajo" or "Dar descanso", "default", function()
-				App.request("toggleRest", { employeeId = e.id })
-			end, { small = true, disabled = not resting and e.energy >= 100, why = "Tiene la energía completa" }),
+			end, { height = 34, name = "Puesto_" .. e.id }),
+			Ui.spacer(),
 			Ui.button("Despedir", "q", function()
 				App.openDialog("confirm", {
 					title = "¿Despedir a " .. e.name .. "?",
@@ -91,7 +76,7 @@ function Screen.build(main: Frame, side: Frame)
 	tabs.Parent = main
 	if tab == "team" then
 		if #g.employees == 0 then
-			Ui.empty("users", "Todavía no contrataste a nadie. Sin personal, las líneas trabajan al 50%.", Ui.button("Ver candidatos", "p", function()
+			Ui.empty("users", "Todavía no contrataste a nadie. El personal es opcional: suma velocidad, PI y alcance comercial.", Ui.button("Ver candidatos", "p", function()
 				App.ui.tabs.personal = "hire"
 				App.forceRender()
 			end, { small = true })).Parent = main
@@ -113,7 +98,7 @@ function Screen.build(main: Frame, side: Frame)
 				Ui.ico("users", T.pink, Ui.hex("#FF78AA"), 32, { alpha = 0.14, iconSize = 16 }),
 				Ui.grow(Ui.col({
 					Ui.text(c.name, { size = Ui.S.base, weight = W.bold }),
-					Ui.text(c.role .. " · nivel " .. c.level .. " · habilidad " .. c.skill .. " · salario " .. Util.money(c.salary) .. "/día", { size = Ui.S.xs, color = T.mut }),
+					Ui.text(c.role .. " · nivel " .. c.level .. " · habilidad " .. c.skill .. " · salario " .. Util.money(c.salary) .. "/mes", { size = Ui.S.xs, color = T.mut }),
 				}, 2)),
 				Ui.inline("Costo de contratación", { size = Ui.S.xs, color = T.mut }),
 				Ui.inline(Util.money(c.fee), { size = Ui.S.base, weight = W.bold }),
@@ -124,7 +109,7 @@ function Screen.build(main: Frame, side: Frame)
 		more = Ui.button("Buscar más candidatos · " .. Util.money(Catalog.RULES.moreCandidatesCost), "default", function()
 			App.request("moreCandidates", nil, { button = more })
 		end, { small = true, disabled = g.money < Catalog.RULES.moreCandidatesCost, why = "Fondos insuficientes" })
-		Ui.row({ more, Ui.text("Cada día de juego aparecen candidatos nuevos si quedan menos de 3.", { size = Ui.S.xs, color = T.mut }) }, 10, { wrap = true }).Parent = main
+		Ui.row({ more, Ui.text("Cada mes de juego aparecen candidatos nuevos si quedan menos de 3.", { size = Ui.S.xs, color = T.mut }) }, 10, { wrap = true }).Parent = main
 	end
 
 	local rows: { Instance? } = { Ui.lbl("Áreas y efecto actual") }
@@ -141,7 +126,7 @@ function Screen.build(main: Frame, side: Frame)
 	for _, d in Catalog.DEPARTMENTS do
 		areaRow(d[1], d[2], d[3])
 	end
-	table.insert(rows, Ui.text("El número de la derecha es el aporte (habilidad × afinidad con el puesto; la mitad si no es el rol ideal o si está agotado). Cada estación admite " .. Catalog.RULES.assignMax.station .. " personas y cada departamento " .. Catalog.RULES.assignMax.dept .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }))
+	table.insert(rows, Ui.text("El número de la derecha es el aporte (habilidad × afinidad con el puesto; la mitad si no es el rol ideal). Estaciones: +5 % de velocidad por punto (máx. +30 %). Laboratorio: más PI (máx. +30 %). Ventas y marketing: más alcance (máx. +25 %). Cada estación admite " .. Catalog.RULES.assignMax.station .. " personas y cada departamento " .. Catalog.RULES.assignMax.dept .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }))
 	Ui.card(rows, { gap = 6 }).Parent = side
 end
 

@@ -29,8 +29,8 @@ end
 -- id, etiqueta, ícono, color, fondo (con su transparencia rgba)
 Screen.NAV = {
 	{ "editor", "Diseño", "pen", hex("#B3AAFF"), T.vi, 0.2 },
-	{ "autos", "Mis autos", "car", hex("#8DB8FF"), T.bl, 0.18 },
-	{ "fabrica", "Fábrica", "factory", hex("#FFB36B"), hex("#FFA050"), 0.16 },
+	{ "autos", "Catálogo", "car", hex("#8DB8FF"), T.bl, 0.18 },
+	{ "fabrica", "Producción", "factory", hex("#FFB36B"), hex("#FFA050"), 0.16 },
 	{ "ventas", "Ventas", "tag", T.gr, T.gr, 0.15 },
 	{ "mercado", "Mercado", "globe", T.ye, T.ye, 0.15 },
 	{ "investigacion", "Investigación", "flask", T.cyan, hex("#50D2E6"), 0.15 },
@@ -42,68 +42,55 @@ Screen.MORE = {
 	{ "estadisticas", "Estadísticas y finanzas", "chart" },
 }
 
+local function realDesigns(g: any): number
+	local n = 0
+	for _, d in g.designs do
+		if not d.template then
+			n += 1
+		end
+	end
+	return n
+end
+Screen.realDesigns = realDesigns
+
+local function researchFree(g: any): boolean
+	if g.research.active then
+		return false
+	end
+	for _, cat in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[cat].nodes do
+			if Rules.researchState(g, n) == "disponible" then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- navCounts de la V3: { texto, color de fondo, transparencia, color de texto }
 function Screen.counts(g: any): { [string]: any }
 	local out = {}
-	local ready = 0
-	for _, u in g.units do
-		if u.status == "almacen" then
-			ready += 1
+	local selling, noFunds, producing = 0, 0, 0
+	for _, l in g.lots do
+		if Rules.lotAvailable(l) > 0 then
+			selling += 1
+		end
+		if l.prodState == "sin fondos" then
+			noFunds += 1
+		elseif l.prodState == "produciendo" then
+			producing += 1
 		end
 	end
-	if ready > 0 then
-		out.autos = { ready .. " listos", T.gr, 0.82, T.gr }
+	if noFunds > 0 then
+		out.fabrica = { "sin fondos", T.re, 0.8, T.re2 }
+	elseif producing > 0 then
+		out.fabrica = { producing .. " en curso", hex("#FFA050"), 0.82, hex("#FFB36B") }
 	end
-	local stopped = 0
-	for _, o in g.production.orders do
-		if o.status == "detenida" then
-			stopped += 1
-		end
+	if selling > 0 then
+		out.ventas = { selling .. " en venta", T.gr, 0.82, T.gr }
 	end
-	if stopped > 0 then
-		out.fabrica = { stopped .. " detenida" .. (stopped > 1 and "s" or ""), T.re, 0.8, T.re2 }
-	end
-	local off = 0
-	for _, c in g.customers do
-		if c.state == "oferta" then
-			off += 1
-		end
-	end
-	if off > 0 then
-		out.ventas = { off .. " oferta" .. (off > 1 and "s" or ""), T.bl, 0.78, T.bl2 }
-	end
-	local moff = 0
-	for _, o in g.market.offers do
-		if o.status == "pendiente" then
-			moff += 1
-		end
-	end
-	if moff > 0 then
-		out.mercado = { moff .. " ofertas", T.ye, 0.82, T.ye }
-	end
-	if not g.research.active then
-		for _, cat in Catalog.RESEARCH_ORDER do
-			local found = false
-			for _, n in Catalog.RESEARCH[cat].nodes do
-				if Rules.researchState(g, n) == "disponible" then
-					found = true
-					break
-				end
-			end
-			if found then
-				out.investigacion = { "libre", T.vi, 0.78, T.vi3 }
-				break
-			end
-		end
-	end
-	local tired = 0
-	for _, e in g.employees do
-		if e.energy < 20 and e.status == "activo" then
-			tired += 1
-		end
-	end
-	if tired > 0 then
-		out.personal = { tired .. " cansado" .. (tired > 1 and "s" or ""), T.ye, 0.82, T.ye }
+	if researchFree(g) then
+		out.investigacion = { "libre", T.vi, 0.78, T.vi3 }
 	end
 	if #g.designs == 0 then
 		out.editor = { "Empezá acá", T.vi, 0.75, T.vi3 }
@@ -111,40 +98,43 @@ function Screen.counts(g: any): { [string]: any }
 	return out
 end
 
--- Botón principal (nextAction de la V3)
+-- Botón principal (nextAction de la V3): el siguiente paso del ciclo diseñar → lote → vender → mejorar.
 function Screen.nextAction(g: any): any
 	local ed = App.ui.editor
-	if #g.designs == 0 then
+	if realDesigns(g) == 0 then
 		return { label = ed and "Continuar diseño" or "Diseñar mi primer auto", sub = ed and "Tenés un proyecto sin guardar" or "Abrí el escritorio de diseño", go = "editor", key = "1" }
 	end
 	if ed and ed.dirty then
 		return { label = "Continuar diseño", sub = ed.draft.name .. " tiene cambios sin guardar", go = "editor", key = "1" }
 	end
-	for _, c in g.customers do
-		if c.state == "oferta" then
-			return { label = "Abrir concesionario", sub = c.name .. " hizo una oferta", go = "ventas", key = "4" }
+	if #g.lots == 0 then
+		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3" }
+	end
+	for _, l in g.lots do
+		if l.prodState == "sin fondos" then
+			return { label = "Ver producción", sub = l.design.name .. " espera dinero para seguir", go = "fabrica", key = "3" }
 		end
 	end
-	local ready = 0
-	for _, u in g.units do
-		if u.status == "almacen" then
-			ready += 1
+	if researchFree(g) and g.counters.researchDone == 0 then
+		return { label = "Investigar", sub = "Tu sede genera " .. Util.num(Rules.piPerMinute(g), 0) .. " PI por minuto", go = "investigacion", key = "6" }
+	end
+	local nx = Rules.nextSede(g)
+	if nx then
+		local ok = true
+		for _, c in Rules.expandChecks(g) do
+			ok = ok and c[1]
+		end
+		if ok then
+			return { label = "Ampliar la sede", sub = nx.name .. " · " .. Util.money(nx.cost), go = "compania", key = "8" }
 		end
 	end
-	if ready > 0 then
-		return { label = "Enviar autos al salón", sub = ready .. " unidades esperando", go = "autos", key = "2" }
-	end
-	local n = #g.production.orders
-	if n > 0 then
-		return { label = "Ver producción", sub = n .. " orden" .. (n > 1 and "es" or "") .. " en curso", go = "fabrica", key = "3" }
-	end
-	local designs = 0
-	for _, d in g.designs do
-		if not d.template then
-			designs += 1
+	local selling = 0
+	for _, l in g.lots do
+		if l.saleState == "en venta" then
+			selling += 1
 		end
 	end
-	return { label = "Fabricar un auto", sub = "Elegí uno de tus " .. designs .. " diseños", dialog = "order", key = "3" }
+	return { label = "Centro de ventas", sub = selling .. " modelo" .. (selling == 1 and "" or "s") .. " a la venta", go = "ventas", key = "4" }
 end
 function Screen.runNext(g: any)
 	local cta = Screen.nextAction(g)
@@ -157,36 +147,16 @@ end
 
 -- topAlert de la V3
 function Screen.topAlert(g: any): any
-	for _, o in g.production.orders do
-		if o.status == "detenida" then
-			return { title = "Producción detenida", text = o.reason, go = "fabrica", icon = "warn", col = T.re2, bg = T.re, a = 0.15, border = T.re, ba = 0.5 }
+	for _, l in g.lots do
+		if l.prodState == "sin fondos" then
+			return { title = "Producción en pausa", text = l.design.name .. ": no alcanza el dinero para la próxima unidad. Sigue sola cuando entre dinero.", go = "fabrica", icon = "warn", col = T.re2, bg = T.re, a = 0.15, border = T.re, ba = 0.5 }
 		end
 	end
-	local ready = 0
-	for _, u in g.units do
-		if u.status == "almacen" then
-			ready += 1
-		end
+	if #g.lots == 0 and realDesigns(g) > 0 then
+		return { title = "La fábrica está parada", text = "Lanzá un lote para empezar a vender.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5 }
 	end
-	if ready > 0 then
-		return { title = ready .. " vehículo" .. (ready > 1 and "s" or "") .. " listo" .. (ready > 1 and "s" or ""), text = "Esperan en el almacén. Enviálos al salón o publicálos.", go = "autos", icon = "check", col = T.gr, bg = T.gr, a = 0.15, border = T.gr, ba = 0.5 }
-	end
-	local off = 0
-	for _, c in g.customers do
-		if c.state == "oferta" then
-			off += 1
-		end
-	end
-	if off > 0 then
-		return { title = off .. " cliente" .. (off > 1 and "s" or "") .. " con oferta", text = "Respondé antes de que se vayan.", go = "ventas", icon = "tag", col = T.bl2, bg = T.bl, a = 0.18, border = T.bl, ba = 0.5 }
-	end
-	if not g.research.active and g.rp >= 20 then
-		return { title = "Laboratorio libre", text = "Tenés " .. math.floor(g.rp) .. " PI para investigar.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
-	end
-	for _, e in g.employees do
-		if e.energy < 20 and e.status == "activo" then
-			return { title = e.name .. " está agotado/a", text = "Rinde la mitad. Dale un descanso.", go = "personal", icon = "users", col = T.ye, bg = T.ye, a = 0.15, border = T.ye, ba = 0.5 }
-		end
+	if researchFree(g) and g.rp >= Rules.piCap(g) - 0.5 then
+		return { title = "Laboratorio sin proyecto", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados (máximo). Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
 	end
 	return nil
 end
@@ -333,12 +303,9 @@ local function hud1(g: any): Frame
 
 	local items: { Instance? } = { brand }
 	if deskOnly then
-		local f, v, k = res("cal", T.bl2, T.bl, 0.16, "FECHA · " .. Util.clock(g.time.minute), Util.gameDate(g.time.day), { name = "Fecha" })
+		local f, v = res("cal", T.bl2, T.bl, 0.16, "FECHA", Util.gameDate(g.time.day), { name = "Fecha" })
 		App.live(function(gg: any)
 			v.Text = Util.gameDate(gg.time.day)
-			if k then
-				k.Text = "FECHA · " .. Util.clock(gg.time.minute)
-			end
 		end)
 		table.insert(items, f)
 	end
@@ -350,9 +317,12 @@ local function hud1(g: any): Frame
 		table.insert(items, f)
 	end
 	if not phone then
-		local f, v = res("flask", T.vi2, T.vi, 0.18, "INVESTIGACIÓN", Util.num(g.rp) .. " PI", { name = "PI" })
+		local function piText(gg: any): string
+			return Util.num(math.floor(gg.rp)) .. " PI · " .. Util.num(gg.derived.piPerMinute, gg.derived.piPerMinute < 10 and 1 or 0) .. "/min"
+		end
+		local f, v = res("flask", T.vi2, T.vi, 0.18, "INVESTIGACIÓN", piText(g), { name = "PI" })
 		App.live(function(gg: any)
-			v.Text = Util.num(gg.rp) .. " PI"
+			v.Text = piText(gg)
 		end)
 		table.insert(items, f)
 		if deskWide then
@@ -698,11 +668,12 @@ local function objectiveBody(g: any): Frame?
 	local v = Rules.missionValue(g, m)
 	local st = Rules.missionState(g, m)
 	local tut = m.kind == "tutorial" and not g.tutorial.skipped
-	local money = m.counter == "marginToday"
-	local bar = Ui.bar(math.min(1, v / m.goal) * 100, st == "lista" and T.gr or nil)
+	local money = m.counter == "marginYear"
+	local goal = Rules.missionGoal(g, m)
+	local bar = Ui.bar(math.min(1, v / goal) * 100, st == "lista" and T.gr or nil)
 	local nodes: { Instance? } = {
-		Ui.row({ Ui.grow(bar, { Size = UDim2.new(0, 0, 0, 7) }), Ui.inline((money and Util.money(math.min(v, m.goal)) or tostring(math.min(v, m.goal))) .. "/" .. (money and Util.money(m.goal) or tostring(m.goal)), { size = Ui.S.sm, weight = W.bold }) }, 10),
-		Ui.between("Recompensa", Rules.rewardText(m.reward), { size = Ui.S.xs, color = T.gr }),
+		Ui.row({ Ui.grow(bar, { Size = UDim2.new(0, 0, 0, 7) }), Ui.inline((money and Util.money(math.min(v, goal)) or Util.num(math.min(v, goal))) .. "/" .. (money and Util.money(goal) or Util.num(goal)), { size = Ui.S.sm, weight = W.bold }) }, 10),
+		Ui.between("Recompensa", Rules.rewardText(Rules.missionReward(g, m)), { size = Ui.S.xs, color = T.gr }),
 	}
 	if st == "lista" then
 		local claim
@@ -740,7 +711,12 @@ local function leftCards(g: any): { Instance }
 	local tut = Rules.currentTutorial(g)
 	local inTut = tut ~= nil and not g.tutorial.skipped
 	local m = Screen.objective(g)
-	local tutIndex = 0
+	local tutIndex, tutTotal = 0, 0
+	for _, x in Catalog.MISSIONS do
+		if x.kind == "tutorial" then
+			tutTotal += 1
+		end
+	end
 	if inTut then
 		for _, x in Catalog.MISSIONS do
 			if x.kind == "tutorial" then
@@ -754,22 +730,21 @@ local function leftCards(g: any): { Instance }
 	local coll = App.ui.collapsed
 	-- Objetivo
 	local obj = hcCard("Objetivo", {
-		cardHead("obj", "flag", T.vi2, T.vi, 0.2, inTut and ("Tutorial · paso " .. tutIndex .. " de 5") or "Objetivo actual", m.title),
+		cardHead("obj", "flag", T.vi2, T.vi, 0.2, inTut and ("Tutorial · paso " .. tutIndex .. " de " .. tutTotal) or "Objetivo actual", m.title),
 		(not coll.obj) and hb({ Ui.text(m.desc, { size = Ui.S.sm, color = T.mut, lineHeight = 1.4 }), objectiveBody(g) }) or nil,
 	}, inTut and T.vi or nil, inTut and 0.4 or nil)
 	table.insert(out, obj)
-	-- Últimos 7 días
-	local f = Rules.finance(g, 7)
+	-- Últimos 3 meses de juego (≈ 2,75 minutos reales a 1×)
+	local f = Rules.finance(g, 3)
 	local net = f.cash
 	local week = hcCard("Semana", {
-		cardHead("week", "chart", T.gr, T.gr, 0.15, "Últimos 7 días de juego", f.units .. " auto" .. (f.units == 1 and "" or "s") .. " vendido" .. (f.units == 1 and "" or "s")),
+		cardHead("week", "chart", T.gr, T.gr, 0.15, "Últimos 3 meses", Util.num(f.units) .. " auto" .. (f.units == 1 and "" or "s") .. " vendido" .. (f.units == 1 and "" or "s")),
 		(not coll.week) and hb({
-			Ui.between("Ingresos por venta", Util.money(f.revenue)),
-			Ui.between("Costo de lo vendido", Util.money(-f.cogs), { color = T.or_ }),
-			Ui.between("Margen bruto", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
+			Ui.between("Ingresos por venta", Util.money(f.revenue), { color = T.gr }),
+			Ui.between("Fabricación pagada", Util.money(-f.manufacturing), { color = T.or_ }),
+			Ui.between("Margen de lo vendido", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
 			Ui.hr(),
 			Ui.between("Flujo de caja neto", (net >= 0 and "▲ +" or "▼ ") .. Util.money(math.abs(net)), { size = 15, leftColor = T.tx, leftWeight = W.bold, color = net >= 0 and T.gr or T.re2 }),
-			Ui.between("Cuota de mercado estimada", Util.num(f.share, 1) .. "%"),
 			f.demo and Ui.text("Incluye ventas de demostración", { size = Ui.S.xs, color = T.ye }) or nil,
 			Ui.button("Ver estadísticas", "default", function()
 				App.go("estadisticas")
@@ -811,7 +786,7 @@ local function leftCards(g: any): { Instance }
 		local pct = Util.round((s1 + s2 + s3) / 3 * 100)
 		sedeBody = Ui.col({
 			Ui.row({ Ui.grow((Ui.bar(pct, T.ye))), Ui.inline(pct .. "%", { size = Ui.S.sm, weight = W.bold }) }, 10),
-			Ui.text("Próxima: <b><font color=\"#F5F7FA\">" .. nx.name .. "</font></b> · " .. g.counters.unitsSold .. "/" .. nx.req.sold .. " autos vendidos · reputación " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.req.rep, 1) .. " · costo " .. Util.money(nx.cost), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+			Ui.text("Próxima: <b><font color=\"#F5F7FA\">" .. nx.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.req.sold) .. " autos vendidos · reputación " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.req.rep, 1) .. " · costo " .. Util.money(nx.cost) .. " · " .. nx.pi .. " PI/min", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 		}, 9)
 	else
 		sedeBody = Ui.text("Sede máxima alcanzada.", { size = Ui.S.sm })
@@ -823,42 +798,41 @@ local function leftCards(g: any): { Instance }
 	return out
 end
 
-local function saleCards(g: any, list: { any }): { Instance }
+local function saleCards(list: { any }): { Instance }
 	local out = {}
 	if #list == 0 then
 		table.insert(out, hcCard("SinVentas", {
 			Ui.col({
 				Ui.icon("car", 22, T.mut),
 				Ui.text("Todavía no tenés autos a la venta", { size = Ui.S.sm, weight = W.bold, align = "C" }),
-				Ui.text("Fabricá una unidad y enviala al salón o publicala en el mercado.", { size = Ui.S.xs, color = T.mut, align = "C" }),
+				Ui.text("Lanzá un lote en Producción: cada unidad terminada se vende sola.", { size = Ui.S.xs, color = T.mut, align = "C" }),
 			}, 8, { h = "C", Pad = 22 }),
 		}))
 		return out
 	end
 	local show = App.ui.allSale and #list or math.min(4, #list)
 	for i = 1, show do
-		local u = list[i]
-		local rev, mar, sold = 0, 0, 0
-		for _, s in g.sales do
-			if u.designId and s.designId == u.designId then
-				rev += s.price
-				mar += s.margin
-				sold += 1
+		local l = list[i]
+		local function col3(label: string, value: string, color: Color3?): (Frame, TextLabel)
+			local v = Ui.text(value, { size = Ui.S.xs, weight = W.bold, color = color })
+			return Ui.col({ Ui.text(label, { size = Ui.S.xs, color = T.mut }), v }, 1), v
+		end
+		local c1, v1 = col3("Disponibles", Util.num(Rules.lotAvailable(l)))
+		local c2, v2 = col3("Vendidos", Util.num(l.sold) .. "/" .. Util.num(l.qty))
+		local c3, v3 = col3("Ventas/min", "—", T.gr)
+		local bar, fill = Ui.bar(l.sold / math.max(1, l.qty) * 100, T.gr)
+		App.live(function(gg: any)
+			for _, x in gg.lots do
+				if x.id == l.id then
+					v1.Text = Util.num(Rules.lotAvailable(x))
+					v2.Text = Util.num(x.sold) .. "/" .. Util.num(x.qty)
+					v3.Text = Util.num(Rules.lotSalesRate(gg, x), 1)
+					Ui.setBar(fill, x.sold / math.max(1, x.qty) * 100)
+				end
 			end
-		end
-		local stock = 0
-		for _, x in g.units do
-			if x.status ~= "vendido" and ((u.designId and x.designId == u.designId) or x.id == u.id) then
-				stock += 1
-			end
-		end
-		local dem = Rules.interest(g, u, nil)
-		local rating = Util.num(math.clamp(2.5 + (u.quality or 50) / 40, 1, 5), 1)
-		local function col3(label: string, value: string, color: Color3?)
-			return Ui.col({ Ui.text(label, { size = Ui.S.xs, color = T.mut }), Ui.text(value, { size = Ui.S.xs, weight = W.bold, color = color }) }, 1)
-		end
+		end)
 		local card = Ui.new("TextButton", {
-			Name = "EnVenta_" .. u.serial,
+			Name = "EnVenta_" .. l.id,
 			Text = "",
 			BackgroundColor3 = hex("#0C0E13"),
 			BackgroundTransparency = 0.08,
@@ -870,26 +844,22 @@ local function saleCards(g: any, list: { any }): { Instance }
 			List = { dir = "V", gap = 7 },
 		}, {
 			Ui.row({
-				Ui.paintChip(u.spec, 42, 28),
+				Ui.paintChip(l.design.spec, 42, 28),
 				Ui.grow(Ui.col({
-					Ui.text(u.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. u.serial .. "</font>", { size = Ui.S.sm, weight = W.bold }),
-					Ui.text("<font color=\"#F7C95C\">★ " .. rating .. "</font> · " .. sold .. " vendidos · " .. (u.status == "salon" and "en el salón" or "en el mercado"), { size = Ui.S.xs, color = T.mut }),
+					Ui.text(l.design.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. (l.design.spec.generation or "") .. "</font>", { size = Ui.S.sm, weight = W.bold }),
+					Ui.text(Util.money(l.price) .. " · " .. (Rules.lotProducing(l) and "fabricando" or "lote completo"), { size = Ui.S.xs, color = T.mut }),
 				}, 1)),
 			}, 10),
-			Ui.grid({ col3("Ingresos", Util.money(rev)), col3("Margen", (mar < 0 and "▼ " or "▲ ") .. Util.money(mar), mar < 0 and T.re2 or T.gr), col3("Stock", tostring(stock)) }, 3, nil, 10),
-			Ui.row({
-				Ui.inline("Demanda", { size = Ui.S.xs, color = T.mut, width = 62 }),
-				Ui.grow((Ui.bar(dem, dem > 66 and T.gr or (dem > 33 and T.bl or T.ye)))),
-				Ui.inline(dem > 66 and "Alta" or (dem > 33 and "Media" or "Baja"), { size = Ui.S.xs, weight = W.bold }),
-			}, 10),
+			Ui.grid({ c1, c2, c3 }, 3, nil, 10),
+			bar,
 		})
 		card.Activated:Connect(function()
-			App.openDialog("unitDetail", { unitId = u.id, wide = true })
+			App.go("ventas")
 		end)
 		table.insert(out, card)
 	end
 	if #list > 4 then
-		local more = Ui.button(App.ui.allSale and "Mostrar menos" or ("Ver las " .. #list .. " unidades"), "default", function()
+		local more = Ui.button(App.ui.allSale and "Mostrar menos" or ("Ver los " .. #list .. " modelos"), "default", function()
 			App.ui.allSale = not App.ui.allSale
 			App.forceRender()
 		end, { small = true, fill = true })
@@ -901,14 +871,27 @@ end
 -- Cinta de noticias que se desplaza (.ticker)
 local function ticker(g: any): Frame
 	local items = {}
-	local last = g.sales[#g.sales]
+	local last = g.lotHistory[1]
 	if last then
-		table.insert(items, { "TU EMPRESA", "#B3AAFF", g.company.name .. " vendió " .. last.name .. " por " .. Util.money(last.price) .. "." })
+		table.insert(items, { "TU EMPRESA", "#B3AAFF", g.company.name .. ": " .. last.design.name .. " " .. (last.saleState == "agotado" and "se agotó" or "se retiró") .. " con " .. Util.num(last.sold) .. " autos vendidos." })
 	end
-	for _, n in Catalog.NEWS_POOL do
-		table.insert(items, n)
+	-- Noticias de la época: las del año en curso y las de los años anteriores más cercanos.
+	local year = Rules.year(g)
+	local era = {}
+	for _, n in Catalog.NEWS do
+		if n[1] <= year then
+			table.insert(era, n)
+		end
 	end
-	table.insert(items, { "TU EMPRESA", "#B3AAFF", "Flujo de caja neto de los últimos 7 días: " .. Util.money(Rules.finance(g, 7).cash) .. "." })
+	for i = #era, math.max(1, #era - 3), -1 do
+		local n = era[i]
+		table.insert(items, { n[2] .. " · " .. n[1], n[3], n[4] })
+	end
+	for _, r in Rules.rivalOffers("sedan", Rules.yearFrac(g)) do
+		table.insert(items, { "COMPETENCIA", "#FFB36B", r.rival.name .. " vende el " .. r.name .. "." })
+		break
+	end
+	table.insert(items, { "TU EMPRESA", "#B3AAFF", "Flujo de caja neto de los últimos 3 meses: " .. Util.money(Rules.finance(g, 3).cash) .. "." })
 	local track = Ui.new("Frame", { Name = "Cinta", Size = UDim2.fromScale(0, 1), AutomaticSize = Enum.AutomaticSize.X, List = { dir = "H", gap = 48, v = "C" }, Pad = { 0, 0, 0, 24 } })
 	for _ = 1, 2 do
 		for _, n in items do
@@ -949,10 +932,11 @@ end
 
 local TIPS = {
 	t1 = "Abrí <b>Diseño</b> en la barra (tecla 1) o caminá hasta el escritorio con el monitor violeta y presioná <b>E</b>.",
-	t2 = "Abrí <b>Personal</b> (tecla 7) y contratá a alguien de la pestaña Contratar.",
-	t3 = "En <b>Fábrica</b> (tecla 3) creá una orden con tu diseño guardado.",
-	t4 = "En <b>Mis autos</b> (tecla 2) enviá la unidad terminada al salón.",
-	t5 = "En <b>Ventas</b> (tecla 4) respondé la oferta de un cliente.",
+	t2 = "En <b>Producción</b> (tecla 3) tocá <b>Lanzar lote</b>, elegí el diseño y cuántas unidades fabricar.",
+	t3 = "No hace falta hacer nada: cada auto terminado se vende solo. Mirá el ritmo en <b>Ventas</b> (tecla 4).",
+	t4 = "En <b>Producción</b> (tecla 3), bajá hasta <b>Estaciones</b> y mejorá una.",
+	t5 = "En <b>Investigación</b> (tecla 6) elegí una tecnología disponible. Tu sede genera PI por minuto.",
+	t6 = "Diseñá un auto de otro tipo: vende en otro segmento y no le quita ventas al primero.",
 }
 
 -- Construcción ---------------------------------------------------------------------------------------
@@ -976,9 +960,9 @@ function Screen.build(parent: Instance, route: string)
 	local newsOn = not App.ui.newsHidden and not phone
 	local panelsOn = not App.ui.panelsHidden
 	local forSale = {}
-	for _, u in g.units do
-		if u.status == "salon" or u.status == "mercado" then
-			table.insert(forSale, u)
+	for _, l in g.lots do
+		if l.saleState == "en venta" then
+			table.insert(forSale, l)
 		end
 	end
 	local alert = Screen.topAlert(g)
@@ -1011,7 +995,7 @@ function Screen.build(parent: Instance, route: string)
 			List = { dir = "H", gap = 10, v = "C" },
 		}, {
 			Ui.ico("tag", T.gr, T.gr, 32, { alpha = 0.15, iconSize = 16 }),
-			Ui.grow(Ui.text("En venta · " .. #forSale .. " unidad" .. (#forSale == 1 and "" or "es"), { size = 15, weight = W.bold })),
+			Ui.grow(Ui.text("En venta · " .. #forSale .. " modelo" .. (#forSale == 1 and "" or "s"), { size = 15, weight = W.bold })),
 			Ui.inline(coll and "Ver" or "Contraer", { size = Ui.S.xs, color = T.mut }),
 			chevron(coll),
 		})
@@ -1021,7 +1005,7 @@ function Screen.build(parent: Instance, route: string)
 		end)
 		local kids: { Instance? } = { head }
 		if not coll then
-			for _, c in saleCards(g, forSale) do
+			for _, c in saleCards(forSale) do
 				table.insert(kids, c)
 			end
 		end

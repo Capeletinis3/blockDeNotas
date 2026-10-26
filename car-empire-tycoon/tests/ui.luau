@@ -14,6 +14,7 @@ Build.prepare({ mock = true })
 local M = require("./mock")
 local T = require("./harness")
 local check, eq, test = T.check, T.eq, T.test
+local Util = require("./.build-ui/shared/Util")
 
 local shared = M.Instance.new("Folder")
 shared.Name = "CarEmpireShared"
@@ -153,19 +154,20 @@ test("Todas las pantallas se construyen en escritorio", function()
 end)
 
 
-local function unitsWith(status: string): { any }
-	local out = {}
-	for _, u in App.g.units do
-		if u.status == status then
-			table.insert(out, u)
+local function lotOf(designId: string): any
+	for _, l in App.g.lots do
+		if l.designId == designId then
+			return l
 		end
 	end
-	return out
+	return nil
 end
 
-test("Recorrido completo por la interfaz: diseñar → recompensa → fabricar → salón → vender", function()
+test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lote → venta automática → precio → cerrar venta", function()
 	local g0 = App.g
 	local money0 = g0.money
+	eq(Util.gameDate(g0.time.day), "Ene 1970", "la empresa empieza en enero de 1970")
+	check(find("Ene 1970") ~= nil, "el HUD muestra la fecha")
 	App.go("editor", { new = true })
 	M.task.wait()
 	eq(App.ui.route, "editor", "abre el editor")
@@ -181,6 +183,7 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → fabricar �
 		return #App.g.designs >= 1 and App.ui.editor.sourceId ~= nil
 	end), "el diseño queda guardado")
 	check(App.g.money <= money0, "el desarrollo se cobra (o no cuesta) al guardar")
+	eq(App.g.designs[1].modelYear, 1970, "año de modelo 1970")
 	App.go("juego")
 	M.task.wait()
 	local claim = named("Reclamar")
@@ -190,111 +193,75 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → fabricar �
 	check(waitFor(function()
 		return App.g.money > before
 	end), "la recompensa del tutorial se acredita")
-	-- Un segundo clic (o reenvío) no vuelve a pagar.
 	local afterClaim = App.g.money
 	App.request("claimMission", { id = "t1" })
 	M.task.wait()
 	eq(App.g.money, afterClaim, "la recompensa no se cobra dos veces")
 
+	-- Lanzar lote con cantidad escrita a mano.
 	App.go("fabrica")
 	M.task.wait()
-	click("Nueva orden de producción")
-	eq(topKind(), "order", "abre el diálogo de orden")
-	M.type(named("Cantidad"), "6")
-	eq(App.ui.orderDraft and App.ui.orderDraft.qty, 6, "la cantidad escrita se conserva")
-	clickN("CrearOrden")
+	clickN("LanzarLote")
+	eq(topKind(), "lot", "abre el diálogo de lote")
+	check(named("Cantidad_10000") ~= nil and named("Cantidad_50000") ~= nil, "atajos de 10.000 y 50.000")
+	M.type(named("Cantidad"), "40")
+	eq(App.ui.lotDraft and App.ui.lotDraft.qty, 40, "la cantidad escrita se conserva")
+	check(find("Ventas estimadas") ~= nil, "muestra la estimación de ventas")
+	clickN("ConfirmarLote")
+	local designId = App.g.designs[1].id
 	check(waitFor(function()
-		return #App.g.production.orders >= 1
-	end), "la orden se crea")
-	eq(App.ui.route, "fabrica", "sigue en la fábrica")
+		return lotOf(designId) ~= nil
+	end), "el lote se crea")
+	eq(lotOf(designId).qty, 40, "con la cantidad elegida")
 	check(not dialogOpen(), "el diálogo se cierra")
-	for _ = 1, 900 do
-		if #unitsWith("almacen") >= 2 then
+	-- Se fabrica y se vende solo, sin ninguna acción.
+	for _ = 1, 600 do
+		local l = lotOf(designId)
+		if l and l.sold >= 5 then
 			break
 		end
 		advance(1)
 	end
-	check(#unitsWith("almacen") >= 2, "se fabrican unidades")
-	noErrors("Fabricación")
+	local l = lotOf(designId)
+	check(l ~= nil and l.sold >= 5, "se venden solos")
+	check(l.sold <= l.produced, "nunca más de lo fabricado")
+	noErrors("Fabricación y venta")
 
-	App.go("autos")
-	M.task.wait()
-	click("Enviar al salón")
-	check(waitFor(function()
-		return #unitsWith("salon") >= 1
-	end), "la unidad pasa al salón")
-	click("Enviar al salón")
-	waitFor(function()
-		return #unitsWith("salon") >= 2
-	end)
-
-	App.go("ventas")
-	local offer = nil
-	for _ = 1, 900 do
-		for _, c in App.g.customers do
-			if c.state == "oferta" then
-				offer = c
-			end
-		end
-		if offer then
-			break
-		end
-		advance(1)
-	end
-	check(offer ~= nil, "llega un cliente con oferta")
-	if offer then
-		M.task.wait()
-		local accept = named("Aceptar_" .. offer.id)
-		check(accept ~= nil, "botón aceptar de ese cliente")
-		local sales0 = #App.g.sales
-		M.click(accept)
-		check(waitFor(function()
-			return #App.g.sales > sales0
-		end), "la venta se registra")
-		local s = App.g.sales[1]
-		check(s and s.price == offer.offer, "ingreso = oferta aceptada")
-		check(s and s.listPrice ~= nil and s.margin == s.price - s.cost - (s.fee or 0), "lista, ingreso y margen separados")
-	end
-	noErrors("Venta")
-end)
-
-test("Negociación: probabilidad del servidor, monto redondeado y diálogo que se invalida", function()
-	local offer = nil
-	for _ = 1, 900 do
-		for _, c in App.g.customers do
-			if c.state == "oferta" then
-				offer = c
-			end
-		end
-		if offer then
-			break
-		end
-		advance(1)
-	end
-	check(offer ~= nil, "otro cliente con oferta")
-	if not offer then
-		return
-	end
+	-- Centro de ventas: tarjeta del modelo con sus datos y acciones.
 	App.go("ventas")
 	M.task.wait()
-	App.openDialog("counter", { customerId = offer.id, wide = true })
-	check(waitFor(function()
-		return App.ui.counterDraft and App.ui.counterDraft.quote ~= nil
-	end), "el servidor devuelve la probabilidad")
-	local q = App.ui.counterDraft.quote
-	eq(q.amount % 100, 0, "el monto mostrado está redondeado a $100")
-	check(find(tostring(q.chance) .. "%") ~= nil, "se muestra la probabilidad exacta")
-	check(find("tirada") == nil, "no se muestran detalles de la tirada")
-	-- El cliente se va: el diálogo deja de ofrecer contraofertar.
-	App.request("rejectCustomer", { customerId = offer.id })
-	M.task.wait()
-	if dialogOpen() then
-		check(named("Contraofertar") == nil, "sin cliente no se puede contraofertar")
-		App.closeAllDialogs()
-	else
-		check(true, "el diálogo se cerró")
+	check(named("Modelo_" .. l.id) ~= nil, "tarjeta del modelo en venta")
+	for _, n in { "Disponibles", "Fabricadas", "Vendidas", "Ritmo", "Ingresos", "Resultado", "ModificarPrecio", "CerrarVenta" } do
+		check(named(n) ~= nil, "la tarjeta muestra " .. n)
 	end
-	noErrors("Negociación")
+	check(find("En venta") ~= nil, "estado comercial En venta")
+	clickN("ModificarPrecio")
+	eq(topKind(), "price", "abre el diálogo de precio")
+	M.type(named("Precio"), tostring(l.price + 500))
+	clickN("AplicarPrecio")
+	check(waitFor(function()
+		local x = lotOf(designId)
+		return x ~= nil and x.price ~= l.price
+	end), "el precio cambia en el servidor")
+	-- Cerrar venta: la confirmación dice cuántas unidades se pierden.
+	M.task.wait()
+	clickN("CerrarVenta")
+	eq(topKind(), "confirm", "pide confirmación")
+	local x = lotOf(designId)
+	local avail = x.produced - x.sold - x.discarded
+	check(find("unidades sin vender") ~= nil or avail == 0, "advierte las unidades sin vender (" .. avail .. ")")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return lotOf(designId) == nil
+	end), "el modelo deja de estar en venta")
+	local h = App.g.lotHistory[1]
+	eq(h.saleState, "retirado", "queda Retirado en el historial")
+	App.ui.tabs.ventas = "historial"
+	App.forceRender()
+	M.task.wait()
+	check(named("Historial_" .. h.id) ~= nil, "aparece en Agotados y retirados")
+	App.ui.tabs.ventas = nil
+	noErrors("Ventas")
 end)
 
 test("Editor: cambios sin guardar al salir y al abrir otro proyecto", function()
@@ -342,6 +309,10 @@ test("Editor V3: cámaras, pasos, ocultar interfaz, antes/después y modelos ant
 		M.task.wait()
 	end
 	eq(App.ui.route, "editor", "abre el editor")
+	M.task.wait()
+	M.services.RunService.RenderStepped:Fire(1 / 60) -- un cuadro: la cámara se ubica
+	local diag = App.screens.editor.diagnose()
+	check(diag.ok, "vista 3D: el auto está en el ViewportFrame y delante de la cámara" .. (diag.ok and "" or (": " .. table.concat(diag.problems, "; "))))
 	check(named("Camara_frontal") ~= nil and named("Camara_libre") ~= nil, "siete cámaras con su tecla")
 	clickN("Camara_frontal")
 	App.screens.editor.goStep(2)
@@ -373,13 +344,10 @@ test("Editor V3: cámaras, pasos, ocultar interfaz, antes/después y modelos ant
 end)
 
 test("Todos los diálogos se construyen", function()
-	local u = App.g.units[1]
-	local l = App.g.market.listings[1]
-	local sale = App.g.sales[1]
+	local h = App.g.lotHistory[1]
 	local kinds = {
-		{ "order", {} }, { "confirm", { title = "x", body = "y" } }, { "unitDetail", { unitId = u and u.id, wide = true } },
-		{ "saleDetail", { saleId = sale and sale.id } }, { "publish", {} },
-		{ "listing", { listingId = l and l.id } }, { "notifications", {} }, { "daily", {} }, { "settings", {} },
+		{ "lot", {} }, { "price", { lotId = h and h.id } }, { "confirm", { title = "x", body = "y" } },
+		{ "notifications", {} }, { "daily", {} }, { "settings", {} },
 		{ "help", { screen = "fabrica" } }, { "future", { what = "amigos" } }, { "future", { what = "eventos" } }, { "future", { what = "tienda" } },
 		{ "news", {} }, { "prevModels", {} }, { "testDrive", {} },
 		{ "deleteCompany", { slot = "1", expected = "Ruta Norte", name = "Ruta Norte" } },
@@ -432,7 +400,7 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	end), "se crea la segunda empresa")
 	eq(App.g.company.name, "Magnate SA", "es la nueva")
 	eq(App.g.company.difficulty, "dificil", "dificultad Magnate")
-	-- Magnate: sin dinero manual, la recompensa del primer diseño alcanza para la primera orden.
+	-- Magnate: sin dinero manual, alcanza para el primer diseño y un primer lote.
 	App.go("editor", { new = true })
 	M.task.wait()
 	for _ = 1, 3 do
@@ -450,11 +418,11 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	end)
 	App.go("fabrica")
 	M.task.wait()
-	click("Nueva orden de producción")
-	clickN("CrearOrden")
+	clickN("LanzarLote")
+	clickN("ConfirmarLote")
 	check(waitFor(function()
-		return #App.g.production.orders >= 1
-	end), "Magnate puede crear su primera orden")
+		return #App.g.lots >= 1
+	end), "Magnate puede lanzar su primer lote")
 	-- Volver a la primera empresa: sus datos siguen intactos.
 	App.request("leaveCompany")
 	waitFor(function()
@@ -469,17 +437,47 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	noErrors("Ranuras")
 end)
 
-test("Celular: todas las pantallas y diálogos se construyen con la distribución de celular", function()
+-- [P15] La interfaz se adapta a PC y celular: se construyen todas las pantallas en las cuatro resoluciones
+-- pedidas y se verifica que ningún panel ni el HUD se salgan del ancho de la pantalla.
+local function overflow(): { string }
+	local out = {}
+	local vw = App.vw
+	for _, d in App.content:GetDescendants() do
+		if (d.Name == "Hud1" or string.sub(d.Name, 1, 6) == "Panel_" or d.Name == "PanelEditor" or d.Name == "Principal") and M.visible(d) then
+			local x = d.AbsolutePosition.X
+			local w = d.AbsoluteSize.X
+			if x < -1 or x + w > vw + 1 then
+				table.insert(out, d.Name .. string.format(" (%d..%d de %d)", x, x + w, vw))
+			end
+		end
+	end
+	return out
+end
+
+test("[P15] PC y celular: todas las pantallas en 1600×900, 1280×720, 844×390 y 390×844", function()
+	local routes = { "juego", "editor", "autos", "fabrica", "ventas", "mercado", "investigacion", "personal", "compania", "misiones", "estadisticas" }
+	for _, res in { { 1600, 900, "desktop" }, { 1280, 720, "compact" }, { 844, 390, "phone" }, { 390, 844, "phone" } } do
+		M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(res[1], res[2])
+		M.task.wait()
+		eq(App.layout, res[3], res[1] .. "×" .. res[2] .. ": distribución " .. res[3])
+		for _, route in routes do
+			App.renderError = nil
+			App.go(route)
+			M.task.wait()
+			App.closeAllDialogs()
+			check(App.renderError == nil, route .. " en " .. res[1] .. "×" .. res[2] .. (App.renderError and (": " .. tostring(App.renderError)) or ""))
+			local bad = overflow()
+			check(#bad == 0, route .. " en " .. res[1] .. "×" .. res[2] .. " no se sale de la pantalla" .. (#bad > 0 and (": " .. bad[1]) or ""))
+		end
+		for _, k in { { "lot", {} }, { "settings", {} } } do
+			App.openDialog(k[1], k[2])
+			M.task.wait()
+			check(named("Dialogo") ~= nil, "diálogo " .. k[1] .. " en " .. res[1] .. "×" .. res[2])
+			App.closeAllDialogs()
+		end
+	end
 	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(844, 390)
 	M.task.wait()
-	eq(App.layout, "phone", "distribución de celular")
-	for _, route in { "juego", "editor", "autos", "fabrica", "ventas", "mercado", "investigacion", "personal", "compania", "misiones", "estadisticas" } do
-		App.renderError = nil
-		App.go(route)
-		M.task.wait()
-		App.closeAllDialogs()
-		check(App.renderError == nil, route .. " (celular)" .. (App.renderError and (": " .. tostring(App.renderError)) or ""))
-	end
 	App.go("juego")
 	M.task.wait()
 	App.ui.pop = "mob"
@@ -490,7 +488,7 @@ test("Celular: todas las pantallas y diálogos se construyen con la distribució
 	App.forceRender()
 	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
 	M.task.wait()
-	noErrors("Celular")
+	noErrors("Resoluciones")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

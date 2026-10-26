@@ -46,7 +46,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 		s.level = avanz and 4 or 2
 	end
 	g.counters.stationUpgrades = avanz and 18 or 6
-	for _, t in { "t1", "t2", "t3", "t4", "t5", "t6", "s1" } do
+	for _, t in { "t1", "t2", "t3", "t4", "t5", "t6", "s1", "s2" } do
 		g.claimed[t] = true
 	end
 	if avanz then
@@ -123,6 +123,8 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	retired.lossDiscarded = retired.discarded * retired.unitCost
 	retired.endDay = g.time.day - 3
 	g.lotHistory = { retired, hist }
+	-- Estados de producción coherentes con las líneas de la sede (sin avanzar el tiempo).
+	Simulation.stepProduction(g, ctx, 0)
 	g.counters.lotsLaunched = #g.lots + 2
 	g.counters.lotsSoldOut = 1
 	g.counters.lotsRetired = 1
@@ -146,7 +148,6 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	g.counters.hires = staff
 
 	-- Meses anteriores: ventas y gastos coherentes con los lotes (demostración).
-	local sold, produced, revenue, margin = 0, 0, 0, 0
 	for d = g.time.day - 23, g.time.day do
 		local ds2 = GameState.day(g, d)
 		local units = round((avanz and 900 or 22) * (0.75 + ctx.rng() * 0.5))
@@ -160,15 +161,21 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 		ds2.flow.venta = ds2.revenue
 		ds2.flow.fabricacion = -ds2.produced * cost
 		ds2.flow.salarios = -Rules.salaries(g)
-		sold += units
-		produced += ds2.produced
-		revenue += ds2.revenue
-		margin += ds2.margin
 	end
-	g.counters.unitsSold = sold + (avanz and 15000 or 0)
-	g.counters.unitsProduced = produced + (avanz and 16000 or 0)
-	g.counters.revenueTotal = revenue
-	g.counters.marginTotal = margin
+	-- Los totales de la empresa coinciden con los lotes (activos e historial).
+	local lotSold, lotMade, lotRev, lotMargin = 0, 0, 0, 0
+	for _, list in { g.lots, g.lotHistory } do
+		for _, l in list do
+			lotSold += l.sold
+			lotMade += l.produced
+			lotRev += l.revenue
+			lotMargin += l.sold * (l.price - l.unitCost)
+		end
+	end
+	g.counters.unitsSold = lotSold
+	g.counters.unitsProduced = lotMade
+	g.counters.revenueTotal = lotRev
+	g.counters.marginTotal = lotMargin
 	table.insert(g.ledger, { day = g.time.day - 2, min = 0, type = "desarrollo", amount = -16000, note = "Licencia del modelo Brisa Sedán (demostración)" })
 	table.insert(g.ledger, { day = g.time.day - 1, min = 0, type = "investigacion", amount = -9600, note = "Investigación: Control de calidad estadístico (demostración)" })
 	return g

@@ -1,8 +1,10 @@
 --!strict
 --[[
-	Ventas y concesionario (SCREENS.ventas de la V3): clientes con su paciencia y ofertas, autos en
-	exhibición con precio de lista, descuento, precio final, margen y demanda, unidades en el almacén,
-	historial de ventas (cada línea abre el detalle) y, al costado, promoción, últimos 7 días y reglas.
+	Centro de ventas: cada lote se vende solo, sin negociar, según la demanda de su tipo, el atractivo
+	del auto frente a los rivales, el precio, la reputación y el alcance de la sede. Por modelo se ve:
+	miniatura, año/generación, precio, fabricadas, vendidas, disponibles, avance del lote, ventas por
+	minuto, ingresos y resultado, estado de producción y estado comercial, con «Modificar precio» y
+	«Cerrar venta». El historial conserva los lotes agotados y retirados con todos sus números.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,265 +16,244 @@ local Rules = require(Shared.Rules)
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
 local Sheet = require(script.Parent.ScreenSheet)
-local Inventory = require(script.Parent.ScreenInventory)
+local Factory = require(script.Parent.ScreenFactory)
 local T = Ui.T
 local W = Ui.W
 
 local Screen = {
-	title = "Ventas y concesionario",
+	title = "Centro de ventas",
 	icon = "tag",
 }
 
+-- Estados comerciales: { texto, chip }
+Screen.SALE = {
+	["en venta"] = { "En venta", "cg" },
+	agotado = { "Agotado", "cb" },
+	retirado = { "Retirado", "cn" },
+}
+
+function Screen.totalRate(g: any): number
+	local total = 0
+	local markets = {}
+	for _, l in g.lots do
+		local t = l.design.type
+		markets[t] = markets[t] or Rules.market(g, t)
+		total += Rules.lotSalesRate(g, l, markets[t])
+	end
+	return total
+end
+
 function Screen.head(g: any): { Instance }
-	local out = { Ui.chip("Salón " .. g.derived.showroomUsed .. "/" .. g.derived.caps.showroom, "cg") }
+	local n = 0
+	for _, l in g.lots do
+		if l.saleState == "en venta" then
+			n += 1
+		end
+	end
+	local out = { Ui.chip(n .. (n == 1 and " modelo en venta" or " modelos en venta"), "cg") }
 	if g.promo then
-		table.insert(out, Ui.chip("Promoción activa", "cy"))
+		table.insert(out, Ui.chip("Campaña activa", "cy"))
 	end
 	return out
 end
 
-local function findUnit(g: any, id: any): any
-	for _, u in g.units do
-		if u.id == id then
-			return u
+local function findLot(g: any, id: string): any
+	for _, l in g.lots do
+		if l.id == id then
+			return l
 		end
 	end
 	return nil
 end
 
-local function custRow(g: any, c: any): Frame
-	local u = findUnit(g, c.unitId)
-	local gone = c.state == "se fue"
-	local stateChip = gone and Ui.chip("Se fue sin comprar", "cn") or (c.state == "oferta" and Ui.chip("Ofrece " .. Util.money(c.offer), "cb") or Ui.chip("Mirando", "cn"))
-	local nodes: { Instance? } = {
-		Ui.row({
-			Ui.ico("users", T.pink, Ui.hex("#FF78AA"), 32, { alpha = 0.14, iconSize = 16 }),
-			Ui.grow(Ui.col({
-				Ui.text(c.name, { size = 15, weight = W.bold }),
-				Ui.text("Busca: " .. (Catalog.TYPES[c.wants] or c.wants) .. " · valora " .. (Catalog.PREF_LABEL[c.pref] or c.pref) .. " · interés " .. c.interest .. "%" .. (u and (" · mira " .. u.name .. " (" .. u.serial .. ")") or ""), { size = Ui.S.xs, color = T.mut }),
-			}, 2)),
-			stateChip,
-		}, 10, { wrap = App.isPhone() }),
-	}
-	if not gone then
-		local bar, fill = Ui.bar(100, T.ye)
-		local label = Ui.inline("", { size = Ui.S.xs })
-		App.live(function(gg: any)
-			for _, x in gg.customers do
-				if x.id == c.id then
-					Ui.setBar(fill, math.clamp(100 - x.waited / math.max(1, x.patience) * 100, 0, 100))
-					label.Text = x.state == "se fue" and "Se fue" or ("Se va en " .. Util.gameDuration(math.max(0, x.patience - x.waited)))
-				end
-			end
-		end)
-		table.insert(nodes, Ui.row({ Ui.inline("Paciencia", { size = Ui.S.xs, color = T.mut, width = 70 }), Ui.grow(bar), label }, 10))
-	end
-	if c.state == "oferta" and u then
-		local accept
-		accept = Ui.button("Aceptar " .. Util.money(c.offer), "g", function()
-			App.request("acceptOffer", { customerId = c.id }, { button = accept })
-		end, { small = true, name = "Aceptar_" .. c.id })
-		table.insert(nodes, Ui.row({
-			Ui.button("Negociar", "p", function()
-				App.ui.counterDraft = nil
-				App.openDialog("counter", { customerId = c.id, wide = true })
-			end, { small = true, name = "Negociar_" .. c.id }),
-			accept,
-			Ui.button("Rechazar", "q", function()
-				App.request("rejectCustomer", { customerId = c.id })
-			end, { small = true }),
-			Ui.button("Ver el auto", "q", function()
-				App.openDialog("unitDetail", { unitId = u.id, wide = true })
-			end, { small = true, icon = "eye", iconSize = 14 }),
-			Ui.inline("Precio de lista " .. Util.money(Rules.finalPrice(u)) .. " · margen con su oferta " .. Util.money(c.offer - u.cost), { size = Ui.S.xs, color = T.mut }),
-		}, 6, { wrap = true }))
-	end
-	local card = Ui.card(nodes, { gap = 8, stroke = c.state == "oferta" and T.bl or nil, name = "Cliente_" .. c.id })
-	if c.state == "oferta" then
-		local s = card:FindFirstChildOfClass("UIStroke")
-		if s then
-			s.Transparency = 0.45
-		end
-	end
-	if gone then
-		-- opacity .55 de la V3
-		for _, d in card:GetDescendants() do
-			if d:IsA("TextLabel") then
-				d.TextTransparency = 0.45
-			end
-		end
-		card.BackgroundTransparency = 0.45
-	end
-	return card
+local function stat(label: string, value: string, color: Color3?, name: string?): (Frame, TextLabel)
+	local v = Ui.text(value, { size = Ui.S.sm, weight = W.bold, color = color, name = name })
+	return Ui.col({ Ui.text(label, { size = Ui.S.xs, color = T.mut }), v }, 1), v
 end
 
-local function showCard(g: any, u: any): Frame
-	local fp = Rules.finalPrice(u)
-	local dem = Rules.interest(g, u, nil)
-	local discLabel = Ui.inline("Descuento: <b>" .. u.discount .. "%</b>", { size = Ui.S.xs, color = T.mut })
+function Screen.askClose(l: any)
+	local avail = Rules.lotAvailable(l)
+	local pending = Rules.lotPending(l)
+	local body = "Se dejan de vender las unidades de <b>" .. l.design.name .. "</b>. "
+	if avail > 0 then
+		body ..= "Quedan <b>" .. Util.num(avail) .. " unidades sin vender</b>: se descartan y se pierde su costo de fabricación (" .. Util.money(avail * l.unitCost) .. "), sin reintegro. "
+	else
+		body ..= "No quedan unidades sin vender. "
+	end
+	if pending > 0 then
+		body ..= "Las " .. Util.num(pending) .. " unidades que faltaban fabricar se cancelan sin costo. "
+	end
+	body ..= "El modelo queda como <b>Retirado</b> en el historial, con sus ventas y resultados. No se puede deshacer."
+	App.openDialog("confirm", {
+		title = "¿Cerrar la venta de " .. l.design.name .. "?",
+		body = body,
+		lines = {
+			"Vendidas|" .. Util.num(l.sold),
+			"Se descartan|" .. Util.num(avail),
+			"Sin fabricar (se cancelan)|" .. Util.num(pending),
+			"Resultado actual del lote|" .. Util.money(l.revenue - l.costSpent),
+		},
+		okLabel = avail > 0 and ("Cerrar venta y descartar " .. Util.num(avail)) or "Cerrar venta",
+		cancel = "Volver",
+		danger = true,
+		onOk = function()
+			App.request("closeSale", { lotId = l.id })
+		end,
+	})
+end
+
+local function lotCard(g: any, l: any): Frame
+	local spec = l.design.spec
+	local st = Screen.SALE[l.saleState] or Screen.SALE["en venta"]
+	local ps = Factory.PROD[l.prodState] or Factory.PROD.cola
+	local profit = l.revenue - l.costSpent
+	local cAvail, vAvail = stat("Disponibles", Util.num(Rules.lotAvailable(l)), nil, "Disponibles")
+	local cProd, vProd = stat("Fabricadas", Util.num(l.produced) .. "/" .. Util.num(l.qty), nil, "Fabricadas")
+	local cSold, vSold = stat("Vendidas", Util.num(l.sold), nil, "Vendidas")
+	local cRate, vRate = stat("Ventas por minuto", "—", T.gr, "Ritmo")
+	local cRev, vRev = stat("Ingresos", Util.money(l.revenue), T.gr, "Ingresos")
+	local cRes, vRes = stat("Resultado", Util.money(profit), profit >= 0 and T.gr or T.re2, "Resultado")
+	local bar, fill = Ui.bar(l.sold / math.max(1, l.qty) * 100, T.gr)
+	local barText = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "Avance" })
+	local function refresh(gg: any, x: any)
+		vAvail.Text = Util.num(Rules.lotAvailable(x))
+		vProd.Text = Util.num(x.produced) .. "/" .. Util.num(x.qty)
+		vSold.Text = Util.num(x.sold)
+		local rate = Rules.lotSalesRate(gg, x)
+		local avail = Rules.lotAvailable(x)
+		if avail == 0 and x.prodState == "produciendo" then
+			vRate.Text = Util.num(math.min(gg.derived.lineRate, Rules.lotPotentialRate(gg, x)), 1) .. " (al ritmo de la fábrica)"
+		elseif avail == 0 then
+			vRate.Text = "0 · sin stock (≈ " .. Util.num(Rules.lotPotentialRate(gg, x), 1) .. " con stock)"
+		else
+			vRate.Text = Util.num(rate, 1)
+		end
+		vRev.Text = Util.money(x.revenue)
+		local p = x.revenue - x.costSpent
+		vRes.Text = Util.money(p)
+		vRes.TextColor3 = p >= 0 and T.gr or T.re2
+		Ui.setBar(fill, x.sold / math.max(1, x.qty) * 100)
+		barText.Text = Util.round(x.sold / math.max(1, x.qty) * 100) .. " % vendido"
+	end
+	refresh(g, l)
+	App.live(function(gg: any)
+		local x = findLot(gg, l.id)
+		if x then
+			refresh(gg, x)
+		end
+	end)
+	local thumb = App.isPhone() and Ui.paintChip(spec, 64, 40) or Ui.carThumb(spec, 112, 68)
 	return Ui.card({
 		Ui.row({
-			Ui.paintChip(u.spec, 44, 28),
-			Ui.grow(Ui.text(u.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. u.serial .. "</font>", { size = 15, weight = W.bold })),
-			Ui.inline("Recomendado " .. Util.money(u.stats.price), { size = Ui.S.xs, color = T.mut }),
-		}, 10),
-		Ui.grid({
+			thumb,
+			Ui.grow(Ui.col({
+				Ui.text(l.design.name, { size = 16, weight = W.bold }),
+				Ui.text((spec.generation or (tostring(l.design.modelYear) .. " · " .. tostring(l.design.gen) .. ".ª gen.")) .. " · " .. (Catalog.TYPES[l.design.type] or l.design.type), { size = Ui.S.xs, color = T.mut }),
+				Ui.row({ Ui.chip(st[1], st[2]), Ui.chip(ps[1], ps[2]) }, 6, { wrap = true }),
+			}, 4)),
 			Ui.col({
-				Ui.text("Precio de lista ($)", { size = Ui.S.xs, color = T.mut }),
-				Ui.input(tostring(u.price), "Precio", function(text: string)
-					local n = tonumber((string.gsub(text, "[^%d]", "")))
-					if n and n ~= u.price then
-						App.request("setPrice", { unitId = u.id, price = n })
-					else
-						App.forceRender()
-					end
-				end, { name = "Precio_" .. u.serial, numeric = true }),
-			}, 4),
+				Ui.inline("Precio", { size = Ui.S.xs, color = T.mut }),
+				Ui.inline(Util.money(l.price), { size = 18, weight = W.bold, name = "PrecioModelo" }),
+				Ui.inline("costo " .. Util.money(l.unitCost) .. " · ref. " .. Util.money(l.refPrice), { size = Ui.S.xs, color = T.mut }),
+			}, 1, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, h = App.isPhone() and "L" or "R" }),
+		}, 12, { wrap = App.isPhone() }),
+		Ui.grid({ cAvail, cProd, cSold, cRate, cRev, cRes }, App.isPhone() and 3 or 6, nil, 10),
+		Ui.row({ Ui.grow(bar), barText }, 10),
+		l.price < l.unitCost and Ui.note("r", "El precio está por debajo del costo: cada venta pierde " .. Util.money(l.unitCost - l.price) .. ".") or nil,
+		Ui.row({
+			Ui.button("Modificar precio", "default", function()
+				App.openDialog("price", { lotId = l.id })
+			end, { small = true, icon = "tag", iconSize = 14, name = "ModificarPrecio" }),
+			Ui.spacer(),
+			Ui.button("Cerrar venta", "d", function()
+				Screen.askClose(l)
+			end, { small = true, icon = "x", iconSize = 14, name = "CerrarVenta" }),
+		}, 8, { wrap = true }),
+	}, { gap = 10, pad = { 12, 14 }, name = "Modelo_" .. l.id })
+end
+
+local function historyRow(l: any): Frame
+	local st = Screen.SALE[l.saleState] or Screen.SALE.agotado
+	local profit = l.revenue - l.costSpent
+	return Ui.card({
+		Ui.row({
+			Ui.paintChip(l.design.spec, 30, 20),
+			Ui.grow(Ui.col({
+				Ui.text(l.design.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. (l.design.spec.generation or "") .. "</font>", { size = Ui.S.sm, weight = W.bold }),
+				Ui.text(Util.gameDate(l.createdDay) .. " → " .. Util.gameDate(l.endDay or l.createdDay) .. " · " .. Util.num(l.sold) .. " vendidas de " .. Util.num(l.produced) .. " fabricadas" .. ((l.discarded or 0) > 0 and (" · " .. Util.num(l.discarded) .. " descartadas") or "") .. " · a " .. Util.money(l.price), { size = Ui.S.xs, color = T.mut }),
+			}, 1)),
 			Ui.col({
-				discLabel,
-				Ui.slider(u.discount, 0, Catalog.RULES.maxDiscount, 1, function(v: number, final: boolean)
-					discLabel.Text = "Descuento: <b>" .. v .. "%</b>"
-					if final and v ~= u.discount then
-						App.request("setDiscount", { unitId = u.id, discount = v })
-					end
-				end, { name = "Descuento_" .. u.serial }),
-			}, 4),
-			Ui.col({
-				Ui.text("Precio final · margen", { size = Ui.S.xs, color = T.mut }),
-				Ui.text(Util.money(fp), { size = 15, weight = W.bold }),
-				Ui.text(Util.money(fp - u.cost) .. " por unidad", { size = Ui.S.xs, weight = W.bold, color = fp - u.cost >= 0 and T.gr or T.re2 }),
-			}, 2),
-		}, 3, nil, 10),
-		Ui.row({ Ui.inline("Demanda", { size = Ui.S.xs, color = T.mut, width = 62 }), Ui.grow((Ui.bar(dem, dem > 66 and T.gr or (dem > 33 and T.bl or T.ye)))), Ui.inline(dem .. "/100", { size = Ui.S.xs, weight = W.bold }) }, 10),
-		Ui.row((function()
-			local acts = Inventory.unitActions(g, u)
-			table.insert(acts, Ui.button("Mayorista · " .. Util.money(Rules.wholesale(u)), "default", function()
-				Inventory.askWholesale(g, u)
-			end, { small = true }))
-			return acts
-		end)(), 6, { wrap = true }),
-	}, { gap = 8, name = "Exhibido_" .. u.serial })
+				Ui.chip(st[1], st[2]),
+				Ui.inline((profit >= 0 and "+" or "") .. Util.money(profit), { size = Ui.S.sm, weight = W.bold, color = profit >= 0 and T.gr or T.re2 }),
+			}, 3, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, h = "R" }),
+		}, 10, { wrap = App.isPhone() }),
+	}, { gap = 4, pad = { 10, 12 }, name = "Historial_" .. l.id })
 end
 
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
-	local offers = 0
-	local cust = {}
-	for _, c in g.customers do
-		if c.state ~= "compró" then
-			table.insert(cust, c)
-			if c.state == "oferta" then
-				offers += 1
-			end
+	local selling, done = {}, {}
+	for _, l in g.lots do
+		if l.saleState == "en venta" then
+			table.insert(selling, l)
 		end
 	end
-	local show, store = {}, {}
-	for _, u in g.units do
-		if u.status == "salon" then
-			table.insert(show, u)
-		elseif u.status == "almacen" then
-			table.insert(store, u)
-		end
+	for _, l in g.lotHistory do
+		table.insert(done, l)
 	end
-	local tabs, tab = Sheet.tabs("ventas", { { "salon", "Salón y clientes", offers > 0 and offers or nil }, { "hist", "Historial de ventas" } }, "salon")
+	local tabs, tab = Sheet.tabs("ventas", { { "venta", "En venta", #selling }, { "historial", "Agotados y retirados", #done } }, "venta")
 	tabs.Parent = main
-	if tab == "salon" then
-		local sec: { Instance? } = { Ui.row({ Ui.grow(Ui.lbl("Clientes en el concesionario")), (App.narrowPhone and Ui.text("Llegan solo si hay autos en el salón", { size = Ui.S.xs, color = T.mut, width = 150, align = "R" }) or Ui.inline("Llegan solo si hay autos en el salón", { size = Ui.S.xs, color = T.mut })) }, 10) }
-		if #cust == 0 then
-			table.insert(sec, Ui.empty("users", #show > 0 and "Todavía no llegó nadie. Los clientes aparecen con el tiempo de juego; una promoción atrae más." or "El salón está vacío. Enviá un auto desde el almacén para recibir clientes."))
+	if tab == "venta" then
+		if #selling == 0 then
+			Ui.empty("tag", "No hay modelos a la venta. Lanzá un lote en Producción: cada auto terminado se vende solo.", Ui.button("Lanzar lote", "p", function()
+				App.openDialog("lot", { wide = true })
+			end, { small = true, name = "LanzarLote" })).Parent = main
 		end
-		for _, c in cust do
-			table.insert(sec, custRow(g, c))
+		for _, l in selling do
+			lotCard(g, l).Parent = main
 		end
-		Ui.col(sec, 8).Parent = main
-		local sec2: { Instance? } = { Ui.lbl("En exhibición (" .. #show .. "/" .. g.derived.caps.showroom .. ")") }
-		if #show == 0 then
-			table.insert(sec2, Ui.empty(nil, "Sin autos en el salón."))
-		end
-		for _, u in show do
-			table.insert(sec2, showCard(g, u))
-		end
-		Ui.col(sec2, 8).Parent = main
-		local sec3: { Instance? } = { Ui.lbl("En el almacén (" .. #store .. ")") }
-		if #store == 0 then
-			table.insert(sec3, Ui.empty(nil, "No hay unidades esperando.", Ui.button("Ir a Fábrica", "default", function()
-				App.go("fabrica")
-			end, { small = true })))
-		end
-		for _, u in store do
-			local send
-			send = Ui.button("Enviar al salón", "p", function()
-				App.request("sendToShowroom", { unitId = u.id }, { button = send })
-			end, { small = true, disabled = g.derived.showroomUsed >= g.derived.caps.showroom, why = "Salón lleno" })
-			table.insert(sec3, Ui.card({
-				Ui.paintChip(u.spec, 36, 24),
-				Ui.grow(Ui.text(u.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. u.serial .. " · costo " .. Util.money(u.cost) .. "</font>", { size = 15, weight = W.bold })),
-				send,
-				Ui.button("Mayorista · " .. Util.money(Rules.wholesale(u)), "default", function()
-					Inventory.askWholesale(g, u)
-				end, { small = true }),
-			}, { dir = "H", v = "C", gap = 10, wrap = true }))
-		end
-		Ui.col(sec3, 8).Parent = main
 	else
-		if #g.sales == 0 then
-			Ui.empty("tag", "Todavía no vendiste ningún auto.").Parent = main
-		else
-			local lines: { Instance? } = {}
-			local n = 0
-			for i = #g.sales, 1, -1 do
-				n += 1
-				if n > 60 then
-					break
-				end
-				local s = g.sales[i]
-				local line = Ui.new("TextButton", {
-					Name = "Venta_" .. s.id,
-					Text = "",
-					BackgroundTransparency = 1,
-					Size = UDim2.new(1, 0, 0, 0),
-					AutomaticSize = Enum.AutomaticSize.Y,
-					Pad = { 8, 0 },
-					List = { dir = "H", gap = 12, v = "C" },
-				}, {
-					Ui.grow(Ui.text(s.name .. " <font color=\"#A3AAB8\" size=\"11\">" .. s.serial .. " · día " .. (s.day + 1) .. " · " .. s.channel .. (s.buyer and (" · " .. s.buyer) or "") .. (s.demo and " · demostración" or "") .. "</font>", { size = 14 })),
-					Ui.inline(Util.money(s.price), { size = 14, weight = W.bold }),
-					Ui.inline((s.margin >= 0 and "▲ " or "▼ ") .. Util.money(s.margin), { size = 14, weight = W.bold, color = s.margin >= 0 and T.gr or T.re2, width = 110, align = "R" }),
-				})
-				line.Activated:Connect(function()
-					App.openDialog("saleDetail", { saleId = s.id })
-				end)
-				table.insert(lines, Ui.underline(line))
-			end
-			Ui.card(lines, { gap = 0, pad = { 4, 14 } }).Parent = main
+		if #done == 0 then
+			Ui.empty("box", "Todavía no hay lotes terminados. Un lote queda «Agotado» al venderse todo, o «Retirado» si cerrás su venta.").Parent = main
+		end
+		for _, l in done do
+			historyRow(l).Parent = main
+		end
+		if #done > 0 then
+			Ui.text("Se conservan los últimos " .. Catalog.RULES.maxLotHistory .. " lotes. Los totales de la empresa (Estadísticas) incluyen todos.", { size = Ui.S.xs, color = T.mut }).Parent = main
 		end
 	end
 
 	-- Columna lateral
-	local hasPromo = Rules.has(g, "mk2")
-	local promoNode = Catalog.researchNode("mk2")
+	local rateLabel = Ui.text(Util.num(Screen.totalRate(g), 1) .. " autos/min", { size = 22, weight = W.bold, color = T.gr, name = "RitmoTotal" })
+	App.live(function(gg: any)
+		rateLabel.Text = Util.num(Screen.totalRate(gg), 1) .. " autos/min"
+	end)
+	local f = Rules.finance(g, 3)
 	Ui.card({
-		Ui.lbl("Promoción del concesionario"),
+		Ui.lbl("Ritmo de ventas"),
+		rateLabel,
+		Ui.between("Vendidos (últimos 3 meses)", Util.num(f.units)),
+		Ui.between("Ingresos (últimos 3 meses)", Util.money(f.revenue), { color = T.gr }),
+		Ui.between("Margen de lo vendido", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
+	}, { gap = 6, name = "Ritmo" }).Parent = side
+	local hasCampaign = Rules.tech(g, "campaign") > 0
+	local node = Catalog.researchNode("mk1")
+	Ui.card({
 		Ui.row({
-			Ui.grow(Ui.text("Atrae 35% más clientes. Cuesta " .. Util.money(Catalog.RULES.promoCostPerDay) .. " por día de juego (se cobra al cambiar de día)." .. (hasPromo and "" or (" Requiere investigar «" .. (promoNode and promoNode.name or "Promociones") .. "».")), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })),
+			Ui.grow(Ui.col({
+				Ui.text("Campaña publicitaria", { size = Ui.S.sm, weight = W.bold }),
+				Ui.text(hasCampaign and ("+" .. Util.round(Catalog.ECON.campaignBoost * 100) .. " % de atractivo para todos tus autos. Cuesta " .. Util.money(Rules.sede(g).campaign) .. " al empezar cada mes.") or ("Requiere investigar «" .. (node and node.name or "Publicidad") .. "»."), { size = Ui.S.xs, color = T.mut }),
+			}, 2)),
 			Ui.toggle(g.promo == true, function()
-				App.request("togglePromo")
-			end, not hasPromo and not g.promo, "Requiere investigar «" .. (promoNode and promoNode.name or "Promociones") .. "»."),
+				App.request("toggleCampaign")
+			end, not hasCampaign and not g.promo, "Requiere investigar «" .. (node and node.name or "Publicidad") .. "»."),
 		}, 10),
-	}, { gap = 10, name = "Promocion" }).Parent = side
-	local f = Rules.finance(g, 7)
+	}, { gap = 8, name = "Campana" }).Parent = side
 	Ui.card({
-		Ui.lbl("Últimos 7 días"),
-		Ui.between("Autos vendidos", tostring(f.units)),
-		Ui.between("Ingresos por venta", Util.money(f.revenue)),
-		Ui.between("Margen bruto", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
-		Ui.between("Comisiones", Util.money(-f.fees), { color = T.or_ }),
-		f.demo and Ui.text("Incluye ventas de demostración", { size = Ui.S.xs, color = T.ye }) or nil,
-	}, { gap = 6 }).Parent = side
-	Ui.card({
-		Ui.lbl("Cómo deciden los clientes"),
-		Ui.text("Cada cliente tiene un presupuesto oculto, un tipo de auto buscado, una preferencia y paciencia. El interés sube con la calidad, la reputación, el objetivo del diseño y vendedores asignados, y baja si el precio supera al recomendado. Una contraoferta por encima del presupuesto nunca se acepta. Vender al mayorista es inmediato: paga el costo × " .. Util.num(Catalog.RULES.wholesaleFactor, 2) .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
-	}, { gap = 4 }).Parent = side
+		Ui.lbl("Qué hace vender un auto"),
+		Ui.text("• <b>Demanda</b> del tipo de vehículo en el año actual (Mercado).\n• <b>Atractivo</b>: calidad y prestaciones según el objetivo del diseño, frente a lo que el mercado espera en esa época.\n• <b>Precio</b>: por encima del de referencia vende menos; por debajo, más.\n• <b>Reputación</b> (" .. Util.num(g.reputation, 1) .. "/5) y <b>alcance</b> de la sede (×" .. Util.num(Rules.sede(g).reach, 1) .. ").\n• <b>Rivales</b>: marcas que venden el mismo tipo.\nNo hay negociación: lo terminado se vende solo.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
+	}, { gap = 4, name = "QueVende" }).Parent = side
 end
 
 return Screen
