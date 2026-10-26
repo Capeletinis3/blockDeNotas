@@ -146,6 +146,16 @@ function Screen.nextAction(g: any): any
 			return { label = "Ampliar la sede", sub = nx.name .. " · " .. Util.money(nx.cost), go = "compania", key = "8" }
 		end
 	end
+	local ex = Rules.nextExpansion(g)
+	if ex then
+		local ok = true
+		for _, c in Rules.expansionChecks(g) do
+			ok = ok and c[1]
+		end
+		if ok then
+			return { label = "Expansión global", sub = ex.name .. " · " .. Util.money(ex.cost), go = "compania", key = "8" }
+		end
+	end
 	local selling = 0
 	for _, l in g.lots do
 		if l.saleState == "en venta" then
@@ -849,7 +859,8 @@ local function leftCards(g: any): { Instance }
 			Ui.text("Próxima: <b><font color=\"#F5F7FA\">" .. nx.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.req.sold) .. " autos vendidos · reputación " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.req.rep, 1) .. " · costo " .. Util.money(nx.cost) .. " · " .. nx.pi .. " PI/min", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 		}, 9)
 	else
-		sedeBody = Ui.text("Sede máxima alcanzada.", { size = Ui.S.sm })
+		local ex = Rules.nextExpansion(g)
+		sedeBody = Ui.text(ex and ("Sede máxima. Próxima región: <b><font color=\"#F5F7FA\">" .. ex.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos · costo " .. Util.money(ex.cost)) or ("Sede máxima · " .. Rules.expansion(g) .. " regiones abiertas."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
 	end
 	table.insert(out, hcCard("Sede", {
 		cardHead("sede", "building", T.ye, T.ye, 0.15, "Sede · nivel " .. g.sede, g.derived.sedeName),

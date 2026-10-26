@@ -12,6 +12,7 @@
 
 	Uso:  lune run tests/balance.luau [dificultad] [minutos reales] [plano]
 	      «plano» = estrategia mínima (dos modelos de 1970 sin generaciones nuevas), para comparar.
+	      «uno» = un solo tipo de vehículo (con generaciones nuevas). 4.º argumento «sinexp»: sin expansión global.
 ]]
 
 local process = require("@lune/process")
@@ -97,7 +98,7 @@ end
 function Bot.bestPrice(g: any, d: any): number
 	local c = DesignCalc.computeDesign(g, d)
 	local bestP, bestV = c.price, -math.huge
-	for _, k in { 0.85, 0.95, 1, 1.1, 1.2, 1.35, 1.5 } do
+	for _, k in { 0.85, 0.95, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2, 2.4 } do
 		local p = Util.round(c.price * k / 10) * 10
 		local est = Rules.designSalesEstimate(g, c, d, p)
 		local v = math.min(est.rate, Rules.lineRate(g)) * (p - c.unitCost)
@@ -113,6 +114,7 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 	local o = opts or {}
 	local verbose = o.verbose
 	local flat = o.flat
+	local single = o.single -- un solo tipo de vehículo (el de más demanda), con generaciones nuevas
 	local ctx = { events = {}, today = "2026-10-25", yesterday = "2026-10-24", rng = seeded(7) }
 	ctx.notify = function() end
 	local g = GameState.newGame({ name = "Bot Motors", color = "#7667FF", logo = "pico", difficulty = difficulty, now = 1 })
@@ -167,7 +169,7 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 		end)
 		local out = {}
 		-- Como en el tutorial: un solo modelo hasta vender los primeros autos.
-		local n = (g.counters.unitsSold < 25) and 1 or (flat and 2 or math.min(#list, 1 + g.sede))
+		local n = (g.counters.unitsSold < 25 or single) and 1 or (flat and 2 or math.min(#list, 1 + g.sede))
 		for i = 1, n do
 			if list[i] then
 				table.insert(out, list[i][1])
@@ -349,6 +351,10 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 			if ok and Actions.expandSede(g, ctx, {}).ok then
 				mark("sede " .. g.sede, Rules.sede(g).name)
 			end
+			local nx = Rules.nextExpansion(g)
+			if nx and not o.noExpansion and g.counters.unitsSold >= nx.sold and g.money >= nx.cost * 1.2 and Actions.expandGlobal(g, ctx, {}).ok then
+				mark("region " .. g.expansion, nx.name)
+			end
 		end
 		if Rules.year(g) ~= lastYear then
 			local f = Rules.finance(g, 12)
@@ -363,6 +369,7 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 			dd.endMoney = g.money
 			dd.sede = g.sede
 			dd.techs = #g.research.done
+			dd.regions = g.expansion
 			log.decades[dec] = dd
 			log.spent.produccion += f.manufacturing
 			log.spent.investigacion += f.invest.investigacion
@@ -428,8 +435,9 @@ if not _G.BALANCE_AS_MODULE then
 	local dif = args[1] or "normal"
 	local minutes = tonumber(args[2]) or 120
 	local flat = args[3] == "plano"
+	local single = args[3] == "uno"
 	print("Bot de balance · dificultad " .. dif .. " · " .. minutes .. " minutos reales" .. (flat and " · estrategia plana" or ""))
-	local log = Bot.play(dif, minutes, { verbose = true, flat = flat })
+	local log = Bot.play(dif, minutes, { verbose = true, flat = flat, single = single, noExpansion = args[4] == "sinexp" })
 	local rs = Bot.researchSummary(log)
 	print(string.format("\nInvestigaciones terminadas: %d · una cada %.1f min en promedio · se investigan %.1f años después de aparecer", rs.done, rs.avgGap, rs.avgLag))
 	for _, k in { "s", "n", "i", "b" } do
@@ -442,7 +450,7 @@ if not _G.BALANCE_AS_MODULE then
 	for dec = 1970, 2030, 10 do
 		local d = log.decades[dec]
 		if d then
-			print(string.format("  %ds  %15s  %15s  %15s  %15s  sede %d  %d tec.", dec, Util.money(d.revenue), Util.money(d.manufacturing), Util.money(d.net), Util.money(d.endMoney), d.sede, d.techs))
+			print(string.format("  %ds  %15s  %15s  %15s  %15s  sede %d  %d tec.  %d reg.", dec, Util.money(d.revenue), Util.money(d.manufacturing), Util.money(d.net), Util.money(d.endMoney), d.sede, d.techs, d.regions or 0))
 		end
 	end
 	print("\nRentabilidad por tipo (vendidos · ingresos · margen):")

@@ -136,9 +136,46 @@ function Rules.factoryMult(g: any): number
 	return (1 + Catalog.STATION_SPEED * levels) * (1 + Rules.tech(g, "prodSpeed") / 100) * (1 + math.min(0.3, staff * 0.05))
 end
 
+-- Expansión global (después de la sede máxima) ---------------------------------------------
+
+function Rules.expansion(g: any): number
+	return tonumber(g.expansion) or 0
+end
+
+-- Tamaño del mercado mundial al que llegás: +15 % de demanda por región abierta.
+function Rules.marketFactor(g: any): number
+	return 1 + Catalog.EXPANSION.demand * Rules.expansion(g)
+end
+
+-- Alcance comercial de la sede.
+function Rules.reach(g: any): number
+	return Rules.sede(g).reach
+end
+
+-- Próxima región: { level, name, cost, sold } o nil (sin Imperio o con todas abiertas).
+function Rules.nextExpansion(g: any): any
+	local E = Catalog.EXPANSION
+	local n = Rules.expansion(g) + 1
+	if Rules.nextSede(g) ~= nil or n > #E.regions then
+		return nil
+	end
+	return { level = n, name = E.regions[n], cost = Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000, sold = E.soldBase + E.soldStep * (n - 1) }
+end
+
+function Rules.expansionChecks(g: any): { any }
+	local nx = Rules.nextExpansion(g)
+	if not nx then
+		return {}
+	end
+	return {
+		{ g.counters.unitsSold >= nx.sold, "Autos vendidos: " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.sold) },
+		{ g.money >= nx.cost, "Dinero: " .. Util.money(g.money) .. " / " .. Util.money(nx.cost) },
+	}
+end
+
 -- Autos por minuto real que fabrica cada línea a 1×.
 function Rules.lineRate(g: any): number
-	return Rules.sede(g).perLine * Rules.factoryMult(g)
+	return Rules.sede(g).perLine * Rules.factoryMult(g) * (1 + Catalog.EXPANSION.line * Rules.expansion(g))
 end
 
 function Rules.caps(g: any): any
@@ -147,7 +184,7 @@ function Rules.caps(g: any): any
 		lines = s.lines,
 		perLine = Rules.lineRate(g),
 		capacity = Rules.lineRate(g) * s.lines,
-		reach = s.reach,
+		reach = Rules.reach(g),
 		staff = s.staff,
 		pi = s.pi,
 	}
@@ -253,7 +290,7 @@ function Rules.demand(g: any, type: string, yearFrac: number?): number
 		return 0
 	end
 	local dif = Catalog.DIFFICULTIES[g.company.difficulty] or Catalog.DIFFICULTIES.normal
-	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * dif.demand
+	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * dif.demand * Rules.marketFactor(g)
 end
 
 -- Precio justo de un auto de ese tipo, ese año y ese atractivo (referencia de los rivales).
@@ -296,7 +333,7 @@ function Rules.rivalOffers(type: string, yearFrac: number, g: any?): { any }
 				cut = cut,
 				appeal = appeal,
 				reach = reach,
-				weight = math.exp((appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, fair) * reach,
+				weight = math.exp((appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, fair, type) * reach,
 			})
 		end
 	end
@@ -324,23 +361,24 @@ end
 
 function Rules.campaignCost(g: any, lvl: number): number
 	local c = Catalog.CAMPAIGNS[lvl]
-	return c and Util.round(Rules.sede(g).campaign * c.cost / 100) * 100 or 0
+	return c and Util.round(Rules.sede(g).campaign * c.cost * Rules.marketFactor(g) / 100) * 100 or 0
 end
 
 -- Multiplicador comercial de la empresa: alcance de la sede × reputación × tecnologías × campaña × personal.
 function Rules.playerMult(g: any): number
-	local s = Rules.sede(g)
 	local rep = 0.6 + g.reputation * 0.14
 	local tech = 1 + Rules.tech(g, "demand") / 100
 	local c = Rules.campaign(g)
 	local campaign = c and (1 + c.boost) or 1
 	local staff = 1 + math.min(0.25, (Rules.staffBonus(g, "ventas") + Rules.staffBonus(g, "marketing")) * 0.05)
-	return s.reach * rep * tech * campaign * staff
+	return Rules.reach(g) * rep * tech * campaign * staff
 end
 
--- Factor de precio: vender por encima del precio de referencia baja las ventas (y al revés).
-function Rules.priceFactor(price: number, ref: number): number
-	return Util.clamp(math.pow(ref / math.max(1, price), ECON.priceElasticity), 0.02, 3)
+-- Factor de precio: vender por encima del precio de referencia baja las ventas (y al revés). Cada tipo
+-- tiene su sensibilidad (ECON.typeElasticity).
+function Rules.priceFactor(price: number, ref: number, type: string?): number
+	local e = type and ECON.typeElasticity[type] or ECON.priceElasticity
+	return Util.clamp(math.pow(ref / math.max(1, price), e), 0.02, 3)
 end
 
 -- Precio permitido para un lote: desde la mitad del costo hasta 3 veces el precio de referencia, de a $10.
@@ -352,7 +390,7 @@ end
 function Rules.lotWeight(g: any, lot: any, yearFrac: number): number
 	local baseline = Rules.eraBaseline(yearFrac)
 	local seg = Catalog.SEGMENTS[lot.design.spec.segment] or Catalog.SEGMENTS.Masivo
-	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice) * Rules.playerMult(g) * seg.pop
+	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop
 end
 
 --[[ Reparto de la demanda de un tipo entre: el resto del mercado (peso fijo), los modelos rivales y los
@@ -550,14 +588,14 @@ end
 
 function Rules.missionGoal(g: any, m: any): number
 	if m.goalScale == "reach" then
-		return Util.round(m.goal * Rules.sede(g).reach)
+		return Util.round(m.goal * Rules.reach(g) * Rules.marketFactor(g))
 	end
 	return m.goal
 end
 
 function Rules.missionReward(g: any, m: any): any
 	if m.goalScale == "reach" then
-		local k = Rules.sede(g).reach
+		local k = Rules.reach(g) * Rules.marketFactor(g)
 		return { money = m.reward.money and Util.round(m.reward.money * k / 100) * 100 or nil, pi = m.reward.pi and Util.round(m.reward.pi * k) or nil, xp = m.reward.xp }
 	end
 	return m.reward
@@ -569,8 +607,23 @@ function Rules.missionValue(g: any, m: any): number
 		return (m.counter == "soldYear" and y.units) or (m.counter == "producedYear" and y.produced) or math.max(0, y.margin)
 	elseif m.counter == "sedeLevel" then
 		return g.sede
+	elseif m.counter == "expansion" then
+		return Rules.expansion(g)
+	elseif m.counter == "leaderTypes" then
+		return Rules.leaderTypes(g)
 	end
 	return g.counters[m.counter] or 0
+end
+
+-- Tipos de vehículo en los que tu cuota (promedio móvil mensual, g.marketShare) es de al menos 35 %.
+function Rules.leaderTypes(g: any): number
+	local n = 0
+	for _, share in g.marketShare or {} do
+		if share >= 0.35 then
+			n += 1
+		end
+	end
+	return n
 end
 
 function Rules.missionKey(g: any, m: any): string

@@ -179,7 +179,7 @@ end
 -- Historial permanente: entrada del modelo y generación de este lote (se crea al lanzarlo).
 function Simulation.registerModel(g: any, lot: any): any
 	local e = GameState.modelEntry(g, lot)
-	GameState.trim(g)
+	GameState.trim(g, e.key)
 	return e
 end
 
@@ -194,7 +194,9 @@ function Simulation.archiveLot(g: any, lot: any)
 	end
 	lot.endDay = g.time.day
 	lot.bestMonth = math.max(lot.bestMonth or 0, lot.monthSold or 0)
-	local e = Simulation.registerModel(g, lot)
+	-- Primero se suman los números y después se recorta (una entrada nueva tiene 0 ventas y no debe
+	-- resumirse antes de recibirlos).
+	local e = GameState.modelEntry(g, lot)
 	local profit = lot.revenue - lot.costSpent
 	e.lots += 1
 	e.produced += lot.produced
@@ -207,8 +209,9 @@ function Simulation.archiveLot(g: any, lot: any)
 	e.bestMonth = math.max(e.bestMonth, lot.bestMonth)
 	e.lastDay = g.time.day
 	e.name = lot.design.name
+	GameState.noteRecords(g, e, { name = lot.design.name, gen = lot.design.gen, sold = lot.sold, profit = profit, bestMonth = lot.bestMonth, day = g.time.day })
 	table.insert(g.lotHistory, 1, GameState.slimLot(lot))
-	GameState.trim(g)
+	GameState.trim(g, e.key)
 end
 
 function Simulation.stepProduction(g: any, ctx: any, minutes: number)

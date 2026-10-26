@@ -135,7 +135,7 @@ function Screen.build(main: Frame, side: Frame)
 		table.insert(items, expand)
 		table.insert(sedeRows, Ui.card(items, { gap = 6, bg = T.p2, name = "ProximaSede" }))
 	else
-		table.insert(sedeRows, Ui.note("g", "Tenés la sede máxima: Imperio automotriz."))
+		table.insert(sedeRows, Ui.note("g", "Tenés la sede máxima: Imperio automotriz. Seguí creciendo con la expansión global."))
 	end
 	-- Todas las sedes (para planificar)
 	local ladder: { Instance? } = { Ui.lbl("Las cinco sedes") }
@@ -145,6 +145,38 @@ function Screen.build(main: Frame, side: Frame)
 	end
 	table.insert(sedeRows, Ui.col(ladder, 4))
 	Ui.card(sedeRows, { gap = 12, pad = 18, name = "Sede" }).Parent = main
+
+	-- Expansión global: metas grandes después del Imperio automotriz.
+	local E = Catalog.EXPANSION
+	local lvl = Rules.expansion(g)
+	local exRows: { Instance? } = {
+		Ui.row({ Ui.grow(Ui.lbl("Expansión global")), Ui.chip(lvl .. "/" .. #E.regions .. " regiones", lvl > 0 and "cg" or "cn") }, 10),
+		Ui.text("Cada región abre mercados nuevos: <b>+" .. Util.round(E.demand * 100) .. " % de demanda</b> en todos los tipos (repartida con las mismas reglas entre vos y los rivales) y <b>+" .. Util.round(E.line * 100) .. " % de autos por minuto</b> en cada línea. Las campañas cuestan más con cada región.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
+		lvl > 0 and Ui.between("Mercado mundial", "×" .. Util.num(Rules.marketFactor(g), 2) .. " · " .. table.concat(table.move(E.regions, 1, lvl, 1, {}), ", "), { size = Ui.S.xs }) or nil,
+	}
+	local nx = Rules.nextExpansion(g)
+	if nx then
+		local ok = true
+		for _, c in Rules.expansionChecks(g) do
+			ok = ok and c[1]
+			table.insert(exRows, Ui.text((c[1] and "✓ " or "✕ ") .. c[2], { size = Ui.S.sm, color = c[1] and T.gr or T.re2 }))
+		end
+		table.insert(exRows, Ui.button("Abrir " .. nx.name .. " · " .. Util.money(nx.cost), "p", function()
+			App.openDialog("confirm", {
+				title = "¿Expandirte a " .. nx.name .. "?",
+				body = "Cuesta " .. Util.money(nx.cost) .. " (no se devuelve). La demanda de todos los tipos pasa a ×" .. Util.num(1 + E.demand * nx.level, 2) .. " y cada línea fabrica " .. Util.round(E.line * 100) .. " % más. Las campañas cuestan " .. Util.round(E.demand * 100) .. " % más.",
+				okLabel = "Expandirme",
+				onOk = function()
+					App.request("expandGlobal")
+				end,
+			})
+		end, { disabled = not ok, why = "Faltan requisitos", name = "ExpansionGlobal" }))
+	elseif lvl >= #E.regions then
+		table.insert(exRows, Ui.note("g", "Tu marca está en todo el mundo."))
+	else
+		table.insert(exRows, Ui.text("Se abre con el Imperio automotriz (sede 5).", { size = Ui.S.sm, color = T.mut }))
+	end
+	Ui.card(exRows, { gap = 8, pad = 18, name = "Expansion" }).Parent = main
 
 	local dif = Catalog.DIFFICULTIES[g.company.difficulty]
 	local tot = Rules.finance(g, 100000)

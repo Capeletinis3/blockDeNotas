@@ -15,7 +15,7 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 4
+GameState.SCHEMA = 5
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en venta / agotado / retirado.
@@ -31,6 +31,12 @@ local function freshStations(): any
 	return out
 end
 
+-- Récords permanentes de la empresa: se actualizan al cerrar cada lote y no se recortan nunca.
+-- others = modelos con pocas ventas que se resumieron en un total para que la partida no crezca sin límite.
+function GameState.newRecords(): any
+	return { others = { models = 0, lots = 0, produced = 0, sold = 0, discarded = 0, revenue = 0, cost = 0 } }
+end
+
 function GameState.newGame(opts: { name: string, color: string, logo: string?, difficulty: string?, now: number }): any
 	local dif = Catalog.DIFFICULTIES[opts.difficulty or "normal"] or Catalog.DIFFICULTIES.normal
 	return {
@@ -41,6 +47,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		nextId = 1,
 		company = { name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
 		sede = 1,
+		expansion = 0, -- regiones abiertas de la expansión global (después del Imperio automotriz)
 		money = dif.money,
 		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
 		rp = 0, -- banco de puntos de investigación
@@ -53,6 +60,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		lots = {},
 		lotHistory = {}, -- historial reciente (lotes livianos)
 		modelHistory = {}, -- historial permanente: un resumen por modelo y generación
+		records = GameState.newRecords(), -- récords de la empresa (no dependen del historial)
 		launched = {}, -- diseños que ya cobraron la bonificación de lanzamiento exitoso
 		marketShare = {}, -- cuota de mercado por tipo (promedio móvil mensual)
 		employees = {},
@@ -372,6 +380,23 @@ function GameState.validate(g: any): (boolean, string?)
 	if not isInt(g.promo, 0, #Catalog.CAMPAIGNS) then
 		return fail("La campaña publicitaria está dañada.")
 	end
+	if not isInt(g.expansion, 0, #Catalog.EXPANSION.regions) or (g.expansion > 0 and g.sede < #Catalog.SEDES) then
+		return fail("La expansión global está dañada.")
+	end
+	local rec = g.records
+	if type(rec) ~= "table" or type(rec.others) ~= "table" then
+		return fail("Los récords de la empresa están dañados.")
+	end
+	for _, k in { "models", "lots", "produced", "sold", "discarded", "revenue", "cost" } do
+		if not nonNeg(rec.others[k]) then
+			return fail("Los récords de la empresa están dañados.")
+		end
+	end
+	for _, k in { "firstModel", "bestLot", "bestLotProfit", "bestMonth" } do
+		if rec[k] ~= nil and (type(rec[k]) ~= "table" or type(rec[k].name) ~= "string" or not isFinite(rec[k].value)) then
+			return fail("Los récords de la empresa están dañados.")
+		end
+	end
 	return true, nil
 end
 
@@ -653,6 +678,27 @@ MIGRATIONS[3] = function(g: any, _now: number)
 	g.schema = 4
 end
 
+-- 4 → 5: expansión global, récords permanentes (desde el historial existente) e historial compactable.
+MIGRATIONS[4] = function(g: any, _now: number)
+	g.expansion = tonumber(g.expansion) or 0
+	if type(g.records) ~= "table" then
+		g.records = GameState.newRecords()
+		local first = nil
+		for _, e in type(g.modelHistory) == "table" and g.modelHistory or {} do
+			if type(e) == "table" and type(e.name) == "string" then
+				if not first or (e.firstDay or 0) < (first.firstDay or 0) then
+					first = e
+				end
+				GameState.noteRecords(g, e, { name = e.name, gen = e.gen, sold = e.bestLotSold or 0, profit = e.bestLotProfit or 0, bestMonth = e.bestMonth or 0, day = e.lastDay or 0 })
+			end
+		end
+		if first then
+			g.records.firstModel = { name = first.name, key = first.key, gen = first.gen or 1, value = first.firstDay or 0, day = first.firstDay or 0 }
+		end
+	end
+	g.schema = 5
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -790,7 +836,36 @@ function GameState.modelEntry(g: any, lot: any): any
 		firstDay = lot.createdDay or g.time.day, lastDay = lot.createdDay or g.time.day,
 	}
 	table.insert(g.modelHistory, e)
+	if g.records and not g.records.firstModel then
+		g.records.firstModel = { name = e.name, key = key, gen = e.gen, value = e.firstDay, day = e.firstDay }
+	end
 	return e
+end
+
+-- Actualiza los récords de la empresa con un lote cerrado (o un resumen equivalente):
+-- x = { name, gen, sold, profit, bestMonth, day }.
+function GameState.noteRecords(g: any, e: any, x: any)
+	local rec = g.records
+	if not rec then
+		return
+	end
+	local function better(k: string, value: number)
+		if value > 0 and (not rec[k] or value > rec[k].value) then
+			rec[k] = { name = x.name, key = e.key, gen = x.gen or 1, value = value, day = x.day }
+		end
+	end
+	better("bestLot", x.sold or 0)
+	better("bestLotProfit", x.profit or 0)
+	better("bestMonth", x.bestMonth or 0)
+end
+
+-- Deja una entrada del historial solo con números y nombre (sin configuración ni estadísticas).
+local function compactEntry(e: any)
+	local sp = e.spec or {}
+	local paint = sp.paint or {}
+	e.spec = { baseId = sp.baseId, paint = { primary = paint.primary, secondary = paint.secondary } }
+	e.stats = { unitCost = e.stats and e.stats.unitCost, price = e.stats and e.stats.price }
+	e.compact = true
 end
 
 -- Versión liviana de un lote terminado para el historial reciente (sin la copia completa del diseño:
@@ -810,20 +885,86 @@ end
 
 -- Límites de tamaño para que el registro no crezca sin control (los lotes son agregados: producir 50.000
 -- autos no agrega 50.000 registros).
-function GameState.trim(g: any)
+function GameState.trim(g: any, protect: string?)
 	local R = Catalog.RULES
 	while #g.ledger > R.maxLedger do
 		table.remove(g.ledger, 1)
 	end
-	while #g.modelHistory > R.maxModelHistory do
-		-- Se descarta el modelo con menos ventas (nunca los importantes).
-		local worst, wi = math.huge, 1
-		for i, e in g.modelHistory do
-			if e.sold < worst then
-				worst, wi = e.sold, i
+	if #g.modelHistory > R.maxModelDetail then
+		-- Protegidos: modelos con lotes activos, el primer modelo, el más vendido, el más rentable y los que
+		-- tienen un récord de la empresa. Nunca se compactan ni se resumen.
+		local keep = {}
+		if protect then
+			keep[protect] = true
+		end
+		for _, l in g.lots do
+			keep[GameState.modelKey(l.design)] = true
+		end
+		local rec = g.records or {}
+		for _, k in { "firstModel", "bestLot", "bestLotProfit", "bestMonth" } do
+			if rec[k] and rec[k].key then
+				keep[rec[k].key] = true
 			end
 		end
-		table.remove(g.modelHistory, wi)
+		local best, profit = nil, nil
+		for _, e in g.modelHistory do
+			if not best or e.sold > best.sold then
+				best = e
+			end
+			if not profit or e.revenue - e.cost > profit.revenue - profit.cost then
+				profit = e
+			end
+		end
+		keep[best.key] = true
+		keep[profit.key] = true
+		-- Orden de importancia: menos ventas primero (a igualdad, el más antiguo).
+		local order = {}
+		local detailed = 0
+		for _, e in g.modelHistory do
+			if not e.compact then
+				detailed += 1
+			end
+			if not keep[e.key] then
+				table.insert(order, e)
+			end
+		end
+		table.sort(order, function(a: any, b: any): boolean
+			if a.sold ~= b.sold then
+				return a.sold < b.sold
+			end
+			return (a.lastDay or 0) < (b.lastDay or 0)
+		end)
+		for _, e in order do
+			if detailed <= R.maxModelDetail then
+				break
+			end
+			if not e.compact then
+				compactEntry(e)
+				detailed -= 1
+			end
+		end
+		-- Sobre el tope total, los menos vendidos pasan a «Otros modelos» (se suman sus números).
+		local extra = #g.modelHistory - R.maxModelHistory
+		if extra > 0 then
+			local drop = {}
+			for i = 1, math.min(extra, #order) do
+				drop[order[i]] = true
+				local o = rec.others
+				local e = order[i]
+				o.models += 1
+				o.lots += e.lots
+				o.produced += e.produced
+				o.sold += e.sold
+				o.discarded += e.discarded
+				o.revenue += e.revenue
+				o.cost += e.cost
+			end
+			for i = #g.modelHistory, 1, -1 do
+				if drop[g.modelHistory[i]] then
+					table.remove(g.modelHistory, i)
+				end
+			end
+		end
 	end
 	while #g.lotHistory > R.maxLotHistory do
 		table.remove(g.lotHistory)
@@ -889,7 +1030,7 @@ end
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), g.research.active and g.research.active.id or "",
-		tostring(#g.candidates), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory) }
+		tostring(#g.candidates), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
 	end

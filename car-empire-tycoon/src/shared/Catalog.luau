@@ -20,7 +20,7 @@ local Catalog = {}
 Catalog.CALENDAR = { startYear = 1970, endYear = 2030, realSecondsPerYear = 660, months = 12 }
 
 Catalog.RULES = {
-	version = 4,
+	version = 5,
 	minutesPerRealSecond = 10, -- a velocidad 1×, 1 s real = 10 min de juego
 	-- Minutos de juego de un mes: 660 s/año × 10 min/s ÷ 12 = 550.
 	dayMinutes = Catalog.CALENDAR.realSecondsPerYear * 10 / Catalog.CALENDAR.months,
@@ -38,7 +38,12 @@ Catalog.RULES = {
 	maxLotQty = 1000000, -- tope técnico de un lote (la capacidad y el dinero son el límite real)
 	maxActiveLots = 16, -- lotes produciendo o en venta a la vez
 	maxLotHistory = 40, -- historial reciente: lotes agotados o retirados con su detalle (versión liviana)
-	maxModelHistory = 400, -- historial permanente: un resumen por modelo y generación
+	-- Historial permanente: un resumen por modelo y generación. Los maxModelDetail más importantes guardan
+	-- configuración y estadísticas completas (≈ 1 KB); el resto, solo números y nombre (≈ 0,3 KB). Si se
+	-- superan maxModelHistory, los modelos con menos ventas se suman a «Otros modelos» (los totales no se
+	-- pierden). Con 3 empresas por cuenta, el peor caso queda muy por debajo del límite de 4 MB por clave.
+	maxModelDetail = 150,
+	maxModelHistory = 600,
 	maxDesigns = 60,
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
@@ -56,6 +61,9 @@ Catalog.ECON = {
 	unitCostScale = 0.12,
 	priceMarkup = 1.3, -- precio de referencia = costo × 1,3 + prima de calidad y prestaciones
 	priceElasticity = 2.8, -- cuánto cambian las ventas con el precio respecto de la referencia
+	-- Sensibilidad al precio por tipo: los compradores de económicos comparan precios; los de deportivos,
+	-- superdeportivos y clásicos pagan más por lo que quieren (menos volumen, más margen).
+	typeElasticity = { compacto = 3.4, sedan = 2.9, pickup = 2.6, suv = 2.5, electrico = 2.7, deportivo = 2.1, clasico = 1.9, superdeportivo = 1.6 },
 	appealScale = 12, -- puntos de atractivo que multiplican las ventas por e (≈ ×2,7)
 	outsideWeight = 45, -- peso del «resto del mercado» (marcas chicas) en el reparto de la demanda
 	eraBaseline = { [1970] = 50, [2030] = 75 }, -- atractivo medio que el mercado espera cada año
@@ -386,6 +394,20 @@ Catalog.SEDES = {
 	{ level = 5, name = "Imperio automotriz", asset = "Sede5", lines = 5, perLine = 100, reach = 20, pi = 90, staff = 50, campaign = 300000, cost = 400000000, req = { sold = 100000, rep = 4.3 } },
 }
 
+-- Expansión global (después del Imperio automotriz): cada región abre mercados nuevos (+15 % de demanda
+-- en todos los tipos, repartida con las mismas reglas entre vos y los rivales) y suma capacidad a las
+-- líneas. Costo creciente (cost × growth^(n−1)) y ventas acumuladas mínimas. Las campañas cuestan más
+-- con cada región (se anuncia en más mercados).
+Catalog.EXPANSION = {
+	cost = 80000000,
+	growth = 1.4,
+	demand = 0.15, -- +15 % de demanda por región
+	line = 0.12, -- +12 % de autos por minuto en cada línea por región
+	soldBase = 110000,
+	soldStep = 35000,
+	regions = { "Sudamérica", "Norteamérica", "Europa occidental", "Europa del este", "Asia oriental", "Sudeste asiático", "India", "Oceanía", "Medio Oriente", "África" },
+}
+
 -- Estaciones de la fábrica (mejoras): cada nivel suma velocidad de producción. { id, nombre, rol ideal }
 Catalog.STATIONS = {
 	{ "chasis", "Chasis", "Mecánico" },
@@ -543,6 +565,17 @@ Catalog.MISSIONS = {
 	{ id = "s5", kind = "historia", title = "Lanzá una nueva generación", desc = "Desde Catálogo, creá la 2.ª generación de un modelo.", counter = "generations", goal = 1, reward = { money = 30000, pi = 8, xp = 400 }, go = "autos" },
 	{ id = "s6", kind = "historia", title = "Llegá a la Sede empresarial", desc = "Más líneas, más alcance y 20 PI por minuto.", counter = "sedeLevel", goal = 3, reward = { money = 150000, pi = 40, xp = 1200 }, go = "compania" },
 	{ id = "s7", kind = "historia", title = "Vendé 10.000 autos", desc = "Una marca reconocida en todo el país.", counter = "unitsSold", goal = 10000, reward = { money = 400000, pi = 80, xp = 2000 }, go = "ventas" },
+	{ id = "s8", kind = "historia", title = "Llegá a la Corporación automotriz", desc = "Cuatro líneas, alcance ×11 y 45 PI por minuto.", counter = "sedeLevel", goal = 4, reward = { money = 3000000, pi = 150, xp = 3000 }, go = "compania" },
+	{ id = "s9", kind = "historia", title = "Liderá un tipo de vehículo", desc = "Tené al menos 35 % de la cuota de mercado de un tipo (promedio de los últimos meses, en Mercado).", counter = "leaderTypes", goal = 1, reward = { money = 6000000, pi = 150, xp = 3000 }, go = "mercado" },
+	{ id = "s10", kind = "historia", title = "Vendé 50.000 autos", desc = "Una de las marcas grandes del país.", counter = "unitsSold", goal = 50000, reward = { money = 10000000, pi = 200, xp = 4000 }, go = "ventas" },
+	{ id = "s11", kind = "historia", title = "Llegá al Imperio automotriz", desc = "La sede máxima: abre la expansión global.", counter = "sedeLevel", goal = 5, reward = { money = 40000000, pi = 300, xp = 6000 }, go = "compania" },
+	{ id = "s12", kind = "historia", title = "Completá todas las investigaciones", desc = "Las 56 tecnologías de 1970 a 2030.", counter = "researchDone", goal = 56, reward = { money = 50000000, xp = 8000 }, go = "investigacion" },
+	{ id = "s13", kind = "historia", title = "Primera expansión global", desc = "Abrí tu primera región desde Compañía › Expansión global.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "compania" },
+	{ id = "s14", kind = "historia", title = "Vendé 250.000 autos", desc = "Una marca internacional.", counter = "unitsSold", goal = 250000, reward = { money = 60000000, xp = 8000 }, go = "ventas" },
+	{ id = "s15", kind = "historia", title = "Liderá cuatro tipos de vehículo", desc = "Al menos 35 % de cuota en cuatro tipos a la vez.", counter = "leaderTypes", goal = 4, reward = { money = 80000000, xp = 10000 }, go = "mercado" },
+	{ id = "s16", kind = "historia", title = "Abrí cinco regiones", desc = "Expansión global nivel 5.", counter = "expansion", goal = 5, reward = { money = 150000000, xp = 12000 }, go = "compania" },
+	{ id = "s17", kind = "historia", title = "Vendé 1.000.000 de autos", desc = "Una de las marcas más grandes del mundo.", counter = "unitsSold", goal = 1000000, reward = { money = 250000000, xp = 20000 }, go = "ventas" },
+	{ id = "s18", kind = "historia", title = "Presencia en todo el mundo", desc = "Abrí las diez regiones de la expansión global.", counter = "expansion", goal = 10, reward = { money = 500000000, xp = 30000 }, go = "compania" },
 	{ id = "y1", kind = "anual", title = "Vendé autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "soldYear", goal = 120, goalScale = "reach", reward = { money = 12000, pi = 3, xp = 150 }, go = "ventas" },
 	{ id = "y2", kind = "anual", title = "Producí autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "producedYear", goal = 150, goalScale = "reach", reward = { money = 10000, pi = 3, xp = 120 }, go = "fabrica" },
 	{ id = "y3", kind = "anual", title = "Ganancia del año", desc = "Ingresos por ventas − costo de fabricación de lo vendido este año.", counter = "marginYear", goal = 90000, goalScale = "reach", reward = { money = 15000, pi = 4, xp = 150 }, go = "estadisticas" },

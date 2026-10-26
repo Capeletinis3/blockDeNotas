@@ -1672,6 +1672,341 @@ test("Envío al cliente: liviano segundo a segundo, completo cuando cambia la es
 	check(maxLight < 4000, "un envío liviano pesa poco (" .. maxLight .. " bytes)")
 end)
 
+-- Correcciones finales (tercera etapa) --------------------------------------------------------------
+-- Una partida larga del bot (1970 → 2030 y dos horas de años comerciales extra) se comparte entre las
+-- pruebas [F…] para no repetirla.
+
+local longLog = nil
+local function longGame(): any
+	if not longLog then
+		longLog = Bot.play("normal", 780)
+	end
+	return longLog
+end
+
+local function allNodes(): { any }
+	local out = {}
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			table.insert(out, n)
+		end
+	end
+	return out
+end
+
+test("[F1] Llegar a 2030 sin perder progreso", function()
+	local log = longGame()
+	local g = log.g
+	check(log.milestones["sede 5"] ~= nil, "llega al Imperio automotriz")
+	eq(Rules.year(g), 2030, "el año visible queda en 2030")
+	check(Rules.periodYear(g) > 2030 and Rules.extraYears(g) >= 1, "y la partida siguió en años comerciales (" .. Rules.periodYear(g) .. ")")
+	check(log.minMoney >= 0, "nunca dinero negativo")
+	local ok, err = GameState.validate(jsonCopy(g))
+	check(ok, "la partida final es válida: " .. tostring(err))
+	lotInvariants(g)
+end)
+
+test("[F2] Después del último año: producción, ventas, campañas, salarios, investigación y generaciones siguen", function()
+	local g = bigCompany("Después SA")
+	local ctx = makeCtx(201)
+	g.time.day = (Catalog.CALENDAR.endYear - 1970 + 1) * 12 + 3 -- segundo año comercial extra
+	eq(Rules.year(g), 2030, "año visible")
+	eq(Util.gameDate(g.time.day), "Abr 2030", "fecha visible")
+	-- Una investigación pendiente de cualquier época se puede terminar.
+	check(Actions.startResearch(g, ctx, { id = "mo1" }).ok, "empieza una investigación pendiente")
+	check(runUntil(g, ctx, function()
+		return Util.contains(g.research.done, "mo1")
+	end, 10), "y se termina")
+	-- Modelo nuevo, campaña, empleado y lote.
+	local id = saveNew(g, ctx, "brisa", "Posterior")
+	check(Actions.setCampaign(g, ctx, { level = 1 }).ok or Rules.campaignBlock(g, 1) ~= nil, "campaña (si está investigada)")
+	if Rules.campaignBlock(g, 1) ~= nil then
+		table.insert(g.research.done, "mk1")
+		check(Actions.setCampaign(g, ctx, { level = 1 }).ok, "campaña activada")
+	end
+	check(Actions.moreCandidates(g, ctx, {}).ok, "busca candidatos")
+	local cand = g.candidates[1]
+	check(cand ~= nil and Actions.hire(g, ctx, { candidateId = cand.id }).ok, "contrata")
+	local lot = Actions.createLot(g, ctx, { designId = id, qty = 20000 })
+	check(lot.ok, lot.msg)
+	local produced0, sold0 = g.counters.unitsProduced, g.counters.unitsSold
+	local promo0, sal0 = 0, 0
+	local day0 = g.time.day
+	-- Tres horas reales después del final del calendario.
+	runReal(g, ctx, 180)
+	check(g.time.day - day0 >= 12 * 15, "pasaron más de 15 años comerciales (" .. (g.time.day - day0) .. " meses)")
+	eq(Rules.year(g), 2030, "el año visible sigue en 2030")
+	check(g.counters.unitsProduced > produced0, "sigue fabricando")
+	check(g.counters.unitsSold > sold0, "sigue vendiendo")
+	for _, e in g.ledger do
+		if e.type == "promocion" then
+			promo0 += 1
+		elseif e.type == "salarios" then
+			sal0 += 1
+		end
+	end
+	check(promo0 > 0, "se cobran las campañas")
+	check(sal0 > 0, "se pagan los salarios")
+	lotInvariants(g)
+	-- Nueva generación después de 2030: hace falta un año comercial desde la anterior.
+	local d = g.designs[1]
+	check(Rules.canNewGeneration(g, d), "se puede crear una generación nueva")
+	local r = Actions.saveDesign(g, ctx, { draft = draftFor(g, "brisa", d.name), newGenOf = d.id })
+	check(r.ok, r.msg)
+	local newest = g.designs[#g.designs]
+	check(not Rules.canNewGeneration(g, newest), "la recién creada todavía no admite otra")
+	runReal(g, ctx, Catalog.CALENDAR.realSecondsPerYear / 60 + 0.2)
+	check(Rules.canNewGeneration(g, newest), "un año comercial después, sí")
+	-- Las misiones anuales se renuevan cada año comercial.
+	local y1 = Catalog.mission("y1")
+	local k1 = Rules.missionKey(g, y1)
+	runReal(g, ctx, Catalog.CALENDAR.realSecondsPerYear / 60)
+	check(Rules.missionKey(g, y1) ~= k1, "la misión anual tiene otra clave el año siguiente")
+end)
+
+test("[F3][F4] Guardar una partida larga y recuperarla sin cambiar el calendario", function()
+	local log = longGame()
+	local g = jsonCopy(log.g)
+	local bytes = #serde.encode("json", g)
+	check(bytes < 900000, "una partida de 60 años + años extra pesa " .. bytes .. " bytes (3 empresas < 4 MB)")
+	print("    tamaño de la partida larga del bot: " .. bytes .. " bytes")
+	local store = newStore()
+	local clock = { t = 5000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 71 }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	-- Se reemplaza la partida de la sesión por la del bot (misma empresa, mismo nombre de ranura).
+	for k in s.game do
+		s.game[k] = nil
+	end
+	for k, v in jsonCopy(g) do
+		s.game[k] = v
+	end
+	local day, minute, money = s.game.time.day, s.game.time.minute, s.game.money
+	mgr:remove(p)
+	clock.t += 3 * 3600 -- tres horas sin conectarse
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abrir la partida guardada")
+	local g2 = mgr2.list[p].game
+	eq(g2.time.day, day, "mismo mes (el calendario no avanza sin conexión)")
+	eq(g2.time.minute, minute, "mismo minuto")
+	eq(g2.money, money, "mismo dinero")
+	eq(Rules.year(g2), 2030, "año visible")
+	eq(Rules.periodYear(g2), Rules.periodYear(g), "mismo año comercial")
+	eq(#g2.modelHistory, #g.modelHistory, "historial completo")
+	eq(serde.encode("json", g2.records), serde.encode("json", g.records), "récords idénticos")
+	-- Y sigue jugando.
+	local sold = g2.counters.unitsSold
+	for _ = 1, 120 do
+		clock.t += 1
+		clock.c += 1
+		mgr2:tick()
+	end
+	check(g2.counters.unitsSold > sold, "después de cargar sigue vendiendo")
+end)
+
+test("[F5] Las 56 investigaciones se completan", function()
+	local nodes = allNodes()
+	eq(#nodes, 56, "el árbol tiene 56 tecnologías")
+	local log = longGame()
+	eq(#log.g.research.done, 56, "el bot las completa todas")
+	local seen = {}
+	for _, id in log.g.research.done do
+		check(not seen[id], "sin repetidas: " .. id)
+		seen[id] = true
+	end
+	check(Rules.missionState(log.g, Catalog.mission("s12")) ~= "progreso", "misión «Completá todas las investigaciones»")
+	-- Revisión de las 56: año, nivel, PI, dinero y requisitos coherentes.
+	for _, n in nodes do
+		check(n.year >= 1970 and n.year <= Catalog.CALENDAR.endYear, n.id .. ": año dentro del calendario")
+		check(Catalog.RESEARCH_TIERS[n.tier] ~= nil and n.rp > 0 and n.cost > 0, n.id .. ": nivel, PI y dinero")
+		for _, r in n.req do
+			local q = Catalog.researchNode(r)
+			check(q ~= nil and q.year <= n.year, n.id .. ": su requisito " .. r .. " existe y no es posterior")
+		end
+	end
+end)
+
+test("[F6] Tiempos reales de investigación (bot): cerca de los objetivos", function()
+	local rs = Bot.researchSummary(longGame())
+	-- Objetivos: pequeña 1–2 min, normal 3–5, importante 6–10, gran avance 10–15. El bot optimizador usa
+	-- el banco como acelerador, así que termina algo antes; se acepta un margen.
+	local RANGE = { s = { 0.7, 2.2 }, n = { 2.5, 5.5 }, i = { 4.5, 10.5 }, b = { 6, 15.5 } }
+	for k, rg in RANGE do
+		local bt = rs.byTier[k]
+		local avg = bt.total / bt.n
+		check(avg >= rg[1] and avg <= rg[2], Catalog.RESEARCH_TIERS[k].label .. ": media " .. Util.num(avg, 1) .. " min")
+		check(bt.max <= rg[2] * 1.1, Catalog.RESEARCH_TIERS[k].label .. ": máxima " .. Util.num(bt.max, 1) .. " min")
+	end
+	check(rs.avgLag <= 0.5, "el optimizador investiga apenas aparece cada tecnología (" .. Util.num(rs.avgLag, 1) .. " años)")
+	-- Estrategia simple (sin ampliar más allá de la sede 3 hasta 2009): más lenta, pero sin esperas eternas.
+	local flat = Bot.researchSummary(Bot.play("normal", 660, { flat = true }))
+	eq(flat.done, 56, "la estrategia simple también completa las 56")
+	for k, cap in { s = 2.2, n = 16, i = 21, b = 21 } do
+		check(flat.byTier[k].max <= cap, "simple · " .. Catalog.RESEARCH_TIERS[k].label .. ": máxima " .. Util.num(flat.byTier[k].max, 1) .. " min")
+	end
+end)
+
+test("[F7] Comparar estrategias: diversificar rinde más que un solo tipo", function()
+	local best = longGame()
+	local one = Bot.play("normal", 660, { single = true })
+	local flat = Bot.play("normal", 660, { flat = true })
+	local function revenue(log: any): number
+		return log.g.counters.revenueTotal or 0
+	end
+	check(revenue(best) > revenue(one) * 2, "diversificado " .. Util.money(revenue(best)) .. " frente a un solo tipo " .. Util.money(revenue(one)))
+	check(revenue(best) > revenue(flat) * 2, "con generaciones nuevas " .. Util.money(revenue(best)) .. " frente a la simple " .. Util.money(revenue(flat)))
+	-- La rentabilidad por tipo no es idéntica: los económicos dejan menos margen que deportivos y SUV.
+	local function margin(t: string): number
+		local bt = best.byType[t]
+		return (bt.revenue - bt.cost) / bt.revenue
+	end
+	check(margin("deportivo") - margin("compacto") > 0.08, "deportivo " .. Util.num(margin("deportivo") * 100, 1) .. " % frente a compacto " .. Util.num(margin("compacto") * 100, 1) .. " %")
+	check(margin("suv") > margin("sedan"), "SUV deja más margen que sedán")
+	check(best.byType.compacto.sold > best.byType.deportivo.sold, "pero el compacto vende más unidades")
+end)
+
+test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué invertir", function()
+	local log = longGame()
+	for _, dec in { 2000, 2010, 2020 } do
+		local d = log.decades[dec]
+		check(d.upgrades > 0, dec .. ": invierte en expansión (" .. Util.money(d.upgrades) .. ")")
+		check(d.revenue > d.manufacturing, dec .. ": ingresos mayores que la fabricación")
+	end
+	check(log.decades[2020].regions >= 5, "5 regiones o más en 2030 (" .. log.decades[2020].regions .. ")")
+	check(log.decades[2020].endMoney < 1500000000, "el dinero no se acumula sin destino (" .. Util.money(log.decades[2020].endMoney) .. ")")
+	check(log.decades[2020].revenue > log.decades[2000].revenue, "los ingresos siguen creciendo con las regiones")
+	-- La expansión: requisitos, costo, efecto en la demanda y en las campañas.
+	local g = bigCompany("Global SA")
+	local ctx = makeCtx(202)
+	g.sede = 4
+	check(not Actions.expandGlobal(g, ctx, {}).ok, "sin Imperio no hay expansión")
+	g.sede = 5
+	check(not Actions.expandGlobal(g, ctx, {}).ok, "sin las ventas pedidas no hay expansión")
+	g.counters.unitsSold = 1000000
+	table.insert(g.research.done, "mk1")
+	local dem, camp, line = Rules.demand(g, "sedan"), Rules.campaignCost(g, 1), Rules.lineRate(g)
+	local nx = Rules.nextExpansion(g)
+	local m = g.money
+	check(Actions.expandGlobal(g, ctx, {}).ok, "se expande")
+	eq(g.money, m - nx.cost, "cobra el costo")
+	check(math.abs(Rules.demand(g, "sedan") / dem - (1 + Catalog.EXPANSION.demand)) < 1e-6, "+15 % de demanda")
+	check(Rules.campaignCost(g, 1) > camp and Rules.lineRate(g) > line, "campañas más caras y líneas más rápidas")
+	check(Rules.nextExpansion(g).cost > nx.cost, "la siguiente región cuesta más")
+	g.money = 1e12
+	for _ = 2, #Catalog.EXPANSION.regions do
+		check(Actions.expandGlobal(g, ctx, {}).ok, "región " .. (g.expansion + 1))
+	end
+	check(not Actions.expandGlobal(g, ctx, {}).ok, "después de la última no hay más")
+	check(Rules.missionState(g, Catalog.mission("s18")) == "lista", "misión de las diez regiones lista")
+	local bad = jsonCopy(g)
+	bad.sede = 3
+	check(not GameState.validate(bad), "expansión sin Imperio: partida dañada")
+end)
+
+test("[F9] Historial permanente: miles de modelos sin perder récords ni totales", function()
+	local g = bigCompany("Archivo SA")
+	local ctx = makeCtx(203)
+	local id = saveNew(g, ctx, "pixel", "Primero")
+	local r = Actions.createLot(g, ctx, { designId = id, qty = 2000 })
+	runReal(g, ctx, 1)
+	local template = jsonCopy(findLot(g, r.lotId))
+	Actions.closeSale(g, ctx, { lotId = r.lotId })
+	local firstKey = g.records.firstModel.key
+	local totalSold, totalRev = g.modelHistory[1].sold, g.modelHistory[1].revenue
+	-- 2.500 modelos más (como si se jugaran cientos de horas), con ventas variadas.
+	local rng = seeded(7)
+	for i = 1, 2500 do
+		local lot = jsonCopy(template)
+		lot.id = "fake" .. i
+		lot.saleState, lot.prodState = "agotado", "completado"
+		lot.design.lineage = "L" .. i
+		lot.design.name = "Modelo " .. i
+		lot.produced = 10 + math.floor(rng() * 5000)
+		lot.sold = math.floor(lot.produced * rng())
+		lot.discarded = lot.produced - lot.sold
+		lot.revenue = lot.sold * 9000
+		lot.costSpent = lot.produced * 4000
+		lot.monthSold = math.floor(lot.sold / 3)
+		if i == 1777 then
+			lot.produced, lot.sold, lot.discarded, lot.revenue, lot.monthSold = 900000, 900000, 0, 900000 * 9000, 300000
+		end
+		lot.qty = lot.produced
+		totalSold += lot.sold
+		totalRev += lot.revenue
+		Simulation.archiveLot(g, lot)
+	end
+	-- Los totales no se pierden: historial + «Otros modelos» = todo lo vendido.
+	local sumSold, sumRev = g.records.others.sold, g.records.others.revenue
+	local detailed = 0
+	for _, e in g.modelHistory do
+		sumSold += e.sold
+		sumRev += e.revenue
+		if not e.compact then
+			detailed += 1
+		end
+	end
+	check(#g.modelHistory <= Catalog.RULES.maxModelHistory, "historial acotado (" .. #g.modelHistory .. " modelos)")
+	check(detailed <= Catalog.RULES.maxModelDetail, "detalle completo para los más importantes (" .. detailed .. ")")
+	eq(g.records.others.models, 2501 - #g.modelHistory, "el resto queda resumido en «Otros modelos»")
+	eq(sumSold, totalSold, "unidades vendidas: ninguna se pierde")
+	eq(sumRev, totalRev, "ingresos: ninguno se pierde")
+	local function find(key: string): any
+		for _, e in g.modelHistory do
+			if e.key == key then
+				return e
+			end
+		end
+		return nil
+	end
+	local first = find(firstKey)
+	check(first ~= nil and not first.compact, "el primer modelo se conserva con su configuración")
+	local star = find("L1777#1")
+	check(star ~= nil and not star.compact and star.spec.parts ~= nil, "el más vendido se conserva completo")
+	eq(g.records.bestLot.name, "Modelo 1777", "récord del lote más vendido")
+	check(g.records.bestMonth.value >= 300000, "récord del mejor mes")
+	local ok, err = GameState.validate(jsonCopy(g))
+	check(ok, "la partida sigue siendo válida: " .. tostring(err))
+	local bytes = #serde.encode("json", g)
+	check(bytes * 3 < 4000000, "3 empresas así entran en una clave de DataStore (" .. bytes .. " bytes cada una)")
+	print("    tamaño con 2.501 modelos: " .. bytes .. " bytes")
+end)
+
+test("[F9b] Migración 4 → 5: récords desde el historial y expansión en cero", function()
+	local log = longGame()
+	local old = jsonCopy(log.g)
+	old.schema = 4
+	old.records = nil
+	old.expansion = nil
+	old.sede = 5
+	local m, err = GameState.migrate(old, 1)
+	check(m ~= nil, tostring(err))
+	eq(m.expansion, 0, "expansión en cero")
+	check(m.records.firstModel ~= nil and m.records.bestLot ~= nil, "récords reconstruidos")
+	local ok, verr = GameState.validate(m)
+	check(ok, tostring(verr))
+end)
+
+test("[F10] Sin regresiones: lote, venta automática y Cerrar venta en un año comercial extra", function()
+	local g = bigCompany("Extra SA")
+	local ctx = makeCtx(204)
+	g.time.day = (Catalog.CALENDAR.endYear - 1970 + 5) * 12
+	local id = saveNew(g, ctx, "pixel", "Extra")
+	local r = Actions.createLot(g, ctx, { designId = id, qty = 3000 })
+	check(r.ok, r.msg)
+	runReal(g, ctx, 5)
+	local l = findLot(g, r.lotId)
+	check(l.produced > 0 and l.sold > 0, "fabrica y vende solo")
+	local m = g.money
+	local c = Actions.closeSale(g, ctx, { lotId = r.lotId })
+	check(c.ok, c.msg)
+	check(findLot(g, r.lotId) == nil and findHist(g, r.lotId).saleState == "retirado", "Cerrar venta lo retira")
+	check(g.money <= m, "cerrar no regala dinero")
+	lotInvariants(g)
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

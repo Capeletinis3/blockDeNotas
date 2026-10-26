@@ -127,6 +127,26 @@ function Actions.expandSede(g: any, ctx: any, _payload: any): any
 	return { ok = true, msg = "Ampliaste a «" .. next.name .. "»: " .. next.lines .. " líneas, alcance comercial ×" .. Util.num(next.reach, 1) .. " y " .. next.pi .. " PI por minuto." }
 end
 
+-- Expansión global: después del Imperio automotriz, cada región suma alcance y capacidad de las líneas.
+function Actions.expandGlobal(g: any, ctx: any, _payload: any): any
+	local nx = Rules.nextExpansion(g)
+	if not nx then
+		return fail(Rules.nextSede(g) and "La expansión global se abre con el Imperio automotriz." or "Ya abriste todas las regiones.")
+	end
+	for _, check in Rules.expansionChecks(g) do
+		if not check[1] then
+			return fail("Faltan requisitos para expandirte: " .. check[2] .. ".")
+		end
+	end
+	if not Simulation.spend(g, nx.cost, "sede", "Expansión global: " .. nx.name) then
+		return fail("Fondos insuficientes.")
+	end
+	g.expansion = nx.level
+	Simulation.addXp(g, ctx, 1000)
+	Simulation.notify(g, ctx, "ok", "¡Nueva región: " .. nx.name .. "!", "compania")
+	return { ok = true, msg = "Abriste " .. nx.name .. ": la demanda de todos los tipos sube a ×" .. Util.num(Rules.marketFactor(g), 2) .. " y cada línea fabrica " .. Util.num(Rules.lineRate(g), 0) .. " autos/min." }
+end
+
 -- Diseños -------------------------------------------------------------------------------
 
 -- Dos diseños distintos no pueden llamarse igual, salvo las generaciones de un mismo modelo.
@@ -717,7 +737,7 @@ function Actions.setSpeed(g: any, _ctx: any, payload: any): any
 end
 
 Actions.handlers = {
-	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede,
+	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
 	createLot = Actions.createLot, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
@@ -734,7 +754,7 @@ Actions.readOnly = {}
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
-	claimMission = true, claimDaily = true, expandSede = true,
+	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
 }
 
 -- Acciones que justifican guardar enseguida (además del autoguardado periódico).

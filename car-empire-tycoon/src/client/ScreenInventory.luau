@@ -175,7 +175,7 @@ local function familyCard(entries: { any }): Frame
 			Ui.row({
 				Ui.chip(x.gen .. ".ª gen. · " .. tostring(x.modelYear or ""), "cb"),
 				x.active > 0 and Ui.chip("En venta", "cg") or Ui.chip("Fuera de venta", "cn"),
-				Ui.grow(Ui.text(pn("motor") .. " · " .. pn("transmision") .. " · " .. pn("seguridad"), { size = Ui.S.xs, color = T.tx2 })),
+				Ui.grow(Ui.text(x.compact and "Configuración resumida (modelo antiguo con pocas ventas)" or (pn("motor") .. " · " .. pn("transmision") .. " · " .. pn("seguridad")), { size = Ui.S.xs, color = x.compact and T.mut or T.tx2 })),
 			}, 8, { wrap = true }),
 			st.hp and Ui.text(string.format("%d hp · 0–100 en %s s · consumo %s · seguridad %d · fiabilidad %d · calidad %d · costo %s/u", st.hp or 0, Util.num(st.accel or 0, 1), Util.num(st.consumption or 0, 1), st.safety or 0, st.durability or 0, st.quality or 0, Util.money(st.unitCost or 0)), { size = Ui.S.xs, color = T.mut }) or nil,
 			Ui.text(string.format("%s lotes · %s fabricados · %s vendidos · %s descartados · ingresos %s · gastos %s · beneficio %s", Util.num(x.lots), Util.num(x.produced), Util.num(x.sold), Util.num(x.discarded), Util.money(x.revenue), Util.money(x.cost), Util.money(res)), { size = Ui.S.xs, color = res >= 0 and T.gr or T.re2 }),
@@ -185,11 +185,12 @@ local function familyCard(entries: { any }): Frame
 	return Ui.card(rows, { gap = 8, name = "Familia_" .. tostring(last.lineage) })
 end
 
--- Récords de la empresa (de todo el historial permanente y los lotes activos).
-local function recordsCard(gens: { any }): Frame?
+-- Récords de la empresa: los permanentes (g.records, nunca se recortan) más el historial y los lotes activos.
+local function recordsCard(g: any, gens: { any }): Frame?
 	if #gens == 0 then
 		return nil
 	end
+	local rec = g.records or {}
 	local best, profit, month = gens[1], gens[1], gens[1]
 	for _, x in gens do
 		if x.sold > best.sold then
@@ -206,7 +207,12 @@ local function recordsCard(gens: { any }): Frame?
 		Ui.lbl("Récords de la empresa"),
 		Ui.between("Más vendido", best.name .. " " .. best.gen .. ".ª gen. · " .. Util.num(best.sold)),
 		Ui.between("Más rentable", profit.name .. " " .. profit.gen .. ".ª gen. · " .. Util.money(profit.revenue - profit.cost), { color = T.gr }),
-		Ui.between("Mejor mes de un modelo", month.name .. " · " .. Util.num(month.bestMonth or 0) .. " ventas"),
+		Ui.between("Mejor mes de un modelo", month.name .. " · " .. Util.num(math.max(month.bestMonth or 0, rec.bestMonth and rec.bestMonth.value or 0)) .. " ventas"),
+		rec.bestLot and Ui.between("Lote más vendido", rec.bestLot.name .. " " .. rec.bestLot.gen .. ".ª gen. · " .. Util.num(rec.bestLot.value)) or nil,
+		rec.bestLotProfit and Ui.between("Lote más rentable", rec.bestLotProfit.name .. " · " .. Util.money(rec.bestLotProfit.value), { color = T.gr }) or nil,
+		rec.firstModel and Ui.between("Primer modelo", rec.firstModel.name .. " · " .. Util.gameDate(rec.firstModel.day)) or nil,
+		Ui.between("Total de la empresa", Util.num(g.counters.unitsSold) .. " vendidos · " .. Util.num(g.counters.lotsLaunched or 0) .. " lotes · margen " .. Util.money(g.counters.marginTotal or 0)),
+		(rec.others and rec.others.models > 0) and Ui.between("Otros " .. Util.num(rec.others.models) .. " modelos (resumidos)", Util.num(rec.others.sold) .. " vendidos · beneficio " .. Util.money(rec.others.revenue - rec.others.cost), { color = T.mut }) or nil,
 	}, { gap = 6, name = "Records" })
 end
 
@@ -250,12 +256,41 @@ function Screen.build(main: Frame, side: Frame)
 		if #order == 0 then
 			Ui.empty("car", "Todavía no fabricaste ningún modelo. La historia guarda cada generación con su configuración, sus ventas y sus récords.").Parent = main
 		end
-		local rec = recordsCard(gens)
+		local rec = recordsCard(g, gens)
 		if rec then
 			rec.Parent = main
 		end
+		-- Las familias más vendidas primero; se muestran de a 20 para que la lista siga siendo ágil.
+		local famSold = {}
 		for _, key in order do
-			familyCard(fam[key]).Parent = main
+			local n = 0
+			for _, x in fam[key] do
+				n += x.sold + (x.active > 0 and 1e12 or 0)
+			end
+			famSold[key] = n
+		end
+		table.sort(order, function(a: string, b: string): boolean
+			return famSold[a] > famSold[b]
+		end)
+		if #order > 8 then
+			Sheet.search("historia", "Buscar modelo").Parent = main
+		end
+		local limit = tonumber(App.ui.filters.histLimit) or 20
+		local shown = 0
+		for _, key in order do
+			local f = fam[key]
+			if Sheet.matches("historia", f[1].name) then
+				shown += 1
+				if shown <= limit then
+					familyCard(f).Parent = main
+				end
+			end
+		end
+		if shown > limit then
+			Ui.button("Mostrar más modelos (" .. (shown - limit) .. " más)", "default", function()
+				App.ui.filters.histLimit = limit + 20
+				App.forceRender()
+			end, { small = true, fill = true, name = "MostrarMas" }).Parent = main
 		end
 		Ui.text("La historia de cada modelo se conserva siempre (aunque elimines el diseño). El detalle lote por lote queda para los últimos " .. Catalog.RULES.maxLotHistory .. " lotes en Ventas.", { size = Ui.S.xs, color = T.mut }).Parent = main
 	end
