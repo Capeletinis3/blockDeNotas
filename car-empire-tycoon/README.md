@@ -1,9 +1,15 @@
-# Car Empire Tycoon · Roblox (etapa 4: auditoría y mejora integral)
+# Car Empire Tycoon · Roblox (etapa 5: segunda auditoría)
 
 Juego tycoon de autos en Roblox (Rojo + Luau). Empezás un taller en **1970**, diseñás autos, elegís
 cuántas unidades fabricar en cada **lote**, se **venden solos** según la demanda, el precio y la
 competencia, y con lo ganado ampliás la empresa e investigás tecnologías de cada época hasta 2030.
 El prototipo `reference/Car-Empire-Tycoon-V3.html` sigue siendo la referencia visual.
+
+**Etapa 5 (segunda auditoría):** envío liviano al cliente, PI sin farmeo y banco de 20 minutos,
+historial permanente por modelo y generación, rivales con estrategia y precios que cuentan, seguridad y
+motores por época en el editor, economía con inversiones de peso (ingeniería, campañas por nivel,
+estaciones hasta nivel 10) y pruebas de los 26 casos pedidos: [`docs/SEGUNDA-AUDITORIA.md`](docs/SEGUNDA-AUDITORIA.md).
+Los modelos 3D siguen siendo provisionales por decisión de esta etapa: [`docs/FASE-3D.md`](docs/FASE-3D.md).
 
 **Etapa 4 (auditoría):** producción por lotes de cualquier tamaño que se detiene al terminar, ventas
 automáticas sin negociación con «Cerrar venta», calendario desde 1970, investigación histórica con PI
@@ -63,7 +69,9 @@ car-empire-tycoon/
 ├─ tests/verify_place.luau     Verifica que un .rbxl contenga exactamente los scripts de src/
 ├─ tests/preview, scenes, dump Vista previa: lleva la partida a escenas y vuelca la interfaz
 ├─ tools/preview/              Dibuja la interfaz de Roblox y la compara con capturas de la V3
-├─ docs/CAMBIOS-AUDITORIA.md   Cambios, estado de cada parte, equilibrio y pruebas en Studio
+├─ docs/SEGUNDA-AUDITORIA.md  Errores corregidos, mejoras, equilibrio, pruebas y guía de Studio (etapa 5)
+├─ docs/FASE-3D.md            Qué modelos provisionales reemplazar y cómo, sin tocar las mecánicas
+├─ docs/CAMBIOS-AUDITORIA.md   Cambios, estado de cada parte, equilibrio y pruebas en Studio (etapa 4)
 ├─ docs/COMPARACION-V3.md      Comparación visual con la V3 (etapa 3)
 └─ reference/                  Prototipo V3 original
 ```
@@ -88,7 +96,7 @@ car-empire-tycoon/
 ```
 lune run tests/run.luau                 # lógica del servidor, guardado y las 16 pruebas obligatorias
 lune run tests/ui.luau                  # interfaz sin pantalla (incluye 4 resoluciones)
-lune run tests/balance.luau normal 120  # ritmo de una partida (dificultad y minutos reales)
+lune run tests/balance.luau normal 680  # partida completa 1970–2030 con métricas (agregá «plano» para la estrategia mínima)
 lune run tests/verify_place.luau CarEmpireTycoon.rbxl
 selene src                              # análisis estático
 ```
@@ -206,7 +214,7 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 
 ## Lista de pruebas pendientes en Roblox Studio
 
-Primero los 12 pasos de [`docs/CAMBIOS-AUDITORIA.md`](docs/CAMBIOS-AUDITORIA.md#7-cómo-abrir-y-probar-en-studio)
+Primero los 11 pasos de [`docs/SEGUNDA-AUDITORIA.md`](docs/SEGUNDA-AUDITORIA.md#cómo-probar-en-studio) y después los 12 de [`docs/CAMBIOS-AUDITORIA.md`](docs/CAMBIOS-AUDITORIA.md#7-cómo-abrir-y-probar-en-studio)
 (lotes, ventas automáticas, Cerrar venta, calendario, investigación, **vista 3D del editor con el
 diagnóstico en Output**, garaje, migración, resoluciones y guardado). Además, de las etapas anteriores:
 
