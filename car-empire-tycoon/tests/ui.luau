@@ -449,6 +449,14 @@ local function overflow(): { string }
 			if x < -1 or x + w > vw + 1 then
 				table.insert(out, d.Name .. string.format(" (%d..%d de %d)", x, x + w, vw))
 			end
+			-- Los elementos del HUD tampoco pueden quedar cortados por el borde derecho.
+			if d.Name == "Hud1" then
+				for _, c in d:GetChildren() do
+					if c:IsA("GuiObject") and c.Visible and c.AbsolutePosition.X + c.AbsoluteSize.X > vw + 1 then
+						table.insert(out, "Hud1/" .. c.Name .. string.format(" (termina en %d de %d)", c.AbsolutePosition.X + c.AbsoluteSize.X, vw))
+					end
+				end
+			end
 		end
 	end
 	return out

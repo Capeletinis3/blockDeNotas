@@ -117,7 +117,9 @@ function Sheet.build(parent: Instance, route: string)
 		Ui.ico(screen.icon or "box", T.tx, Color3.new(1, 1, 1), 32, { alpha = 0.06, iconSize = 18 }),
 		Ui.grow(Ui.inline(screen.title, { size = phone and 17 or Ui.S.h1, weight = W.bold, name = "Titulo" })),
 	}
-	if screen.head then
+	-- En celulares angostos los chips del encabezado no entran junto al título: se omiten (los mismos
+	-- datos están dentro de la pantalla).
+	if screen.head and not App.narrowPhone then
 		for _, chip in screen.head(g) do
 			table.insert(headChildren, chip)
 		end

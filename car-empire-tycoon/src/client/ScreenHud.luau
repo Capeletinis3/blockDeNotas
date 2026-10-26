@@ -380,7 +380,7 @@ local function hud1(g: any): Frame
 			App.openDialog("settings", { wide = true })
 		end, nil, "Configuracion"))
 	else
-		table.insert(items, Ui.button("Menú", "p", function()
+		table.insert(items, Ui.button(narrow and "" or "Menú", "p", function()
 			App.ui.pop = App.ui.pop == "mob" and nil or "mob"
 			Screen.renderPop()
 		end, { small = true, icon = "menu", name = "MenuCelular" }))

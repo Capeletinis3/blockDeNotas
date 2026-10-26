@@ -151,7 +151,7 @@ function Screen.build(main: Frame, side: Frame)
 	local section = Ui.card({
 		Ui.row({
 			Ui.grow(Ui.inline("Lotes en producción", { size = 15, weight = W.bold })),
-			Ui.inline(#pending > 0 and (#pending .. " lote" .. (#pending > 1 and "s" or "") .. " · las líneas toman los primeros de la lista") or "Fábrica libre", { size = Ui.S.xs, color = T.mut }),
+			(not App.isPhone()) and Ui.inline(#pending > 0 and (#pending .. " lote" .. (#pending > 1 and "s" or "") .. " · las líneas toman los primeros de la lista") or "Fábrica libre", { size = Ui.S.xs, color = T.mut }) or nil,
 		}, 10, { wrap = true }),
 	}, { gap = 8, name = "Produccion" })
 	if #pending == 0 then

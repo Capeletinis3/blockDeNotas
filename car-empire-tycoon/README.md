@@ -1,20 +1,23 @@
-# Car Empire Tycoon · Roblox (etapa 3: fidelidad con la V3)
+# Car Empire Tycoon · Roblox (etapa 4: auditoría y mejora integral)
 
-Juego tycoon de autos en Roblox (Rojo + Luau) basado en el prototipo `reference/Car-Empire-Tycoon-V3.html`.
-La V3 es la referencia visual y de reglas: catálogos, fórmulas de precio y estadísticas, fabricación,
-clientes, misiones e investigación se portaron con sus números. El servidor valida toda la economía.
-En esta etapa cada pantalla, diálogo y estado se reprodujo con la distribución, los colores, los textos y
-el comportamiento de la V3, y se comparó con capturas de las mismas escenas: ver
-[`docs/COMPARACION-V3.md`](docs/COMPARACION-V3.md) (completo / diferente / falta, adaptaciones y
-**diferencias que quedan**).
+Juego tycoon de autos en Roblox (Rojo + Luau). Empezás un taller en **1970**, diseñás autos, elegís
+cuántas unidades fabricar en cada **lote**, se **venden solos** según la demanda, el precio y la
+competencia, y con lo ganado ampliás la empresa e investigás tecnologías de cada época hasta 2030.
+El prototipo `reference/Car-Empire-Tycoon-V3.html` sigue siendo la referencia visual.
+
+**Etapa 4 (auditoría):** producción por lotes de cualquier tamaño que se detiene al terminar, ventas
+automáticas sin negociación con «Cerrar venta», calendario desde 1970, investigación histórica con PI
+por minuto según la sede, marcas rivales, finanzas sin doble conteo, pantallas nuevas (Producción,
+Centro de ventas, Catálogo, Mercado y competidores) y migración de las partidas anteriores. Detalle,
+estado de cada parte (completo / parcial / pendiente), equilibrio y pruebas:
+[`docs/CAMBIOS-AUDITORIA.md`](docs/CAMBIOS-AUDITORIA.md).
 
 > **Importante:** este trabajo se hizo sin poder ejecutar Roblox Studio. Lo verificado es: pruebas de
 > lógica (Lune), pruebas de interfaz sin pantalla sobre un entorno Roblox simulado, análisis estático
-> (Selene), la generación del `.rbxl` con Rojo y una **vista previa** de la interfaz (el árbol de la
-> interfaz real dibujado con una emulación del diseño de Roblox) comparada con capturas de la V3. La
-> vista previa no dibuja el mundo 3D ni los ViewportFrame y usa otra fuente: el aspecto final, la física,
-> las cámaras, el DataStore real y el multijugador real **no están probados en Studio**: ver la lista de
-> pruebas al final.
+> (Selene), un bot de balance, la generación del `.rbxl` con Rojo y una **vista previa** de la interfaz
+> (el árbol de la interfaz real dibujado con una emulación del diseño de Roblox). La vista previa no
+> dibuja el mundo 3D ni los ViewportFrame: el aspecto final, la física, las cámaras, el DataStore real y
+> el multijugador real **no están probados en Studio**. Ver la lista de pruebas en Studio.
 > No hay que considerar el juego terminado hasta pasar esa lista.
 
 ## Estructura
@@ -23,43 +26,45 @@ el comportamiento de la V3, y se comparó con capturas de las mismas escenas: ve
 car-empire-tycoon/
 ├─ default.project.json        Proyecto Rojo
 ├─ src/shared/  → ReplicatedStorage.CarEmpireShared
-│   ├─ Catalog.luau            Catálogos de la V3: bases, piezas, pinturas, materiales, investigación,
-│   │                          personal, sedes, misiones, recompensas diarias, dificultades y reglas
-│   ├─ Rules.luau              Reglas derivadas comunes a cliente y servidor (capacidades, precios
-│   │                          finales, mayorista, interés, misiones, finanzas 7/14/30 días)
-│   ├─ DesignCalc.luau         computeDesign, bloqueos, costo de desarrollo, saneamiento del borrador
+│   ├─ Catalog.luau            Catálogos y parámetros de equilibrio: calendario, economía, demanda por
+│   │                          tipo y año, bases y piezas con su año, sedes, investigación 1970–2030,
+│   │                          marcas rivales, misiones y noticias
+│   ├─ Rules.luau              Reglas comunes a cliente y servidor: calendario, capacidades, PI/min,
+│   │                          lotes, reparto de la demanda (mercado), investigación, finanzas, misiones
+│   ├─ DesignCalc.luau         computeDesign, bloqueos por época/investigación, desarrollo, saneamiento
 │   ├─ CarModel.luau           Auto provisional con Parts (editor, miniaturas y garaje)
-│   └─ Util.luau               Redondeo como JS, dinero "$28.700", fechas
+│   └─ Util.luau               Redondeo como JS, dinero "$28.700", fechas "Ene 1970"
 ├─ src/server/  → ServerScriptService.CarEmpireServer
 │   ├─ Main.server.luau        Remotos, servicios de Roblox, reloj
 │   ├─ Sessions.luau           Sesiones por jugador: carga, ranuras, candado, guardado, límites
-│   ├─ Actions.luau            Acciones validadas (diseño, fábrica, inventario, ventas, personal…)
-│   ├─ Simulation.luau         Reloj, cambio de día, fabricación, desgaste, clientes, ventas
-│   ├─ Market.luau             Mercado simulado con vendedores ficticios
-│   ├─ GameState.luau          Partida nueva, validación, migración, vista para el cliente
-│   ├─ Demo.luau               Demostraciones de la V3 (tutorial, empresa en marcha, fábrica avanzada)
+│   ├─ Actions.luau            Acciones validadas (diseños, lotes, precio, cerrar venta, investigación…)
+│   ├─ Simulation.luau         Reloj mensual, producción de lotes, ventas automáticas, PI, cierre de mes
+│   ├─ GameState.luau          Partida nueva, validación, migraciones (2 → 3), vista para el cliente
+│   ├─ Demo.luau               Demostraciones (tutorial 1970, empresa en 1974, corporación en 1992)
 │   ├─ DataService.luau        DataStore: candado de sesión, reintentos, datos dañados intactos
-│   └─ Garage.luau             Vestíbulo + 8 garajes provisionales con ProximityPrompts
+│   └─ Garage.luau             Vestíbulo + 8 garajes con el lote en fabricación y el stock por modelo
 ├─ src/client/  → StarterPlayer.StarterPlayerScripts.CarEmpireClient
 │   ├─ Main.client.luau        Registro de pantallas y diálogos, eventos, atajos
 │   ├─ App.luau                Estado, navegación, distribuciones, diálogos, valores en vivo
-│   ├─ Ui.luau                 Componentes con las medidas y colores del CSS de la V3
-│   ├─ Icons.luau, IconData    Íconos de la V3 (trazos SVG convertidos a líneas)
-│   ├─ WorldPrompts.luau       Indicaciones «E …» y puntos del garaje con el aspecto de la V3
+│   ├─ Ui.luau                 Componentes con las medidas y colores de la V3
+│   ├─ Icons.luau, IconData    Íconos
+│   ├─ WorldPrompts.luau       Indicaciones «E …» y puntos del garaje
 │   ├─ ScreenMenu/Company      Inicio con ranuras de empresas y creación de empresa
 │   ├─ ScreenHud/Sheet         HUD de la sede y hojas de cada sección
-│   ├─ ScreenEditor            Editor de 4 pasos con vista 3D
-│   ├─ ScreenFactory, ScreenInventory, ScreenSales, ScreenMarket, ScreenResearch,
-│   │  ScreenStaff, ScreenCompania, ScreenMissions, ScreenStats, ScreenStatus
-│   └─ Dialogs.luau            Orden, negociación, detalle, mercado, ajustes, ayuda, menú…
-├─ tests/run.luau              Pruebas de lógica (Lune)
+│   ├─ ScreenEditor            Editor de 4 pasos con vista 3D (y diagnóstico del ViewportFrame)
+│   ├─ ScreenFactory           Producción por lotes      ScreenSales      Centro de ventas
+│   ├─ ScreenInventory         Catálogo e historia       ScreenMarket     Mercado y competidores
+│   ├─ ScreenResearch, ScreenStaff, ScreenCompania, ScreenMissions, ScreenStats, ScreenStatus
+│   └─ Dialogs.luau            Lanzar lote, modificar precio, confirmaciones, ajustes, ayuda…
+├─ tests/run.luau              Pruebas de lógica, guardado y las 16 obligatorias (Lune)
 ├─ tests/ui.luau + mock.luau   Pruebas de interfaz sin pantalla (cliente y servidor reales)
+├─ tests/balance.luau          Bot de balance: juega una partida y muestra el ritmo
+├─ tests/fixtures/             Partida real de la versión anterior (prueba de migración)
 ├─ tests/verify_place.luau     Verifica que un .rbxl contenga exactamente los scripts de src/
-├─ tests/preview, scenes, dump Vista previa: lleva la partida a escenas con nombre y vuelca la interfaz
-├─ tools/preview/              v3.js (capturas de la V3), render.js (dibuja la interfaz de Roblox),
-│                              compare.js (V3 arriba, Roblox abajo), roblox-layout.js (emulación)
-├─ tools/icons/                Genera IconData.luau desde los íconos de la V3
-├─ docs/COMPARACION-V3.md      Comparación pantalla por pantalla y diferencias que quedan
+├─ tests/preview, scenes, dump Vista previa: lleva la partida a escenas y vuelca la interfaz
+├─ tools/preview/              Dibuja la interfaz de Roblox y la compara con capturas de la V3
+├─ docs/CAMBIOS-AUDITORIA.md   Cambios, estado de cada parte, equilibrio y pruebas en Studio
+├─ docs/COMPARACION-V3.md      Comparación visual con la V3 (etapa 3)
 └─ reference/                  Prototipo V3 original
 ```
 
@@ -81,8 +86,9 @@ car-empire-tycoon/
 
 **Comprobaciones fuera de Studio** (requieren [Lune](https://lune-org.github.io/docs) ≥ 0.10):
 ```
-lune run tests/run.luau                 # lógica del servidor y guardado
-lune run tests/ui.luau                  # interfaz sin pantalla
+lune run tests/run.luau                 # lógica del servidor, guardado y las 16 pruebas obligatorias
+lune run tests/ui.luau                  # interfaz sin pantalla (incluye 4 resoluciones)
+lune run tests/balance.luau normal 120  # ritmo de una partida (dificultad y minutos reales)
 lune run tests/verify_place.luau CarEmpireTycoon.rbxl
 selene src                              # análisis estático
 ```
@@ -95,7 +101,14 @@ node tools/preview/render.js out/rbx out/rbx-png    # la dibuja
 node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 ```
 
-## Revisión inicial (estado que tenía la etapa 1)
+## Historial de etapas anteriores
+
+> Las etapas 1 a 3 describen mecánicas que la etapa 4 reemplazó (órdenes de hasta 50 unidades,
+> salón y negociación con clientes, materiales, averías, cansancio, mercado de compraventa simulado,
+> investigación por laboratorio). Se conservan como registro; el estado actual está en
+> `docs/CAMBIOS-AUDITORIA.md`.
+
+### Revisión inicial (estado que tenía la etapa 1)
 
 | Estado | Elementos |
 |---|---|
@@ -105,9 +118,9 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 | Problemas | Botón *Comenzar mi empresa* que quedaba deshabilitado al escribir (capturaba el estado inicial); Magnate imposible de empezar; textos de dificultad que prometían efectos inexistentes; renovación del candado atada a la simulación; sesión perdida sin bloqueo claro; carreras entre carga, reintento, salida y cierre; validación de datos incompleta; probabilidad de negociación distinta entre cliente y servidor; capacidad de almacén calculada de dos formas; cancelar una orden con depósito lleno perdía materiales; cambio de día después de la fabricación. |
 | Necesita Studio | Aspecto visual, cámaras del editor, garajes, ProximityPrompts, teclado en celular, DataStore real, multijugador real. |
 
-## Qué se hizo, qué se verificó y qué falta (por etapa)
+### Qué se hizo, qué se verificó y qué falta (por etapa)
 
-### 1. Bloqueos y guardado
+#### 1. Bloqueos y guardado
 - **Hecho:** botón de crear empresa reactivo; recompensas del tutorial de la V3 (primer diseño guardado
   → +$10.000) que hacen viable Magnate; textos de dificultad con solo efectos reales; candado renovado por
   su propio temporizador (60 s, vence a 300 s) aunque la partida esté en pausa; sesión perdida →
@@ -124,7 +137,7 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
   guardado, fallo de carga sin escritura, ranura dañada, migración y orden del cambio de día.
 - **Falta:** probar con el DataStore real y cierres reales del servidor (Studio/publicado).
 
-### 2. Recorrido básico
+#### 2. Recorrido básico
 - **Hecho:** entorno Roblox simulado (`tests/mock.luau`) que ejecuta el servidor y el cliente reales.
 - **Verificado:** `tests/ui.luau` (143 comprobaciones): crear empresa escribiendo solo el nombre, recorrido
   completo con clics (diseñar, reclamar el tutorial una sola vez, orden de 6, fabricar, salón, vender),
@@ -132,7 +145,7 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
   eliminar empresa escribiendo el nombre, límite de acciones seguidas.
 - **Falta:** el mismo recorrido en Studio (lista al final).
 
-### 3. Editor, fábrica, inventario y ventas
+#### 3. Editor, fábrica, inventario y ventas
 - **Hecho:** cámaras predefinidas sincronizadas con la vista, giro y zoom con límites, restablecer,
   encuadre por las dimensiones reales, deshacer/rehacer (Ctrl+Z/Ctrl+Y), comparar antes/después,
   puntos de identificación de piezas, estilos de llanta, intensidad y brillo, paragolpes, capó, difusor,
@@ -152,13 +165,13 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 - **Falta en Studio:** cámaras, encuadre, puntos sobre el auto, arrastre de órdenes, legibilidad de
   las miniaturas.
 
-### 4. Misiones, investigación, personal y ampliaciones
+#### 4. Misiones, investigación, personal y ampliaciones
 - **Hecho:** tutorial/historia/diarias con reclamo persistente y pago único; recompensa diaria por fecha
   UTC; árbol de investigación con efectos reales; personal (contratar, despedir, descansar, asignar a
   estaciones o departamentos); identidad de marca y 4 sedes con requisitos.
 - **Verificado:** pruebas de lógica dedicadas (efectos, salarios, PI, requisitos, doble reclamo).
 
-### 5. Mercado, finanzas y pantallas secundarias
+#### 5. Mercado, finanzas y pantallas secundarias
 - **Hecho:** mercado simulado con vendedores ficticios (no hay intercambio entre jugadores reales):
   compra directa, subastas, publicar y retirar, ofertas; estadísticas de 7/14/30 días desde agregados
   diarios comunes (no se calculan con listas recortadas); configuración guardada en el servidor
@@ -167,7 +180,7 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 - **Verificado:** pruebas de lógica (mercado, estadísticas tras recortar historiales) e interfaz
   (configuración persistida y valores fuera de rango rechazados).
 
-### 6. Interfaz, imagen y mapa
+#### 6. Interfaz, imagen y mapa
 - **Hecho:** identidad de la V3; distribuciones escritorio / computadora chica / tableta / celular
   (navegación con menú, columnas que se apilan, paneles plegables, diálogos arriba para no quedar
   bajo el teclado, áreas seguras; el tamaño del texto se elige en Configuración); íconos dibujados
@@ -177,7 +190,7 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 - **Verificado:** todas las pantallas y diálogos se construyen en escritorio y en celular sin errores
   (prueba de interfaz). **No** verificado: cómo se ven.
 
-### Etapa 3. Fidelidad con la V3
+#### Etapa 3. Fidelidad con la V3
 - **Hecho:** menú, nueva empresa, HUD de la sede, las nueve secciones, el editor completo (barra
   superior, cámaras con tecla, estadísticas, pasos, barra de herramientas, panel de 440 px, selector de
   color, antes/después con divisor, ocultar interfaz, puntos de piezas), todos los diálogos y la
@@ -193,33 +206,27 @@ node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 
 ## Lista de pruebas pendientes en Roblox Studio
 
-1. Abrir `CarEmpireTycoon.rbxl`, Play: aparece el inicio con 3 ranuras sobre la escena del vestíbulo.
-2. Crear empresa escribiendo solo el nombre: el botón se habilita mientras escribís.
-3. Repetir el recorrido en Relajado, Normal y Magnate hasta la primera venta, sin dinero extra.
-4. Editor: cada cámara, giro con arrastre, zoom con rueda y botones, restablecer; cambiar cada opción
+Primero los 12 pasos de [`docs/CAMBIOS-AUDITORIA.md`](docs/CAMBIOS-AUDITORIA.md#7-cómo-abrir-y-probar-en-studio)
+(lotes, ventas automáticas, Cerrar venta, calendario, investigación, **vista 3D del editor con el
+diagnóstico en Output**, garaje, migración, resoluciones y guardado). Además, de las etapas anteriores:
+
+1. Crear empresa escribiendo solo el nombre: el botón se habilita mientras escribís.
+2. Editor: cada cámara, giro con arrastre, zoom con rueda y botones, restablecer; cambiar cada opción
    visual (llantas, faros, vinilos, número, emblema, interior…) y verla en el auto; comparar; Ctrl+Z/Y.
-5. Intentar salir del editor, abrir otro proyecto y volver al menú con cambios: debe preguntar.
-6. Fábrica: arrastrar órdenes, prioridades, averías y reparación; el garaje muestra lo que se fabrica.
-7. Garaje: ProximityPrompts (tecla E), que el cartel muestre tu empresa, cámara y obstáculos del camino.
-8. Celular (*Device Emulator*, p. ej. iPhone 14 horizontal y vertical): navegación, paneles, diálogos con
-   el teclado abierto, botones alcanzables, áreas seguras.
-9. Con API activada: jugar, salir y volver; cerrar el servidor durante un guardado; abrir la misma
-   cuenta en dos servidores (el segundo debe esperar o informar el candado, nunca pisar datos).
-10. *Test › Clients and Servers* con 2 y con 9 jugadores: empresas independientes y el noveno espera garaje.
-11. Sonido de los avisos y la opción Configuración › Sonidos.
-12. Comparar lado a lado con la V3 abierta en el navegador (misma resolución, p. ej. 1600×900, 1280×720,
-    844×390 y 390×844): menú, nueva empresa, sede, cada sección, cada paso del editor y los diálogos.
-    Anotar diferencias de corte de línea por la fuente Builder Sans.
-13. Editor: el auto queda centrado entre las herramientas, las estadísticas y el panel; el divisor de
-    antes/después recorta bien; «Ocultar interfaz» (H) y «Mostrar interfaz»; «Captura» oculta todo 5 s.
-14. Garaje: la píldora «E Escritorio de diseño» aparece al acercarse y se puede tocar en celular; los
-    puntos aparecen solo en tu garaje y al tocarlos el personaje camina hasta el objeto.
-15. Demostraciones del menú: se juegan sin tocar las ranuras y «Salir» vuelve al menú.
+3. Intentar salir del editor, abrir otro proyecto y volver al menú con cambios: debe preguntar.
+4. Garaje: ProximityPrompts (tecla E), que el cartel muestre tu empresa, cámara y obstáculos del camino.
+5. Celular (*Device Emulator*): navegación, paneles, diálogos con el teclado abierto, áreas seguras.
+6. Con API activada: cerrar el servidor durante un guardado; abrir la misma cuenta en dos servidores.
+7. *Test › Clients and Servers* con 2 y con 9 jugadores: empresas independientes y el noveno espera garaje.
+8. Sonido de los avisos y la opción Configuración › Sonidos.
+9. Demostraciones del menú: se juegan sin tocar las ranuras y «Salir» vuelve al menú.
 
 ## Reglas de seguridad y guardado
 
-- El cliente envía intenciones e identificadores; el servidor recalcula costos y precios y valida
-  pertenencia, capacidad, dinero y materiales. Si algo falla no se cambia nada.
+- El cliente envía intenciones e identificadores; el servidor recalcula costos, precios, producción,
+  ventas, investigación y desbloqueos, y valida pertenencia, cantidades, rangos de precio, época y
+  dinero. Si algo falla no se cambia nada. Los lotes son contadores agregados: un lote de 50.000 autos
+  ocupa lo mismo en el guardado que uno de 10.
 - Nombres de empresas y diseños pasan por `TextService` (se ven en el garaje para todos).
 - Una acción por jugador a la vez, límite de 14 solicitudes cada 2 s, identificador por solicitud
   para que un reenvío no se aplique dos veces.

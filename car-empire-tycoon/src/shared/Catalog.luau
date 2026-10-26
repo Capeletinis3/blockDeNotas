@@ -1,8 +1,11 @@
 --!strict
 --[[
-	Car Empire Tycoon — catálogos y reglas (etapa 1).
-	Portado de reference/Car-Empire-Tycoon-V3.html (bloque «catálogos y reglas del prototipo»).
-	Los valores numéricos son los mismos que en la V3 para que precios y estadísticas coincidan.
+	Car Empire Tycoon — catálogos y parámetros de equilibrio.
+	Bases, piezas y opciones visuales vienen de reference/Car-Empire-Tycoon-V3.html; desde la auditoría
+	(esquema 3) cada una tiene un año de aparición y, si corresponde, la investigación que la habilita.
+	Acá están todos los números que se ajustan para equilibrar el juego: calendario (CALENDAR), economía
+	(ECON), demanda por tipo y año (DEMAND), sedes (SEDES), investigación (RESEARCH_TIERS, EXPECTED_PI,
+	RESEARCH), rivales (RIVALS) y misiones. tests/balance.luau muestra el ritmo resultante.
 	Este módulo es puro: no usa servicios de Roblox y se puede cargar desde las pruebas con Lune.
 ]]
 
