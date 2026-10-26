@@ -116,11 +116,51 @@ function Util.clock(minute: number): string
 	return string.format("%02d:%02d", math.floor(mm / 60), mm % 60)
 end
 
-local MONTHS = { "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic" }
-function Util.gameDate(day: number): string
-	local m = MONTHS[(math.floor(day / 30) % 12) + 1]
-	local y = 2026 + math.floor(day / 360)
-	return m .. " " .. y .. " · Día " .. (day + 1)
+-- Calendario: g.time.day cuenta MESES desde enero del año inicial (1970); ver Catalog.CALENDAR.
+local START_YEAR = 1970
+Util.MONTHS = { "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic" }
+function Util.setStartYear(y: number)
+	START_YEAR = y
+end
+function Util.yearOf(month: number): number
+	return START_YEAR + math.floor(month / 12)
+end
+function Util.gameDate(month: number): string
+	return Util.MONTHS[(math.floor(month) % 12) + 1] .. " " .. Util.yearOf(month)
+end
+-- Duración en tiempo de juego expresada en meses y años (para textos como «≈ 3 meses»).
+function Util.monthsText(months: number): string
+	local m = math.max(0, Util.round(months))
+	if m < 12 then
+		return m .. (m == 1 and " mes" or " meses")
+	end
+	local y = math.floor(m / 12)
+	local r = m % 12
+	return y .. (y == 1 and " año" or " años") .. (r > 0 and (" y " .. r .. (r == 1 and " mes" or " meses")) or "")
+end
+-- Tiempo real («2 min 30 s», «1 h 5 min»), para progreso de producción e investigación.
+function Util.realTime(seconds: number): string
+	local s = math.max(0, math.ceil(seconds))
+	if s < 60 then
+		return s .. " s"
+	end
+	local m = math.floor(s / 60)
+	if m < 60 then
+		local r = s % 60
+		return m .. " min" .. (r > 0 and m < 10 and (" " .. r .. " s") or "")
+	end
+	local h = math.floor(m / 60)
+	return h .. " h " .. (m % 60) .. " min"
+end
+-- Números grandes compactos: 12.400 → «12,4 mil», 3.200.000 → «3,2 M».
+function Util.compact(n: number): string
+	local a = math.abs(n)
+	if a >= 1e6 then
+		return Util.num(n / 1e6, a >= 1e7 and 0 or 1) .. " M"
+	elseif a >= 1e4 then
+		return Util.num(n / 1e3, 0) .. " mil"
+	end
+	return Util.num(n)
 end
 
 function Util.keys(t: { [any]: any }): { any }

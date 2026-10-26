@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Util = require(Shared.Util)
 local CarModel = require(Shared.CarModel)
+local Rules = require(Shared.Rules)
 
 local Garage = {}
 Garage.__index = Garage
@@ -263,8 +264,8 @@ function Garage:buildPlot(i: number, company: any)
 			self:plotPart(i, "LineaPlaza", Vector3.new(9, 0.12, 0.3), CFrame.new(x, 0.52, z - 5.5), C.line, { Material = Enum.Material.Neon })
 		end
 	end
-	label(wh, "🚗  Almacén", UDim2.fromOffset(160, 36), Vector3.new(0, 7, -14), C.bl)
-	self:prompt(wh, "Mis autos", "Almacén", "autos", i)
+	label(wh, "🚗  Stock terminado", UDim2.fromOffset(160, 36), Vector3.new(0, 7, -14), C.bl)
+	self:prompt(wh, "Catálogo", "Stock y catálogo", "autos", i)
 
 	-- Concesionario: dos plataformas al frente
 	local show = self:plotPart(i, "Concesionario", Vector3.new(44, 0.3, 18), CFrame.new(-8, 0.5, 22), Color3.fromHex("#0C0E13"), { Material = Enum.Material.Glass })
@@ -322,18 +323,12 @@ function Garage:teleport(player: Player)
 	char:PivotTo(CFrame.lookAt(cf.Position, (self.plots[i].cf * CFrame.new(0, 4, 0)).Position))
 end
 
+-- Solo cambia si cambia qué modelos se fabrican o venden (no por cada unidad: con lotes de miles de autos
+-- la escena muestra un auto representativo por modelo, nunca un objeto por unidad).
 local function signature(g: any): string
 	local parts = { g.company.name, g.company.color }
-	for _, u in g.units do
-		if u.status ~= "vendido" then
-			table.insert(parts, u.id .. u.status)
-		end
-	end
-	for _, o in g.production.orders do
-		table.insert(parts, o.id .. tostring(o.unitStarted) .. tostring(o.done))
-	end
-	for _, c in g.customers do
-		table.insert(parts, c.id .. c.state .. tostring(c.offer))
+	for _, l in g.lots do
+		table.insert(parts, l.id .. (Rules.lotAvailable(l) > 0 and "s" or "-") .. (Rules.lotProducing(l) and "p" or "-"))
 	end
 	return table.concat(parts, "|")
 end
@@ -351,21 +346,14 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	if not plot.dynamic then
 		return
 	end
-	local current = nil
-	for _, o in g.production.orders do
-		if o.unitStarted then
-			current = o
-			break
-		end
-	end
+	local producing = Rules.producingLots(g)
+	local current = producing[1]
 	-- Texto de la línea (se actualiza cada segundo).
 	if plot.lineLabel then
 		if current then
-			local pct = math.floor(math.clamp(current.progress / math.max(1, current.unitTotal), 0, 1) * 100)
-			plot.lineLabel.Text = string.format("🏭  %s v%d · %d%% · unidad %d de %d", current.design.name, current.design.version, pct, current.done + 1, current.qty)
+			plot.lineLabel.Text = string.format("🏭  %s · %s de %s%s", current.design.name, Util.num(current.produced), Util.num(current.qty), current.prodState == "sin fondos" and " · sin fondos" or (" · " .. Util.num(Rules.lineRate(g), 1) .. "/min"))
 		else
-			local stopped = g.production.orders[1]
-			plot.lineLabel.Text = stopped and ("🏭  Detenida: " .. (stopped.reason ~= "" and stopped.reason or stopped.status)) or "🏭  Línea 1 · libre"
+			plot.lineLabel.Text = "🏭  Fábrica libre · lanzá un lote"
 		end
 	end
 
@@ -386,42 +374,25 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	if current then
 		place(current.design.spec, CFrame.new(2, 1.6, -20) * CFrame.Angles(0, math.pi / 2, 0), true)
 	end
+	-- Stock: un auto representativo por modelo con unidades terminadas (máximo 6).
 	local slot = 0
-	for _, u in g.units do
-		if (u.status == "almacen" or u.status == "reservado") and slot < 6 then
-			local r, c = slot // 3, slot % 3
-			local car = place(u.spec, CFrame.new(22 + r * 16, 0.5, -10 + c * 12) * CFrame.Angles(0, math.pi / 2, 0))
-			label(car.PrimaryPart :: BasePart, u.name .. " · " .. u.serial, UDim2.fromOffset(200, 30), Vector3.new(0, 5, 0), C.bl)
-			slot += 1
+	local selling = {}
+	for _, l in g.lots do
+		if Rules.lotAvailable(l) > 0 then
+			table.insert(selling, l)
+			if slot < 6 then
+				local r, c = slot // 3, slot % 3
+				local car = place(l.design.spec, CFrame.new(22 + r * 16, 0.5, -10 + c * 12) * CFrame.Angles(0, math.pi / 2, 0))
+				label(car.PrimaryPart :: BasePart, l.design.name .. " · en stock", UDim2.fromOffset(200, 30), Vector3.new(0, 5, 0), C.bl)
+				slot += 1
+			end
 		end
 	end
-	local spot = 0
-	local shown: { [string]: Vector3 } = {}
-	for _, u in g.units do
-		if u.status == "salon" and spot < 2 then
-			local pos = CFrame.new(-19 + spot * 22, 1.4, 22) * CFrame.Angles(0, math.rad(200), 0)
-			local car = place(u.spec, pos)
-			label(car.PrimaryPart :: BasePart, u.name .. " · " .. Util.money(u.price), UDim2.fromOffset(220, 32), Vector3.new(0, 6, 0), C.gr)
-			shown[u.id] = Vector3.new(-19 + spot * 22, 0, 22)
-			spot += 1
-		end
-	end
-	-- Clientes: figuras simples junto al auto que miran.
-	local n = 0
-	for _, c in g.customers do
-		if c.state ~= "se fue" and n < 6 then
-			local at = shown[c.unitId] or Vector3.new(-8, 0, 22)
-			local offset = Vector3.new(-6 + (n % 3) * 3, 0, 9)
-			local base = plot.cf * CFrame.new(at + offset)
-			local npc = Instance.new("Model")
-			npc.Name = "Cliente"
-			block(npc, "Cuerpo", Vector3.new(1.6, 3.2, 1), base * CFrame.new(0, 2.1, 0), Color3.fromHex("#FF9DC1"), { CanCollide = false })
-			local head = block(npc, "Cabeza", Vector3.new(1.3, 1.3, 1.3), base * CFrame.new(0, 4.4, 0), Color3.fromHex("#E8C4A0"), { Shape = Enum.PartType.Ball, CanCollide = false })
-			local text = c.state == "oferta" and (c.name .. " · ofrece " .. Util.money(c.offer)) or (c.name .. " · mirando")
-			label(head, text, UDim2.fromOffset(200, 30), Vector3.new(0, 2, 0), c.state == "oferta" and C.bl or C.mut)
-			npc.Parent = plot.dynamic
-			n += 1
-		end
+	-- Concesionario: los dos modelos en venta más recientes.
+	for spot = 0, math.min(2, #selling) - 1 do
+		local l = selling[#selling - spot]
+		local car = place(l.design.spec, CFrame.new(-19 + spot * 22, 1.4, 22) * CFrame.Angles(0, math.rad(200), 0))
+		label(car.PrimaryPart :: BasePart, l.design.name .. " · " .. Util.money(l.price), UDim2.fromOffset(220, 32), Vector3.new(0, 6, 0), C.gr)
 	end
 end
 

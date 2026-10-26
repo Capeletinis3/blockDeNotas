@@ -1,0 +1,692 @@
+{
+  "candidates": {},
+  "claimed": {
+    "t1": true,
+    "t3": true
+  },
+  "company": {
+    "color": "#7667FF",
+    "difficulty": "normal",
+    "logo": "pico",
+    "name": "Vieja Motors"
+  },
+  "counters": {
+    "companyCreated": 1,
+    "designsSaved": 1,
+    "hires": 0,
+    "marginTotal": 0,
+    "ordersCreated": 1,
+    "researchDone": 0,
+    "revenueTotal": 0,
+    "sedeLevel": 1,
+    "sentToShowroom": 0,
+    "serial": 2,
+    "unitsProduced": 2,
+    "unitsSold": 0
+  },
+  "createdAt": 1,
+  "customers": {},
+  "daily": {
+    "last": "",
+    "streak": 0
+  },
+  "designs": [
+    {
+      "baseId": "pixel",
+      "body": {
+        "bumper": "serie",
+        "diffuser": "none",
+        "hood": "serie",
+        "lights": "white",
+        "logo": "on",
+        "number": "none",
+        "plate": "CET 001",
+        "skirts": "none",
+        "tint": "t30",
+        "vinyl": "none"
+      },
+      "brand": "Vieja Motors",
+      "caliper": "#5D6371",
+      "chassis": "Monocasco",
+      "createdDay": 0,
+      "generation": "2026 · 1.ª gen.",
+      "id": "d2",
+      "interior": {
+        "ambient": "off",
+        "color": "#1A1B1F",
+        "dash": "analog",
+        "material": "tela",
+        "seats": "serie",
+        "wheel": "serie"
+      },
+      "name": "Pixel Vieja",
+      "objective": "Familiar",
+      "paint": {
+        "finish": "Metálico",
+        "gloss": 60,
+        "intensity": 100,
+        "primary": "#C0C6D0",
+        "secondary": "#15171C"
+      },
+      "parts": {
+        "bateria": "b12",
+        "escape": "std",
+        "frenos": "std",
+        "motor": "i4",
+        "neumaticos": "touring",
+        "peso": "none",
+        "refrigeracion": "std",
+        "suspension": "confort",
+        "traccion": "fwd",
+        "transmision": "man5",
+        "turbo": "none"
+      },
+      "quality": 2,
+      "segment": "Masivo",
+      "spoiler": false,
+      "updatedDay": 0,
+      "version": 1,
+      "wheels": {
+        "rim": "#C9CED8",
+        "size": 18,
+        "style": "radial5"
+      }
+    }
+  ],
+  "devPaid": [
+    "base:pixel"
+  ],
+  "employees": {},
+  "gems": 40,
+  "lastPlayed": 1,
+  "ledger": [
+    {
+      "amount": -12000,
+      "day": 0,
+      "min": 480,
+      "note": "Licencia del modelo Pixel C1",
+      "type": "desarrollo"
+    },
+    {
+      "amount": 10000,
+      "day": 0,
+      "min": 480,
+      "note": "Misión: Diseñá y guardá tu primer auto",
+      "type": "recompensa"
+    },
+    {
+      "amount": -15550,
+      "day": 0,
+      "min": 490,
+      "note": "Fabricación de Pixel Vieja v1",
+      "type": "fabricacion"
+    },
+    {
+      "amount": -15550,
+      "day": 0,
+      "min": 860,
+      "note": "Fabricación de Pixel Vieja v1",
+      "type": "fabricacion"
+    },
+    {
+      "amount": 10000,
+      "day": 0,
+      "min": 1220,
+      "note": "Misión: Fabricá una unidad",
+      "type": "recompensa"
+    }
+  ],
+  "level": 2,
+  "market": {
+    "favorites": {},
+    "listings": {},
+    "mine": {},
+    "offers": {},
+    "seedDay": -1
+  },
+  "materials": {
+    "acero": 108,
+    "aluminio": 36,
+    "baterias": 0,
+    "cuero": 10,
+    "electronica": 18,
+    "pintura": 28
+  },
+  "money": 26900,
+  "nextId": 8,
+  "notifications": [
+    {
+      "at": "20:20",
+      "day": 0,
+      "go": "autos",
+      "id": "n8",
+      "kind": "ok",
+      "read": false,
+      "text": "Producción completada: Pixel Vieja v1 (VI-0002)"
+    },
+    {
+      "at": "14:10",
+      "day": 0,
+      "go": "autos",
+      "id": "n6",
+      "kind": "ok",
+      "read": false,
+      "text": "Producción completada: Pixel Vieja v1 (VI-0001)"
+    },
+    {
+      "at": "08:00",
+      "day": 0,
+      "go": "compania",
+      "id": "n3",
+      "kind": "nivel",
+      "read": false,
+      "text": "¡Subiste al nivel 2! +10 gemas"
+    }
+  ],
+  "parts": {},
+  "playedSeconds": 0,
+  "production": {
+    "auto": false,
+    "boost": false,
+    "history": {},
+    "lastDesign": "d2",
+    "lastSnap": {
+      "at": 480,
+      "baseId": "pixel",
+      "brand": "Vieja Motors",
+      "calc": {
+        "accel": 10.2,
+        "build": 181,
+        "comfort": 68,
+        "consUnit": "L/100 km",
+        "consumption": 6.2,
+        "durability": 84,
+        "ev": false,
+        "handling": 60,
+        "hp": 130,
+        "kg": 1080,
+        "mats": {
+          "acero": 6,
+          "aluminio": 2,
+          "electronica": 1,
+          "pintura": 1
+        },
+        "price": 28700,
+        "quality": 61,
+        "stop": 34,
+        "top": 156,
+        "unitCost": 15550
+      },
+      "id": "d2",
+      "name": "Pixel Vieja",
+      "spec": {
+        "baseId": "pixel",
+        "body": {
+          "bumper": "serie",
+          "diffuser": "none",
+          "hood": "serie",
+          "lights": "white",
+          "logo": "on",
+          "number": "none",
+          "plate": "CET 001",
+          "skirts": "none",
+          "tint": "t30",
+          "vinyl": "none"
+        },
+        "brand": "Vieja Motors",
+        "caliper": "#5D6371",
+        "chassis": "Monocasco",
+        "createdDay": 0,
+        "generation": "2026 · 1.ª gen.",
+        "id": "d2",
+        "interior": {
+          "ambient": "off",
+          "color": "#1A1B1F",
+          "dash": "analog",
+          "material": "tela",
+          "seats": "serie",
+          "wheel": "serie"
+        },
+        "name": "Pixel Vieja",
+        "objective": "Familiar",
+        "paint": {
+          "finish": "Metálico",
+          "gloss": 60,
+          "intensity": 100,
+          "primary": "#C0C6D0",
+          "secondary": "#15171C"
+        },
+        "parts": {
+          "bateria": "b12",
+          "escape": "std",
+          "frenos": "std",
+          "motor": "i4",
+          "neumaticos": "touring",
+          "peso": "none",
+          "refrigeracion": "std",
+          "suspension": "confort",
+          "traccion": "fwd",
+          "transmision": "man5",
+          "turbo": "none"
+        },
+        "quality": 2,
+        "segment": "Masivo",
+        "spoiler": false,
+        "updatedDay": 0,
+        "version": 1,
+        "wheels": {
+          "rim": "#C9CED8",
+          "size": 18,
+          "style": "radial5"
+        }
+      },
+      "version": 1
+    },
+    "orders": [
+      {
+        "auto": false,
+        "created": 480,
+        "design": {
+          "at": 480,
+          "baseId": "pixel",
+          "brand": "Vieja Motors",
+          "calc": {
+            "accel": 10.2,
+            "build": 181,
+            "comfort": 68,
+            "consUnit": "L/100 km",
+            "consumption": 6.2,
+            "durability": 84,
+            "ev": false,
+            "handling": 60,
+            "hp": 130,
+            "kg": 1080,
+            "mats": {
+              "acero": 6,
+              "aluminio": 2,
+              "electronica": 1,
+              "pintura": 1
+            },
+            "price": 28700,
+            "quality": 61,
+            "stop": 34,
+            "top": 156,
+            "unitCost": 15550
+          },
+          "id": "d2",
+          "name": "Pixel Vieja",
+          "spec": {
+            "baseId": "pixel",
+            "body": {
+              "bumper": "serie",
+              "diffuser": "none",
+              "hood": "serie",
+              "lights": "white",
+              "logo": "on",
+              "number": "none",
+              "plate": "CET 001",
+              "skirts": "none",
+              "tint": "t30",
+              "vinyl": "none"
+            },
+            "brand": "Vieja Motors",
+            "caliper": "#5D6371",
+            "chassis": "Monocasco",
+            "createdDay": 0,
+            "generation": "2026 · 1.ª gen.",
+            "id": "d2",
+            "interior": {
+              "ambient": "off",
+              "color": "#1A1B1F",
+              "dash": "analog",
+              "material": "tela",
+              "seats": "serie",
+              "wheel": "serie"
+            },
+            "name": "Pixel Vieja",
+            "objective": "Familiar",
+            "paint": {
+              "finish": "Metálico",
+              "gloss": 60,
+              "intensity": 100,
+              "primary": "#C0C6D0",
+              "secondary": "#15171C"
+            },
+            "parts": {
+              "bateria": "b12",
+              "escape": "std",
+              "frenos": "std",
+              "motor": "i4",
+              "neumaticos": "touring",
+              "peso": "none",
+              "refrigeracion": "std",
+              "suspension": "confort",
+              "traccion": "fwd",
+              "transmision": "man5",
+              "turbo": "none"
+            },
+            "quality": 2,
+            "segment": "Masivo",
+            "spoiler": false,
+            "updatedDay": 0,
+            "version": 1,
+            "wheels": {
+              "rim": "#C9CED8",
+              "size": 18,
+              "style": "radial5"
+            }
+          },
+          "version": 1
+        },
+        "designId": "d2",
+        "done": 2,
+        "id": "o4",
+        "line": 1,
+        "paused": false,
+        "pos": 480,
+        "priority": "media",
+        "produced": [
+          "u5",
+          "u7"
+        ],
+        "progress": 0,
+        "qty": 3,
+        "reason": "",
+        "status": "en producción",
+        "unitCost": 15550,
+        "unitStarted": false,
+        "unitTotal": 181
+      }
+    ]
+  },
+  "promo": false,
+  "reputation": 3,
+  "research": {
+    "done": {}
+  },
+  "rp": 0,
+  "sales": {},
+  "schema": 2,
+  "sede": 1,
+  "stations": {
+    "calidad": {
+      "broken": false,
+      "condition": 93.12066702842712,
+      "level": 1
+    },
+    "chasis": {
+      "broken": false,
+      "condition": 93.64835252761841,
+      "level": 1
+    },
+    "entrega": {
+      "broken": false,
+      "condition": 93.63815212249756,
+      "level": 1
+    },
+    "interior": {
+      "broken": false,
+      "condition": 94.40179054737091,
+      "level": 1
+    },
+    "motor": {
+      "broken": false,
+      "condition": 95.43810541629792,
+      "level": 1
+    },
+    "pintura": {
+      "broken": false,
+      "condition": 93.76116952896118,
+      "level": 1
+    }
+  },
+  "stats": {
+    "days": {
+      "0": {
+        "cogs": 0,
+        "fees": 0,
+        "flow": {
+          "desarrollo": -12000,
+          "fabricacion": -31100,
+          "recompensa": 20000
+        },
+        "margin": 0,
+        "produced": 2,
+        "revenue": 0,
+        "units": 0
+      }
+    }
+  },
+  "time": {
+    "day": 0,
+    "minute": 1220,
+    "speed": 1
+  },
+  "tutorial": {
+    "skipped": false,
+    "tips": true
+  },
+  "units": [
+    {
+      "charged": {
+        "boost": false,
+        "factor": 1,
+        "mats": {
+          "acero": 6,
+          "aluminio": 2,
+          "electronica": 1,
+          "pintura": 1
+        },
+        "money": 15550
+      },
+      "cost": 15550,
+      "createdDay": 0,
+      "designId": "d2",
+      "designVersion": 1,
+      "discount": 0,
+      "id": "u5",
+      "name": "Pixel Vieja",
+      "orderId": "o4",
+      "price": 28700,
+      "quality": 61,
+      "serial": "VI-0001",
+      "spec": {
+        "baseId": "pixel",
+        "body": {
+          "bumper": "serie",
+          "diffuser": "none",
+          "hood": "serie",
+          "lights": "white",
+          "logo": "on",
+          "number": "none",
+          "plate": "CET 001",
+          "skirts": "none",
+          "tint": "t30",
+          "vinyl": "none"
+        },
+        "brand": "Vieja Motors",
+        "caliper": "#5D6371",
+        "chassis": "Monocasco",
+        "createdDay": 0,
+        "generation": "2026 · 1.ª gen.",
+        "id": "d2",
+        "interior": {
+          "ambient": "off",
+          "color": "#1A1B1F",
+          "dash": "analog",
+          "material": "tela",
+          "seats": "serie",
+          "wheel": "serie"
+        },
+        "name": "Pixel Vieja",
+        "objective": "Familiar",
+        "paint": {
+          "finish": "Metálico",
+          "gloss": 60,
+          "intensity": 100,
+          "primary": "#C0C6D0",
+          "secondary": "#15171C"
+        },
+        "parts": {
+          "bateria": "b12",
+          "escape": "std",
+          "frenos": "std",
+          "motor": "i4",
+          "neumaticos": "touring",
+          "peso": "none",
+          "refrigeracion": "std",
+          "suspension": "confort",
+          "traccion": "fwd",
+          "transmision": "man5",
+          "turbo": "none"
+        },
+        "quality": 2,
+        "segment": "Masivo",
+        "spoiler": false,
+        "updatedDay": 0,
+        "version": 1,
+        "wheels": {
+          "rim": "#C9CED8",
+          "size": 18,
+          "style": "radial5"
+        }
+      },
+      "stats": {
+        "accel": 10.2,
+        "build": 181,
+        "comfort": 68,
+        "consUnit": "L/100 km",
+        "consumption": 6.2,
+        "durability": 84,
+        "ev": false,
+        "handling": 60,
+        "hp": 130,
+        "kg": 1080,
+        "mats": {
+          "acero": 6,
+          "aluminio": 2,
+          "electronica": 1,
+          "pintura": 1
+        },
+        "price": 28700,
+        "quality": 61,
+        "stop": 34,
+        "top": 156,
+        "unitCost": 15550
+      },
+      "status": "almacen",
+      "type": "compacto"
+    },
+    {
+      "charged": {
+        "boost": false,
+        "factor": 1,
+        "mats": {
+          "acero": 6,
+          "aluminio": 2,
+          "electronica": 1,
+          "pintura": 1
+        },
+        "money": 15550
+      },
+      "cost": 15550,
+      "createdDay": 0,
+      "designId": "d2",
+      "designVersion": 1,
+      "discount": 0,
+      "id": "u7",
+      "name": "Pixel Vieja",
+      "orderId": "o4",
+      "price": 28700,
+      "quality": 61,
+      "serial": "VI-0002",
+      "spec": {
+        "baseId": "pixel",
+        "body": {
+          "bumper": "serie",
+          "diffuser": "none",
+          "hood": "serie",
+          "lights": "white",
+          "logo": "on",
+          "number": "none",
+          "plate": "CET 001",
+          "skirts": "none",
+          "tint": "t30",
+          "vinyl": "none"
+        },
+        "brand": "Vieja Motors",
+        "caliper": "#5D6371",
+        "chassis": "Monocasco",
+        "createdDay": 0,
+        "generation": "2026 · 1.ª gen.",
+        "id": "d2",
+        "interior": {
+          "ambient": "off",
+          "color": "#1A1B1F",
+          "dash": "analog",
+          "material": "tela",
+          "seats": "serie",
+          "wheel": "serie"
+        },
+        "name": "Pixel Vieja",
+        "objective": "Familiar",
+        "paint": {
+          "finish": "Metálico",
+          "gloss": 60,
+          "intensity": 100,
+          "primary": "#C0C6D0",
+          "secondary": "#15171C"
+        },
+        "parts": {
+          "bateria": "b12",
+          "escape": "std",
+          "frenos": "std",
+          "motor": "i4",
+          "neumaticos": "touring",
+          "peso": "none",
+          "refrigeracion": "std",
+          "suspension": "confort",
+          "traccion": "fwd",
+          "transmision": "man5",
+          "turbo": "none"
+        },
+        "quality": 2,
+        "segment": "Masivo",
+        "spoiler": false,
+        "updatedDay": 0,
+        "version": 1,
+        "wheels": {
+          "rim": "#C9CED8",
+          "size": 18,
+          "style": "radial5"
+        }
+      },
+      "stats": {
+        "accel": 10.2,
+        "build": 181,
+        "comfort": 68,
+        "consUnit": "L/100 km",
+        "consumption": 6.2,
+        "durability": 84,
+        "ev": false,
+        "handling": 60,
+        "hp": 130,
+        "kg": 1080,
+        "mats": {
+          "acero": 6,
+          "aluminio": 2,
+          "electronica": 1,
+          "pintura": 1
+        },
+        "price": 28700,
+        "quality": 61,
+        "stop": 34,
+        "top": 156,
+        "unitCost": 15550
+      },
+      "status": "almacen",
+      "type": "compacto"
+    }
+  ],
+  "xp": 210
+}

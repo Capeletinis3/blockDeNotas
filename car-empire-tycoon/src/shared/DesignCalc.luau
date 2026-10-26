@@ -7,6 +7,7 @@
 
 local Catalog = require(script.Parent.Catalog)
 local Util = require(script.Parent.Util)
+local Rules = require(script.Parent.Rules)
 
 local round = Util.round
 local clamp = Util.clamp
@@ -25,10 +26,17 @@ function DesignCalc.researchName(id: string): string
 end
 
 -- nil si la base se puede usar, o el motivo si está bloqueada.
+-- Año actual de la partida (sin partida: el inicial).
+function DesignCalc.year(g: any): number
+	if g and g.time then
+		return Rules.year(g)
+	end
+	return Catalog.CALENDAR.startYear
+end
+
 function DesignCalc.baseAvailable(g: any, b: any): string?
-	local level = g and g.level or 1
-	if b.level > level then
-		return "Requiere nivel " .. b.level .. " (tenés " .. level .. ")"
+	if (b.year or 1970) > DesignCalc.year(g) then
+		return "Disponible desde " .. b.year
 	end
 	if b.research and not DesignCalc.has(g, b.research) then
 		return "Requiere investigar «" .. DesignCalc.researchName(b.research) .. "»"
@@ -62,14 +70,40 @@ function DesignCalc.partBlock(g: any, d: any, p: any): string?
 	if p.cat == "turbo" and p.id ~= "none" and Util.contains(b.tags, "electrico") then
 		return "Los eléctricos no usan turbo"
 	end
+	if (p.year or 1970) > DesignCalc.year(g) then
+		return "Disponible desde " .. p.year
+	end
 	if p.research and not DesignCalc.has(g, p.research) then
 		return "Requiere investigar «" .. DesignCalc.researchName(p.research) .. "»"
 	end
-	local level = g and g.level or 1
-	if p.level > level then
-		return "Requiere nivel " .. p.level .. " (tenés " .. level .. ")"
+	return nil
+end
+
+-- Opciones de carrocería, interior y acabados: nil si se pueden elegir o el motivo si no.
+function DesignCalc.optionBlock(g: any, opt: any): string?
+	if not opt then
+		return "Opción desconocida"
+	end
+	if (opt.year or 1970) > DesignCalc.year(g) then
+		return "Disponible desde " .. opt.year
+	end
+	if opt.research and not DesignCalc.has(g, opt.research) then
+		return "Requiere investigar «" .. DesignCalc.researchName(opt.research) .. "»"
 	end
 	return nil
+end
+
+function DesignCalc.finishBlock(g: any, finish: string): string?
+	local f = Catalog.FINISHES[finish]
+	if not f then
+		return "Acabado desconocido"
+	end
+	return DesignCalc.optionBlock(g, { year = Catalog.FINISH_YEAR[finish] or 1970, research = f.research })
+end
+
+-- Rodado máximo del año (llantas grandes son de autos modernos).
+function DesignCalc.maxWheel(g: any): number
+	return math.floor(Catalog.interp(Catalog.WHEEL_SIZE.maxByYear, DesignCalc.year(g)))
 end
 
 -- Reemplaza piezas incompatibles al cambiar de base.
@@ -94,13 +128,21 @@ function DesignCalc.autoName(g: any, baseId: string): string
 	return Util.truncateChars(Util.trim(firstWord(b.name) .. " " .. firstWord(company)), 24)
 end
 
+function DesignCalc.generationLabel(modelYear: number, gen: number): string
+	return modelYear .. " · " .. gen .. ".ª gen."
+end
+
 function DesignCalc.newDraft(g: any, baseId: string): any
 	local b = Catalog.base(baseId)
+	local year = DesignCalc.year(g)
 	return {
 		id = nil,
 		name = DesignCalc.autoName(g, baseId),
 		brand = g and g.company and g.company.name or b.brand,
-		generation = "2026 · 1.ª gen.",
+		modelYear = year,
+		gen = 1,
+		lineage = nil,
+		generation = DesignCalc.generationLabel(year, 1),
 		chassis = "Monocasco",
 		segment = "Masivo",
 		objective = "Familiar",
@@ -108,7 +150,7 @@ function DesignCalc.newDraft(g: any, baseId: string): any
 		baseId = b.id,
 		parts = Util.deepCopy(b.defaults),
 		paint = { primary = b.type == "deportivo" and "#4F5BD5" or "#C0C6D0", secondary = "#15171C", finish = "Metálico", intensity = 100, gloss = 60 },
-		wheels = { size = 18, style = "radial5", rim = "#C9CED8" },
+		wheels = { size = math.min(15, DesignCalc.maxWheel(g)), style = "radial5", rim = "#C9CED8" },
 		caliper = "#5D6371",
 		spoiler = false,
 		body = Util.deepCopy(Catalog.BODY_DEFAULTS),
@@ -150,12 +192,8 @@ function DesignCalc.designParts(d: any): { any }
 end
 
 local function optCost(group: string, id: string): number
-	for _, o in Catalog.BODY_OPTS[group] do
-		if o[1] == id then
-			return o[3]
-		end
-	end
-	return 0
+	local o = Catalog.bodyOpt(group, id)
+	return o and o.cost or 0
 end
 
 local function intOpt(group: string, id: string): any
@@ -180,7 +218,7 @@ function DesignCalc.designDiscount(g: any): number
 			n += 1
 		end
 	end
-	return math.min(0.3, n * 0.1)
+	return math.min(0.3, n * 0.1 + (g.research and -Rules.tech(g, "devCostPct") / 100 or 0))
 end
 
 -- ¿Hay una pieza suelta en el inventario que cubra el desarrollo de este prototipo?
@@ -211,7 +249,7 @@ function DesignCalc.devItems(g: any, d: any): { any }
 	for _, it in items do
 		it.cost = round(it.cost * (1 - disc))
 		it.paid = g ~= nil and Util.contains(g.devPaid, it.key)
-		it.stock = (not it.paid) and it.cat ~= nil and DesignCalc.partInStock(g, it.cat, it.part)
+		it.stock = false
 	end
 	return items
 end
@@ -226,12 +264,14 @@ function DesignCalc.devPending(g: any, d: any): number
 	return total
 end
 
+--[[ Estadísticas, costo por unidad y precio de referencia de un diseño con las tecnologías de la empresa.
+	Las tecnologías investigadas se aplican a los cálculos nuevos (un lote ya lanzado conserva su copia). ]]
 function DesignCalc.computeDesign(g: any, d: any): any
 	local b = Catalog.base(d.baseId)
 	local parts = DesignCalc.designParts(d)
-	local fx = { hp = 0, kg = 0, grip = 0, brake = 0, comfort = 0, dur = 0, eff = 0, q = 0 }
-	local function researched(id: string): boolean
-		return g ~= nil and g.research ~= nil and Util.contains(g.research.done, id)
+	local fx = { hp = 0, kg = 0, grip = 0, brake = 0, comfort = 0, dur = 0, eff = 0, q = 0, safety = 0 }
+	local function tech(key: string): number
+		return Rules.tech(g, key)
 	end
 	local function add(effects: { [string]: number })
 		for k, v in effects do
@@ -253,43 +293,42 @@ function DesignCalc.computeDesign(g: any, d: any): any
 	fx.dur += ch.dur
 	if d.spoiler then
 		fx.kg += 8
-		fx.grip += 3 + (researched("a3") and 4 or 0)
+		fx.grip += 3 + tech("spoilerGrip")
 	end
 	if d.body.diffuser == "carbon" then
 		fx.grip += 1
 	end
-	fx.kg += (d.wheels.size - 18) * 6
-	fx.grip += (d.wheels.size - 18) * 0.8
+	fx.kg += (d.wheels.size - 16) * 6
+	fx.grip += (d.wheels.size - 16) * 0.8
 	fx.comfort -= math.max(0, d.wheels.size - 19) * 1.5
 
 	local ev = Util.contains(b.tags, "electrico")
-	local hp = math.max(60, fx.hp) * ((researched("m1") and not ev) and 1.05 or 1)
-	local kg = math.max(700, b.weight + fx.kg)
+	local hp = math.max(50, fx.hp) * (1 + (ev and 0 or tech("hpPct")) / 100)
+	local kg = math.max(700, (b.weight + fx.kg) * (1 + tech("kgPct") / 100))
 	local tractionBonus = (d.parts.traccion == "awd" and 0.35) or (d.parts.traccion == "rwd" and 0.12) or (d.parts.traccion == "x4" and 0.15) or 0
-	local accel = clamp(2.3 + (kg / hp) * 0.95 - tractionBonus - (ev and 0.5 or 0), 2.2, 16)
-	local top = 110 + hp * 0.36 * math.sqrt(0.32 / b.drag) - (d.spoiler and 4 or 0) - (Util.contains(b.tags, "offroad") and 15 or 0)
-	if researched("a1") then
-		top *= 1.04
-	end
+	local accel = clamp(2.3 + (kg / hp) * 0.95 - tractionBonus - (ev and 0.5 or 0), 2.2, 20)
+	local top = (110 + hp * 0.36 * math.sqrt(0.32 / b.drag) - (d.spoiler and 4 or 0) - (Util.contains(b.tags, "offroad") and 15 or 0)) * (1 + tech("topPct") / 100)
 	if ev then
 		top = math.min(top, 250)
 	end
-	local handling = clamp(b.handling + fx.grip - (kg - 1300) / 60, 5, 100)
-	local brakeIdx = 50 + fx.brake + (d.parts.neumaticos == "slick" and 3 or 0)
+	local handling = clamp(b.handling + fx.grip + tech("handling") - (kg - 1300) / 60, 5, 100)
+	local brakeIdx = 50 + fx.brake + tech("brake") + (d.parts.neumaticos == "slick" and 3 or 0)
 	local stop = clamp(46 - brakeIdx * 0.2 + (kg - 1300) / 120, 28, 60)
 	local consumption
 	if ev then
 		consumption = clamp(12 + kg * 0.003 + hp * 0.006 - fx.eff * 0.15, 10, 30)
 	else
-		consumption = clamp(4 + hp * 0.014 + kg * 0.0015 - fx.eff * 0.12, 3.5, 25)
+		consumption = clamp((4 + hp * 0.014 + kg * 0.0015 - fx.eff * 0.12) * (1 + tech("consPct") / 100), 3.5, 25)
 	end
-	local comfort = clamp(b.comfort + fx.comfort, 0, 100)
-	local durability = clamp(b.durability + fx.dur, 0, 100)
+	local comfort = clamp(b.comfort + fx.comfort + tech("comfort"), 0, 100)
+	local durability = clamp(b.durability + fx.dur + tech("durability"), 0, 100)
+	local safety = clamp((b.safety or 40) + fx.safety + tech("safety") + (d.chassis == "Escalera" and 2 or 0), 0, 100)
 	local fin = Catalog.FINISHES[d.paint.finish] or Catalog.FINISHES["Metálico"]
 	local finishQ = (d.paint.finish == "Perlado" and 2) or (d.paint.finish == "Cromado" and 3) or 0
-	local quality = clamp(b.quality + fx.q + d.quality * 3 + finishQ + (researched("q1") and 3 or 0), 0, 100)
+	local quality = clamp(b.quality + fx.q + d.quality * 3 + finishQ + tech("quality"), 0, 100)
 
-	local unitCost = b.unit + fin.unit + d.quality * 700 + math.max(0, d.wheels.size - 17) * 150 + (d.spoiler and 600 or 0)
+	-- Costo por unidad (escala del catálogo × ECON.unitCostScale) con las mejoras de producción.
+	local unitCost = b.unit + fin.unit + d.quality * 700 + math.max(0, d.wheels.size - 15) * 150 + (d.spoiler and 600 or 0)
 	for _, p in parts do
 		unitCost += p.unit
 	end
@@ -300,33 +339,19 @@ function DesignCalc.computeDesign(g: any, d: any): any
 		unitCost += intOpt(group, d.interior[group])[3]
 	end
 	unitCost += ch.unit
+	unitCost = unitCost * Catalog.ECON.unitCostScale * (1 + tech("unitCostPct") / 100)
 
 	local seg = Catalog.SEGMENTS[d.segment] or Catalog.SEGMENTS.Masivo
-	local nonDefault = 0
-	for _, c in Catalog.CATS do
-		if d.parts[c[1]] ~= b.defaults[c[1]] then
-			nonDefault += 1
-		end
-	end
-	local build = round(b.build + nonDefault * 10 + quality * 0.5)
-
 	local mats = Util.deepCopy(b.mats)
 	if d.parts.motor == "v8" then
 		mats.acero = (mats.acero or 0) + 2
 	end
-	if d.parts.bateria == "mhev" then
-		mats.baterias = (mats.baterias or 0) + 1
-	end
 	if d.interior.material == "cuero" then
 		mats.cuero = (mats.cuero or 0) + 1
 	end
-	if d.interior.dash == "digital" then
-		mats.electronica = (mats.electronica or 0) + 1
-	end
-	if d.paint.finish == "Perlado" or d.paint.finish == "Cromado" then
-		mats.pintura = (mats.pintura or 0) + 1
-	end
-	local price = round(((unitCost * 1.5 + (quality - 50) * 250 + hp * 20) * seg.price) / 100) * 100
+	-- Precio de referencia: lo que el mercado considera justo pagar por este auto.
+	local premium = math.max(0, quality - 45) * 12 + hp * 2.5 + safety * 4
+	local price = round(((unitCost * Catalog.ECON.priceMarkup + premium) * seg.price) / 10) * 10
 
 	return {
 		hp = round(hp),
@@ -339,17 +364,17 @@ function DesignCalc.computeDesign(g: any, d: any): any
 		consUnit = ev and "kWh/100 km" or "L/100 km",
 		comfort = round(comfort),
 		durability = round(durability),
+		safety = round(safety),
 		quality = round(quality),
 		unitCost = round(unitCost),
-		build = build,
+		build = 0,
 		mats = mats,
 		price = price,
 		ev = ev,
 	}
 end
 
-local GENERATIONS = { "2026 · 1.ª gen.", "2027 · 2.ª gen.", "2028 · 3.ª gen." }
-DesignCalc.GENERATIONS = GENERATIONS
+-- Generaciones: cada diseño tiene año de modelo y número de generación (ver Actions.saveDesign).
 
 local function inList(list: { any }, value: any, index: number?): boolean
 	for _, item in list do
@@ -403,8 +428,9 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	if raw.brand == company or raw.brand == company .. " Sport" or raw.brand == company .. " Lux" then
 		d.brand = raw.brand
 	end
-	if inList(GENERATIONS, raw.generation) then
-		d.generation = raw.generation
+	-- Año de modelo y generación los fija el servidor al guardar (ver Actions.saveDesign).
+	if type(raw.lineage) == "string" then
+		d.lineage = raw.lineage
 	end
 	if Catalog.SEGMENTS[raw.segment] then
 		d.segment = raw.segment
@@ -455,17 +481,19 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	if not fin then
 		return nil, "Acabado de pintura desconocido."
 	end
-	if fin.research and not DesignCalc.has(g, fin.research) then
-		return nil, "El acabado " .. paint.finish .. " requiere investigar «" .. DesignCalc.researchName(fin.research) .. "»."
+	local fb = DesignCalc.finishBlock(g, paint.finish)
+	if fb then
+		return nil, "El acabado " .. paint.finish .. ": " .. fb .. "."
 	end
 	d.paint.finish = paint.finish
 	d.paint.intensity = intIn(paint.intensity, 50, 130) or 100
 	d.paint.gloss = intIn(paint.gloss, 0, 100) or 60
 
 	local wheels = type(raw.wheels) == "table" and raw.wheels or {}
-	local size = intIn(wheels.size, 16, 22)
+	local maxW = DesignCalc.maxWheel(g)
+	local size = intIn(wheels.size, Catalog.WHEEL_SIZE.min, maxW)
 	if size == nil then
-		return nil, "Tamaño de ruedas inválido (16″ a 22″)."
+		return nil, "Tamaño de ruedas inválido (" .. Catalog.WHEEL_SIZE.min .. "″ a " .. maxW .. "″ en " .. DesignCalc.year(g) .. ")."
 	end
 	d.wheels.size = size
 	if inList(Catalog.WHEEL_STYLES, wheels.style, 1) then
@@ -485,6 +513,10 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	local body = type(raw.body) == "table" and raw.body or {}
 	for group, opts in Catalog.BODY_OPTS do
 		if inList(opts, body[group], 1) then
+			local why = DesignCalc.optionBlock(g, Catalog.bodyOpt(group, body[group]))
+			if why then
+				return nil, Catalog.bodyOpt(group, body[group]).name .. ": " .. why .. "."
+			end
 			d.body[group] = body[group]
 		end
 	end
@@ -495,6 +527,10 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	local interior = type(raw.interior) == "table" and raw.interior or {}
 	for group, opts in Catalog.INTERIOR do
 		if inList(opts, interior[group], 1) then
+			local why = DesignCalc.optionBlock(g, Catalog.interiorOpt(group, interior[group]))
+			if why then
+				return nil, Catalog.interiorOpt(group, interior[group]).name .. ": " .. why .. "."
+			end
 			d.interior[group] = interior[group]
 		end
 	end
@@ -506,7 +542,7 @@ end
 
 -- Compara dos diseños solo por los campos que el jugador puede cambiar.
 function DesignCalc.sameSpec(a: any, b: any): boolean
-	local fields = { "name", "brand", "generation", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler" }
+	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler" }
 	for _, f in fields do
 		if a[f] ~= b[f] then
 			return false

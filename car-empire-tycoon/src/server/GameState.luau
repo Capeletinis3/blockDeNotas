@@ -15,17 +15,18 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 2
+GameState.SCHEMA = 3
 
-GameState.UNIT_STATUSES = { almacen = true, salon = true, reservado = true, mercado = true, vendido = true }
-GameState.CUSTOMER_STATES = { mirando = true, oferta = true, ["se fue"] = true, ["compró"] = true }
-GameState.PRIORITIES = { alta = 0, media = 1, baja = 2 }
+-- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
+-- Comercialización: en venta / agotado / retirado.
+GameState.PROD_STATES = { cola = true, produciendo = true, ["sin fondos"] = true, pausado = true, completado = true, cancelado = true }
+GameState.SALE_STATES = { ["en venta"] = true, agotado = true, retirado = true }
 GameState.DEFAULT_SETTINGS = { sound = true, reduceMotion = false, keyHints = true, textScale = 1, camSpeed = 1, tips = true, shadows = true }
 
 local function freshStations(): any
 	local out = {}
 	for _, st in Catalog.STATIONS do
-		out[st[1]] = { level = 1, condition = 100, broken = false }
+		out[st[1]] = { level = 1 }
 	end
 	return out
 end
@@ -41,35 +42,33 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		company = { name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
 		sede = 1,
 		money = dif.money,
-		gems = 20,
-		rp = 0,
+		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
+		rp = 0, -- banco de puntos de investigación
 		xp = 0,
 		level = 1,
 		reputation = 3.0,
-		time = { day = 0, minute = 8 * 60, speed = 1 },
+		-- day = meses desde enero de 1970; minute = minutos de juego dentro del mes.
+		time = { day = 0, minute = 0, speed = 1 },
 		designs = {},
-		units = {},
-		parts = {},
-		materials = { acero = 120, aluminio = 40, pintura = 30, electronica = 20, baterias = 0, cuero = 10 },
+		lots = {},
+		lotHistory = {},
 		employees = {},
 		candidates = {},
 		stations = freshStations(),
-		production = { orders = {}, auto = false, boost = false, lastDesign = nil, lastSnap = nil, history = {} },
-		customers = {},
-		sales = {},
 		ledger = {},
 		research = { done = {}, active = nil },
 		devPaid = {},
 		claimed = {},
 		counters = {
-			companyCreated = 1, designsSaved = 0, hires = 0, ordersCreated = 0, unitsProduced = 0, sentToShowroom = 0,
-			unitsSold = 0, researchDone = 0, sedeLevel = 1, serial = 0, revenueTotal = 0, marginTotal = 0,
+			companyCreated = 1, designsSaved = 0, hires = 0, lotsLaunched = 0, lotsSoldOut = 0, lotsRetired = 0, generations = 0,
+			unitsProduced = 0, unitsSold = 0, unitsDiscarded = 0, researchDone = 0, sedeLevel = 1, stationUpgrades = 0,
+			revenueTotal = 0, marginTotal = 0,
 		},
-		stats = { days = {} },
+		-- Agregados por mes y acumuladores del mes en curso (reputación y PI por ventas).
+		stats = { days = {}, month = { sold = 0, rel = 0, salesPi = 0 } },
 		tutorial = { skipped = false, tips = true },
 		daily = { last = "", streak = 0 },
-		promo = false,
-		market = { seedDay = -1, listings = {}, favorites = {}, mine = {}, offers = {} },
+		promo = false, -- campaña publicitaria
 		notifications = {},
 	}
 end
@@ -85,7 +84,7 @@ function GameState.day(g: any, day: number?): any
 	local key = Rules.dayKey(d)
 	local ds = g.stats.days[key]
 	if not ds then
-		ds = { revenue = 0, cogs = 0, units = 0, fees = 0, margin = 0, produced = 0, flow = {} }
+		ds = { revenue = 0, cogs = 0, units = 0, margin = 0, produced = 0, flow = {} }
 		g.stats.days[key] = ds
 		-- Conservar solo los últimos N días de agregados.
 		local limit = d - Catalog.RULES.statsDaysKept
@@ -143,7 +142,7 @@ local function checkSpec(spec: any, what: string): string?
 	if type(spec.paint) ~= "table" or not Util.isHexColor(spec.paint.primary) or not Util.isHexColor(spec.paint.secondary) or not Catalog.FINISHES[spec.paint.finish] then
 		return what .. ": pintura dañada."
 	end
-	if type(spec.wheels) ~= "table" or not isInt(spec.wheels.size, 16, 22) then
+	if type(spec.wheels) ~= "table" or not isInt(spec.wheels.size, Catalog.WHEEL_SIZE.min, Catalog.WHEEL_SIZE.max) then
 		return what .. ": ruedas dañadas."
 	end
 	if type(spec.body) ~= "table" or type(spec.interior) ~= "table" then
@@ -170,18 +169,6 @@ local function checkCalc(c: any, what: string): string?
 	for k, v in c.mats do
 		if not Catalog.material(k) or not isInt(v, 0) then
 			return what .. ": material por unidad inválido."
-		end
-	end
-	return nil
-end
-
-local function checkMats(m: any, what: string): string?
-	if type(m) ~= "table" then
-		return what .. " dañados."
-	end
-	for k, v in m do
-		if not Catalog.material(k) or not isInt(v, 0) then
-			return what .. ": cantidad inválida de «" .. tostring(k) .. "»."
 		end
 	end
 	return nil
@@ -221,6 +208,9 @@ function GameState.validate(g: any): (boolean, string?)
 	if type(t) ~= "table" or not isInt(t.day, 0) or not isFinite(t.minute) or t.minute < 0 or t.minute >= Catalog.RULES.dayMinutes or not Util.contains(Catalog.RULES.speeds, t.speed) then
 		return fail("El reloj de la partida está dañado.")
 	end
+	if g.time.day > (Catalog.CALENDAR.endYear - Catalog.CALENDAR.startYear + 40) * 12 then
+		return fail("El reloj de la partida está dañado.")
+	end
 	if type(g.counters) ~= "table" then
 		return fail("Los contadores están dañados.")
 	end
@@ -229,14 +219,10 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("Contador inválido: " .. tostring(k) .. ".")
 		end
 	end
-	for _, k in { "designs", "units", "sales", "ledger", "devPaid", "customers", "parts", "employees", "candidates", "notifications" } do
+	for _, k in { "designs", "lots", "lotHistory", "ledger", "devPaid", "employees", "candidates", "notifications" } do
 		if not isList(g[k]) then
 			return fail("La lista «" .. k .. "» está dañada.")
 		end
-	end
-	local mErr = checkMats(g.materials, "Los materiales")
-	if mErr then
-		return fail(mErr)
 	end
 	-- Investigación
 	if type(g.research) ~= "table" or not isList(g.research.done) then
@@ -248,7 +234,7 @@ function GameState.validate(g: any): (boolean, string?)
 		end
 	end
 	local ra = g.research.active
-	if ra ~= nil and (type(ra) ~= "table" or not Catalog.researchNode(ra.id) or not nonNeg(ra.progress) or not nonNeg(ra.paid) or not nonNeg(ra.rp)) then
+	if ra ~= nil and (type(ra) ~= "table" or not Catalog.researchNode(ra.id) or not nonNeg(ra.progress) or not nonNeg(ra.paid)) then
 		return fail("La investigación en curso está dañada.")
 	end
 	-- Estaciones
@@ -257,7 +243,7 @@ function GameState.validate(g: any): (boolean, string?)
 	end
 	for _, st in Catalog.STATIONS do
 		local s = g.stations[st[1]]
-		if type(s) ~= "table" or not isInt(s.level, 1, 5) or not isFinite(s.condition) or s.condition < 0 or s.condition > 100 or type(s.broken) ~= "boolean" then
+		if type(s) ~= "table" or not isInt(s.level, 1, 6) then
 			return fail("La estación «" .. st[2] .. "» está dañada.")
 		end
 	end
@@ -271,110 +257,76 @@ function GameState.validate(g: any): (boolean, string?)
 		if type(d.name) ~= "string" or not isInt(d.version, 1) then
 			return fail("El diseño «" .. tostring(d.name) .. "» tiene nombre o versión inválidos.")
 		end
+		if not isInt(d.gen, 1, 99) or not isInt(d.modelYear, 1900, 2200) then
+			return fail("El diseño «" .. d.name .. "» tiene año o generación inválidos.")
+		end
 		local e = checkSpec(d, "Diseño «" .. d.name .. "»")
 		if e then
 			return fail(e)
 		end
 	end
-	-- Unidades
-	local unitIds = {}
-	for _, u in g.units do
-		if type(u) ~= "table" or type(u.id) ~= "string" or unitIds[u.id] then
-			return fail("Hay una unidad sin identificador válido.")
+	-- Lotes (activos e historial): contadores enteros y coherentes; nunca más vendidas que fabricadas.
+	local lotIds = {}
+	local function checkLot(l: any, active: boolean): string?
+		if type(l) ~= "table" or type(l.id) ~= "string" or lotIds[l.id] then
+			return "Hay un lote sin identificador válido."
 		end
-		unitIds[u.id] = u
-		if not GameState.UNIT_STATUSES[u.status] then
-			return fail("Estado de unidad desconocido: " .. tostring(u.status) .. ".")
+		lotIds[l.id] = true
+		local sn = l.design
+		if type(sn) ~= "table" or type(sn.name) ~= "string" or not isInt(sn.version, 1) or not Catalog.TYPES[sn.type] then
+			return "El lote " .. l.id .. " no tiene la copia del diseño."
 		end
-		local e = checkSpec(u.spec, "Unidad " .. tostring(u.serial)) or checkCalc(u.stats, "Unidad " .. tostring(u.serial))
+		local e = checkSpec(sn.spec, "Lote " .. l.id) or checkCalc(sn.calc, "Lote " .. l.id)
+		if e then
+			return e
+		end
+		if not isInt(l.qty, 0, Catalog.RULES.maxLotQty) or not isInt(l.produced, 0, l.qty) or not isInt(l.sold, 0) or not isInt(l.discarded, 0) then
+			return "El lote " .. l.id .. " tiene cantidades inválidas."
+		end
+		if l.sold + l.discarded > l.produced then
+			return "El lote " .. l.id .. " vendió o descartó más de lo fabricado."
+		end
+		if not GameState.PROD_STATES[l.prodState] or not GameState.SALE_STATES[l.saleState] then
+			return "El lote " .. l.id .. " tiene un estado desconocido."
+		end
+		if active ~= (l.saleState == "en venta") then
+			return "El lote " .. l.id .. " está en la lista equivocada."
+		end
+		if not nonNeg(l.price) or l.price <= 0 or not nonNeg(l.unitCost) or not nonNeg(l.refPrice) or not isFinite(l.appeal) then
+			return "El lote " .. l.id .. " tiene precio o costo inválidos."
+		end
+		if not nonNeg(l.revenue) or not nonNeg(l.costSpent) or not nonNeg(l.prodProgress) or not nonNeg(l.saleAcc) then
+			return "El lote " .. l.id .. " tiene acumulados inválidos."
+		end
+		return nil
+	end
+	if not isList(g.lots) or not isList(g.lotHistory) then
+		return fail("La lista de lotes está dañada.")
+	end
+	for _, l in g.lots do
+		local e = checkLot(l, true)
 		if e then
 			return fail(e)
 		end
-		if not nonNeg(u.cost) or not isFinite(u.price) or u.price <= 0 or not isInt(u.discount, 0, Catalog.RULES.maxDiscount) then
-			return fail("Unidad " .. tostring(u.serial) .. ": costo o precio inválidos.")
-		end
 	end
-	-- Órdenes
-	if type(g.production) ~= "table" or not isList(g.production.orders) or not isList(g.production.history) then
-		return fail("La producción está dañada.")
-	end
-	local caps = Rules.caps(g)
-	for _, o in g.production.orders do
-		if type(o) ~= "table" or type(o.id) ~= "string" then
-			return fail("Hay una orden sin identificador.")
-		end
-		local sn = o.design
-		if type(sn) ~= "table" or not isInt(sn.version, 1) or type(sn.name) ~= "string" then
-			return fail("La orden " .. o.id .. " no tiene la versión confirmada del diseño.")
-		end
-		local e = checkSpec(sn.spec, "Orden " .. o.id) or checkCalc(sn.calc, "Orden " .. o.id)
+	for _, l in g.lotHistory do
+		local e = checkLot(l, false)
 		if e then
 			return fail(e)
-		end
-		if not isInt(o.qty, 1, Catalog.RULES.maxQty) or not isInt(o.done, 0, o.qty - 1) then
-			return fail("La orden " .. o.id .. " tiene cantidades inválidas.")
-		end
-		if not isInt(o.line, 1, caps.lines) or GameState.PRIORITIES[o.priority] == nil or not nonNeg(o.progress) or not isFinite(o.pos) then
-			return fail("La orden " .. o.id .. " tiene línea, prioridad o progreso inválidos.")
-		end
-		if type(o.unitStarted) ~= "boolean" then
-			return fail("La orden " .. o.id .. " tiene un estado de unidad inválido.")
-		end
-		if o.unitStarted then
-			local cur = o.cur
-			if type(cur) ~= "table" or not nonNeg(cur.charged) or checkMats(cur.mats, "Materiales de la unidad en curso") or not nonNeg(o.unitTotal) then
-				return fail("La orden " .. o.id .. " no registra lo cobrado a la unidad en curso.")
-			end
 		end
 	end
 	-- Personal
 	for _, e in g.employees do
-		if type(e) ~= "table" or type(e.id) ~= "string" or not Util.contains(Catalog.ROLES, e.role) or not isInt(e.skill, 0, 100) or not nonNeg(e.salary) or not isFinite(e.energy) or e.energy < 0 or e.energy > 100 then
+		if type(e) ~= "table" or type(e.id) ~= "string" or not Util.contains(Catalog.ROLES, e.role) or not isInt(e.skill, 0, 100) or not nonNeg(e.salary) then
 			return fail("Hay un empleado dañado.")
-		end
-		if e.status ~= "activo" and e.status ~= "descanso" then
-			return fail("Estado de empleado desconocido.")
 		end
 		if e.assign ~= nil and not Catalog.station(e.assign) and not Catalog.department(e.assign) then
 			return fail("Puesto de empleado desconocido.")
 		end
 	end
-	for _, p in g.parts do
-		if type(p) ~= "table" or not Catalog.part(p.cat, p.id) or not isInt(p.qty, 1) then
-			return fail("Hay una pieza de inventario dañada.")
-		end
-	end
-	-- Clientes y referencias
-	for _, c in g.customers do
-		if type(c) ~= "table" or type(c.id) ~= "string" or not GameState.CUSTOMER_STATES[c.state] or not nonNeg(c.patience) or not nonNeg(c.waited) or not isFinite(c.budget) then
-			return fail("Hay un cliente dañado.")
-		end
-		if c.unitId ~= nil and not unitIds[c.unitId] and c.state ~= "se fue" then
-			return fail("Un cliente mira una unidad inexistente.")
-		end
-	end
-	for _, s in g.sales do
-		-- Las demostraciones de la V3 traen 30 días de historial previos al día 0 (días negativos).
-		if type(s) ~= "table" or not isFinite(s.price) or not isFinite(s.cost) or not isInt(s.day, g.demo and -60 or 0) then
-			return fail("El historial de ventas está dañado.")
-		end
-	end
 	for _, l in g.ledger do
 		if type(l) ~= "table" or not isFinite(l.amount) or type(l.type) ~= "string" then
 			return fail("El libro de movimientos está dañado.")
-		end
-	end
-	-- Mercado
-	local m = g.market
-	if type(m) ~= "table" or not isList(m.listings) or not isList(m.mine) or not isList(m.offers) or not isList(m.favorites) then
-		return fail("El mercado está dañado.")
-	end
-	for _, l in m.mine do
-		if l.status == "activa" then
-			local u = unitIds[l.unitId]
-			if not u or u.status ~= "mercado" then
-				return fail("Una publicación activa no corresponde a una unidad en el mercado.")
-			end
 		end
 	end
 	if type(g.stats) ~= "table" or type(g.stats.days) ~= "table" then
@@ -384,6 +336,9 @@ function GameState.validate(g: any): (boolean, string?)
 		if not tonumber(k) or type(ds) ~= "table" or not isFinite(ds.revenue) or type(ds.flow) ~= "table" then
 			return fail("Las estadísticas diarias están dañadas.")
 		end
+	end
+	if type(g.stats.month) ~= "table" or not isFinite(g.stats.month.sold) or not isFinite(g.stats.month.rel) or not isFinite(g.stats.month.salesPi) then
+		return fail("Los acumulados del mes están dañados.")
 	end
 	if type(g.claimed) ~= "table" or type(g.daily) ~= "table" or type(g.tutorial) ~= "table" then
 		return fail("Las misiones están dañadas.")
@@ -415,17 +370,16 @@ MIGRATIONS[1] = function(g: any, now: number)
 			g.counters[k] = v
 		end
 	end
-	for k, v in fresh.materials do
-		if g.materials[k] == nil then
-			g.materials[k] = v
-		end
+	if type(g.materials) ~= "table" then
+		g.materials = {}
 	end
 	for k, v in fresh.stations do
 		if g.stations[k] == nil then
-			g.stations[k] = v
+			g.stations[k] = { level = v.level, condition = 100, broken = false }
 		end
 	end
 	if type(g.production) == "table" then
+		g.production.orders = g.production.orders or {}
 		g.production.history = g.production.history or {}
 		if g.production.boost == nil then
 			g.production.boost = false
@@ -476,6 +430,140 @@ MIGRATIONS[1] = function(g: any, now: number)
 		end
 	end
 	g.schema = 2
+end
+
+-- Costos de las investigaciones de la versión 2 (árbol anterior): se devuelven al migrar.
+local OLD_RESEARCH_COST = {
+	m1 = 15000, m2 = 25000, m3 = 60000, m4 = 90000, e1 = 30000, e4 = 25000, e2 = 70000, e3 = 140000,
+	a1 = 20000, a2 = 45000, a3 = 80000, mt1 = 18000, mt2 = 55000, mt3 = 65000, p1 = 20000, p3 = 30000, p2 = 90000,
+	mk1 = 15000, mk2 = 20000, mk3 = 70000, q1 = 18000, q3 = 35000, q2 = 60000, l1 = 20000, l2 = 30000, l3 = 50000,
+}
+local OLD_MAT_PRICE = { acero = 40, aluminio = 95, pintura = 120, electronica = 260, baterias = 420, cuero = 180 }
+
+--[[ 2 → 3: producción por lotes, ventas automáticas, calendario desde 1970 e investigación nueva.
+	Nada se pierde ni aparece de la nada: lo que ya estaba pagado y deja de existir se reintegra al costo.
+	· unidades sin vender (almacén, salón, reservadas, en el mercado) → su costo de fabricación
+	· la unidad en curso de cada orden → lo cobrado al empezarla (el resto de la orden no se había cobrado)
+	· materiales y piezas sueltas → su precio de proveedor
+	· investigaciones del árbol anterior → su costo (y su PI vuelve al banco)
+	Se conservan: dinero, diseños (con año de modelo y 1.ª generación), sede, personal, mejoras de estaciones,
+	estadísticas por período, contadores, reputación, nivel, gemas (sin uso) y misiones de recompensa diaria. ]]
+MIGRATIONS[2] = function(g: any, _now: number)
+	local refund = 0
+	local notes = {}
+	local unitsBack = 0
+	for _, u in g.units or {} do
+		if type(u) == "table" and u.status ~= "vendido" and isFinite(u.cost) then
+			refund += u.cost
+			unitsBack += 1
+		end
+	end
+	if unitsBack > 0 then
+		table.insert(notes, unitsBack .. " autos sin vender")
+	end
+	local prod = type(g.production) == "table" and g.production or {}
+	for _, o in prod.orders or {} do
+		if type(o) == "table" and o.unitStarted and type(o.cur) == "table" and isFinite(o.cur.charged) then
+			refund += o.cur.charged
+		end
+	end
+	if #(prod.orders or {}) > 0 then
+		table.insert(notes, #prod.orders .. " órdenes en curso (lo no fabricado no se había cobrado)")
+	end
+	local mats = 0
+	for k, n in type(g.materials) == "table" and g.materials or {} do
+		if OLD_MAT_PRICE[k] and isFinite(n) and n > 0 then
+			mats += OLD_MAT_PRICE[k] * n
+		end
+	end
+	for _, p in g.parts or {} do
+		local part = type(p) == "table" and Catalog.part(p.cat, p.id)
+		if part and isFinite(p.qty) then
+			mats += part.unit * p.qty
+		end
+	end
+	if mats > 0 then
+		refund += mats
+		table.insert(notes, "materiales y piezas sueltas")
+	end
+	local research = 0
+	if type(g.research) == "table" then
+		for _, id in g.research.done or {} do
+			research += OLD_RESEARCH_COST[id] or 0
+		end
+		local ra = g.research.active
+		if type(ra) == "table" then
+			research += isFinite(ra.paid) and ra.paid or 0
+			if isFinite(ra.rp) then
+				g.rp = (isFinite(g.rp) and g.rp or 0) + ra.rp
+			end
+		end
+	end
+	if research > 0 then
+		refund += research
+		table.insert(notes, "investigaciones del árbol anterior")
+	end
+	refund = Util.round(refund)
+	g.money = (isFinite(g.money) and g.money or 0) + refund
+
+	-- Calendario: cada día anterior pasa a ser un mes desde enero de 1970.
+	local t = g.time
+	t.minute = math.floor((t.minute or 0) * Catalog.RULES.dayMinutes / 1440)
+	if t.minute >= Catalog.RULES.dayMinutes then
+		t.minute = 0
+	end
+	local year = Catalog.CALENDAR.startYear + math.floor((t.day or 0) / 12)
+	for _, d in g.designs or {} do
+		if type(d) == "table" then
+			d.gen = d.gen or 1
+			d.modelYear = d.modelYear or year
+			d.generation = d.modelYear .. " · " .. d.gen .. ".ª gen."
+		end
+	end
+	-- Estaciones: solo queda el nivel (sin averías ni desgaste).
+	for k, st in g.stations or {} do
+		if type(st) == "table" then
+			g.stations[k] = { level = math.clamp(isFinite(st.level) and st.level or 1, 1, 6) }
+		end
+	end
+	local upgrades = 0
+	for _, st in g.stations or {} do
+		upgrades += st.level - 1
+	end
+	-- Personal sin cansancio ni descansos.
+	for _, e in g.employees or {} do
+		if type(e) == "table" then
+			e.energy = nil
+			e.status = nil
+		end
+	end
+	g.units, g.customers, g.sales, g.materials, g.parts, g.market, g.production = nil, nil, nil, nil, nil, nil, nil
+	g.research = { done = {}, active = nil }
+	g.lots = {}
+	g.lotHistory = {}
+	if type(g.stats) == "table" then
+		g.stats.month = { sold = 0, rel = 0, salesPi = 0 }
+	end
+	local c = g.counters
+	for k, v in { lotsLaunched = 0, lotsSoldOut = 0, lotsRetired = 0, generations = 0, unitsDiscarded = 0, stationUpgrades = upgrades } do
+		if c[k] == nil then
+			c[k] = v
+		end
+	end
+	-- Las misiones cambiaron: las reclamadas antes quedan como registro aparte.
+	g.claimedV2 = g.claimed
+	g.claimed = {}
+	g.promo = false
+	g.notifications = g.notifications or {}
+	table.insert(g.notifications, 1, {
+		id = "mig3", kind = "info", read = false, day = t.day, at = "00:00", go = "fabrica",
+		text = "Tu empresa se actualizó al sistema de lotes y al calendario desde " .. Catalog.CALENDAR.startYear .. ". "
+			.. (refund > 0 and ("Se reintegraron " .. Util.money(refund) .. " por " .. table.concat(notes, ", ") .. ".") or "No había nada que reintegrar."),
+	})
+	if refund > 0 then
+		table.insert(g.ledger, { day = t.day, min = 0, type = "reintegro", amount = refund, note = "Actualización al sistema de lotes" })
+	end
+	g.schema = 3
 end
 
 function GameState.migrate(g: any, now: number): (any?, string?)
@@ -582,23 +670,15 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	return profile, damaged
 end
 
--- Límites de tamaño para que el registro no crezca sin control.
+-- Límites de tamaño para que el registro no crezca sin control (los lotes son agregados: producir 50.000
+-- autos no agrega 50.000 registros).
 function GameState.trim(g: any)
 	local R = Catalog.RULES
 	while #g.ledger > R.maxLedger do
 		table.remove(g.ledger, 1)
 	end
-	while #g.sales > R.maxSales do
-		table.remove(g.sales, 1)
-	end
-	local sold = {}
-	for i, u in g.units do
-		if u.status == "vendido" then
-			table.insert(sold, i)
-		end
-	end
-	for i = #sold - R.maxSoldUnitsKept, 1, -1 do
-		table.remove(g.units, sold[i])
+	while #g.lotHistory > R.maxLotHistory do
+		table.remove(g.lotHistory)
 	end
 	while #g.notifications > 40 do
 		table.remove(g.notifications)
@@ -606,7 +686,6 @@ function GameState.trim(g: any)
 end
 
 -- Vista para el cliente -----------------------------------------------------------------------
--- Solo datos de la propia empresa. Los presupuestos de los clientes son información oculta.
 function GameState.view(g: any): any
 	local v = Util.deepCopy(g)
 	local function lastN(list: { any }, n: number): { any }
@@ -617,20 +696,14 @@ function GameState.view(g: any): any
 		return out
 	end
 	v.ledger = lastN(g.ledger, 120)
-	v.sales = lastN(g.sales, 120)
-	for _, c in v.customers do
-		c.budget = nil
-	end
+	v.claimedV2 = nil
+	local caps = Rules.caps(g)
 	v.derived = {
-		caps = Rules.caps(g),
-		warehouseFinished = Rules.warehouseFinished(g),
-		inProgress = Rules.inProgress(g),
-		warehouseUsed = Rules.warehouseUsed(g),
-		showroomUsed = Rules.showroomUsed(g),
-		matsStored = Rules.matsStored(g),
-		matsInProcess = Rules.matsInProcess(g),
-		matsUsed = Rules.matsUsed(g),
-		lineSpeed = Rules.lineSpeed(g),
+		caps = caps,
+		lineRate = caps.perLine,
+		piPerMinute = Rules.piPerMinute(g),
+		piCap = Rules.piCap(g),
+		year = Rules.year(g),
 		xpNext = Rules.xpForLevel(g.level),
 		sedeName = Rules.sede(g).name,
 	}
@@ -647,11 +720,20 @@ function GameState.summary(g: any): any
 		level = g.level,
 		money = g.money,
 		day = g.time.day,
+		year = Rules.year(g),
 		sede = Rules.sede(g).name,
 		sold = g.counters.unitsSold,
 		lastPlayed = g.lastPlayed,
 		playedSeconds = g.playedSeconds or 0,
-		tutorialDone = (g.claimed.t1 and 1 or 0) + (g.claimed.t2 and 1 or 0) + (g.claimed.t3 and 1 or 0) + (g.claimed.t4 and 1 or 0) + (g.claimed.t5 and 1 or 0),
+		tutorialDone = (function()
+			local n = 0
+			for _, m in Catalog.MISSIONS do
+				if m.kind == "tutorial" and g.claimed[m.id] then
+					n += 1
+				end
+			end
+			return n
+		end)(),
 		tutorialSkipped = g.tutorial.skipped == true,
 	}
 end

@@ -1,11 +1,20 @@
 --!strict
 --[[
-	Simulación de la partida. Solo corre en el servidor. Reglas portadas de la V3:
-	stepProduction, finishUnit, clientes, investigación, personal, cambio de día y venta atómica.
+	Simulación de la partida. Solo corre en el servidor.
 	ctx = { rng: () -> number, notify: (kind, text) -> () }
 
-	Orden de cada paso de 10 minutos: reloj → cambio de día (si corresponde) → fabricación →
-	clientes → investigación → personal. Así cada resultado queda asociado al día en que ocurre.
+	Cada paso de 10 minutos de juego (1 s real a 1×): reloj → cierre de mes (si corresponde) → producción de
+	los lotes → ventas automáticas → investigación. Todo se lleva en contadores agregados: fabricar o vender
+	50.000 autos solo cambia números, nunca crea registros por unidad.
+
+	Producción: cada línea fabrica el lote que tiene asignado a `Rules.lineRate` autos por minuto real. Cada
+	unidad se cobra al terminarla (costo fijado al lanzar el lote). Si no alcanza el dinero, el lote queda
+	«sin fondos» y sigue solo cuando haya dinero. Al llegar a la cantidad encargada, la producción TERMINA:
+	nunca se repite un lote ni se crean órdenes automáticas.
+
+	Ventas: los autos terminados se venden solos al ritmo de `Rules.lotSalesRate` (demanda del tipo × parte que
+	le toca al lote frente a los rivales). Nunca se vende más de lo fabricado. Un lote sin unidades pendientes
+	ni stock pasa a «agotado» y deja la lista activa (queda en el historial).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,10 +31,6 @@ local money = Util.money
 
 local Simulation = {}
 
-local function market(): any
-	return require(script.Parent.Market) :: any
-end
-
 local function pick(ctx: any, list: { any }): any
 	return list[math.floor(ctx.rng() * #list) + 1]
 end
@@ -33,12 +38,19 @@ Simulation.pick = pick
 
 -- Dinero ---------------------------------------------------------------------------
 
+-- Movimiento con registro en el libro (eventos puntuales: diseño, investigación, sede…).
 function Simulation.ledger(g: any, kind: string, amount: number, note: string)
 	amount = round(amount)
 	table.insert(g.ledger, { day = g.time.day, min = math.floor(g.time.minute), type = kind, amount = amount, note = note })
 	local ds = GameState.day(g)
 	ds.flow[kind] = (ds.flow[kind] or 0) + amount
 	GameState.trim(g)
+end
+
+-- Movimiento continuo (fabricación y ventas): solo suma al agregado del mes, sin una línea por unidad.
+local function flow(g: any, kind: string, amount: number)
+	local ds = GameState.day(g)
+	ds.flow[kind] = (ds.flow[kind] or 0) + amount
 end
 
 -- Cobra solo si alcanza; nunca deja el dinero en negativo.
@@ -65,7 +77,7 @@ function Simulation.earn(g: any, amount: number, kind: string, note: string)
 end
 
 function Simulation.notify(g: any, ctx: any, kind: string, text: string, go: string?)
-	table.insert(g.notifications, 1, { id = GameState.uid(g, "n"), kind = kind, text = text, go = go, read = false, day = g.time.day, at = Util.clock(g.time.minute) })
+	table.insert(g.notifications, 1, { id = GameState.uid(g, "n"), kind = kind, text = text, go = go, read = false, day = g.time.day, at = Util.gameDate(g.time.day) })
 	while #g.notifications > 40 do
 		table.remove(g.notifications)
 	end
@@ -80,481 +92,208 @@ function Simulation.addXp(g: any, ctx: any, n: number)
 	while g.xp >= Rules.xpForLevel(g.level) do
 		g.xp -= Rules.xpForLevel(g.level)
 		g.level += 1
-		g.gems += 10
 		up = true
 	end
 	if up then
-		Simulation.notify(g, ctx, "nivel", "¡Subiste al nivel " .. g.level .. "! +10 gemas", "compania")
+		Simulation.notify(g, ctx, "nivel", "¡Subiste al nivel " .. g.level .. "!", "compania")
 	end
 end
 
--- Producción ------------------------------------------------------------------------
-
-local function missingMats(g: any, need: { [string]: number }): { any }
-	local out = {}
-	for _, k in Util.keys(need) do
-		local have = g.materials[k] or 0
-		if have < need[k] then
-			table.insert(out, { k, need[k] - have })
-		end
-	end
-	return out
+-- Puntos de investigación al banco (con tope de 10 minutos de generación).
+function Simulation.addPi(g: any, n: number)
+	g.rp = math.min(Rules.piCap(g), g.rp + n)
 end
-Simulation.missingMats = missingMats
 
-local function missingText(miss: { any }): string
-	local parts = {}
-	for _, m in miss do
-		table.insert(parts, m[2] .. " de " .. string.lower(Catalog.matLabel(m[1])))
-	end
-	return table.concat(parts, ", ")
-end
-Simulation.missingText = missingText
+-- Lotes ------------------------------------------------------------------------------
 
 -- Copia independiente de la versión confirmada del diseño: configuración + valores calculados.
 function Simulation.designSnapshot(g: any, d: any): any
 	local c = DesignCalc.computeDesign(g, d)
+	local base = Catalog.base(d.baseId)
 	return {
 		id = d.id,
 		version = d.version or 1,
 		name = d.name,
 		brand = d.brand,
 		baseId = d.baseId,
+		type = base.type,
+		gen = d.gen or 1,
+		modelYear = d.modelYear or Rules.year(g),
+		lineage = d.lineage or d.id,
 		spec = Util.deepCopy(d),
 		calc = Util.deepCopy(c),
-		at = Rules.absMinute(g),
 	}
 end
 
-function Simulation.makeOrder(g: any, snap: any, qty: number, line: number, priority: string, auto: boolean?): any
+function Simulation.makeLot(g: any, snap: any, qty: number, price: number): any
+	local appeal = Rules.appeal(snap.calc, snap.spec)
 	return {
-		id = GameState.uid(g, "o"),
+		id = GameState.uid(g, "l"),
 		designId = snap.id,
-		design = Util.deepCopy(snap),
+		design = snap,
 		qty = qty,
-		done = 0,
-		line = line,
-		priority = priority,
-		pos = Rules.absMinute(g) + #g.production.orders / 100,
-		paused = false,
-		status = "en cola",
-		reason = "",
-		missing = nil,
-		progress = 0,
-		unitStarted = false,
-		cur = nil,
-		auto = auto == true,
-		created = Rules.absMinute(g),
-		produced = {},
-	}
-end
-
--- Mantiene el orden manual dentro de la misma prioridad (orden estable).
-function Simulation.sortOrders(g: any)
-	local P = GameState.PRIORITIES
-	table.sort(g.production.orders, function(a, b)
-		if a.line ~= b.line then
-			return a.line < b.line
-		end
-		if P[a.priority] ~= P[b.priority] then
-			return P[a.priority] < P[b.priority]
-		end
-		if a.pos ~= b.pos then
-			return a.pos < b.pos
-		end
-		return a.id < b.id
-	end)
-end
-
--- Cambia el motivo de detención y limpia los datos del problema anterior.
-local function stop(order: any, reason: string, missing: { any }?)
-	order.status = "detenida"
-	order.reason = reason
-	order.missing = missing
-end
-
-local function finishUnit(g: any, ctx: any, order: any)
-	local snap = order.design
-	local c = snap.calc
-	local cur = order.cur
-	g.counters.serial = (g.counters.serial or 0) + 1
-	local letters = string.upper(string.sub(string.gsub(g.company.name, "[^%a]", ""), 1, 2))
-	if #letters < 2 then
-		letters = "CE"
-	end
-	local base = Catalog.base(snap.baseId)
-	local unit = {
-		id = GameState.uid(g, "u"),
-		serial = letters .. "-" .. string.format("%04d", g.counters.serial),
-		designId = snap.id,
-		designVersion = snap.version,
-		name = snap.name,
-		type = base.type,
-		spec = Util.deepCopy(snap.spec),
-		stats = Util.deepCopy(c),
-		-- Lo que realmente se cobró y consumió al empezar esta unidad.
-		cost = cur.charged,
-		charged = { money = cur.charged, mats = Util.deepCopy(cur.mats), boost = cur.boost, factor = cur.factor },
-		quality = c.quality,
-		status = "almacen",
-		price = c.price,
-		discount = 0,
+		produced = 0,
+		sold = 0,
+		discarded = 0,
+		price = price,
+		refPrice = snap.calc.price,
+		unitCost = snap.calc.unitCost,
+		appeal = appeal,
+		revenue = 0,
+		costSpent = 0,
+		prodProgress = 0,
+		saleAcc = 0,
+		prodState = "cola",
+		saleState = "en venta",
 		createdDay = g.time.day,
-		orderId = order.id,
+		monthSold = 0,
+		lastMonthSold = 0,
 	}
-	table.insert(g.units, unit)
-	table.insert(order.produced, unit.id)
-	order.done += 1
-	order.unitStarted = false
-	order.progress = 0
-	order.cur = nil
-	-- Desgaste de estaciones
-	for _, st in Catalog.STATIONS do
-		local s = g.stations[st[1]]
-		local wear = (Catalog.RULES.wearPerUnit - (Rules.has(g, "p2") and 1 or 0)) * (0.6 + ctx.rng() * 0.8)
-		s.condition = math.max(0, s.condition - wear)
-		if s.condition < Catalog.RULES.breakdownAt and not s.broken then
-			s.broken = true
-			Simulation.notify(g, ctx, "aviso", "Avería en la estación de " .. string.lower(st[2]) .. ". Reparala para continuar.", "fabrica")
+end
+
+-- Saca un lote de la lista activa y lo guarda en el historial (más reciente primero).
+function Simulation.archiveLot(g: any, lot: any)
+	for i, l in g.lots do
+		if l.id == lot.id then
+			table.remove(g.lots, i)
+			break
 		end
 	end
-	g.counters.unitsProduced += 1
-	local ds = GameState.day(g)
-	ds.produced = (ds.produced or 0) + 1
-	g.production.lastDesign = snap.id
-	g.production.lastSnap = Util.deepCopy(snap)
-	if order.done >= order.qty then
-		table.insert(g.production.history, 1, {
-			id = order.id,
-			qty = order.qty,
-			line = order.line,
-			priority = order.priority,
-			design = Util.deepCopy(snap), -- permite repetir esta misma versión aunque el proyecto cambie
-			day = g.time.day,
-		})
-		while #g.production.history > 8 do
-			table.remove(g.production.history)
-		end
-	end
-	Simulation.addXp(g, ctx, 30)
-	Simulation.notify(g, ctx, "ok", "Producción completada: " .. snap.name .. " v" .. snap.version .. " (" .. unit.serial .. ")", "autos")
+	lot.endDay = g.time.day
+	table.insert(g.lotHistory, 1, lot)
+	GameState.trim(g)
 end
 
 function Simulation.stepProduction(g: any, ctx: any, minutes: number)
-	local caps = Rules.caps(g)
-	local speed = Rules.lineSpeed(g)
-	local broken = Rules.brokenStation(g)
-	Simulation.sortOrders(g)
-	for line = 1, caps.lines do
-		local order = nil
-		for _, o in g.production.orders do
-			if o.line == line and o.done < o.qty then
-				if not o.paused and order == nil then
-					order = o
-				elseif not o.paused then
-					o.status = "en cola"
-					o.reason = ""
-					o.missing = nil
-				else
-					o.status = "pausada"
-				end
+	local active = Rules.producingLots(g)
+	local rate = Rules.lineRate(g) * Rules.realMinutes(minutes)
+	local busy = {}
+	for _, lot in active do
+		busy[lot.id] = true
+		local pending = lot.qty - lot.produced
+		lot.prodProgress += rate
+		local n = math.min(math.floor(lot.prodProgress), pending)
+		if n > 0 then
+			-- Se cobra cada unidad al terminarla; si no alcanza, se fabrican solo las que se pueden pagar.
+			local affordable = lot.unitCost > 0 and math.floor(g.money / lot.unitCost) or n
+			if affordable < n then
+				n = affordable
 			end
 		end
-		if order then
-			local proceed = true
-			if broken then
-				stop(order, "Avería en la estación de " .. string.lower(broken[2]))
-				proceed = false
-			elseif not order.unitStarted then
-				-- Inicio de una unidad: lugar, materiales y dinero; recién entonces se cobra.
-				local c = order.design.calc
-				local factor = Rules.unitCostFactor(g)
-				local cost = round(c.unitCost * factor)
-				local miss = missingMats(g, c.mats)
-				if Rules.warehouseUsed(g) >= caps.warehouse then
-					stop(order, "Almacén lleno (" .. Rules.warehouseUsed(g) .. "/" .. caps.warehouse .. ")")
-					proceed = false
-				elseif #miss > 0 then
-					stop(order, "Faltan materiales: " .. missingText(miss), miss)
-					proceed = false
-				elseif g.money < cost then
-					stop(order, "Fondos insuficientes para fabricar (" .. money(cost) .. ")")
-					proceed = false
-				else
-					local used = {}
-					for k, n in c.mats do
-						g.materials[k] -= n
-						used[k] = n
-					end
-					Simulation.spend(g, cost, "fabricacion", "Fabricación de " .. order.design.name .. " v" .. order.design.version)
-					order.cur = { mats = used, charged = cost, boost = factor > 1, factor = factor, startedAt = Rules.absMinute(g) }
-					order.unitStarted = true
-					order.unitCost = cost
-					order.unitTotal = c.build
-					order.progress = 0
-				end
+		if n > 0 then
+			local cost = n * lot.unitCost
+			g.money -= cost
+			flow(g, "fabricacion", -cost)
+			lot.costSpent += cost
+			lot.produced += n
+			lot.prodProgress -= n
+			lot.prodState = "produciendo"
+			g.counters.unitsProduced += n
+			local ds = GameState.day(g)
+			ds.produced = (ds.produced or 0) + n
+			if lot.produced >= lot.qty then
+				lot.prodState = "completado"
+				lot.prodProgress = 0
+				Simulation.addXp(g, ctx, 40)
+				Simulation.notify(g, ctx, "ok", "Lote terminado: " .. Util.num(lot.qty) .. " × " .. lot.design.name .. ". La producción se detuvo.", "fabrica")
 			end
-			if proceed then
-				order.status = "en producción"
-				order.reason = ""
-				order.missing = nil
-				order.progress += minutes * speed
-				if order.progress >= order.unitTotal then
-					finishUnit(g, ctx, order)
-				end
+		elseif pending > 0 and lot.prodProgress >= 1 then
+			-- Hay unidades listas para terminar pero no hay dinero: se pausa sin acumular más avance.
+			lot.prodProgress = math.min(lot.prodProgress, 1)
+			if lot.prodState ~= "sin fondos" then
+				lot.prodState = "sin fondos"
+				Simulation.notify(g, ctx, "aviso", "Producción de " .. lot.design.name .. " en pausa: no alcanza el dinero para la próxima unidad (" .. money(lot.unitCost) .. "). Sigue sola cuando entre dinero.", "fabrica")
 			end
+		else
+			lot.prodState = "produciendo"
 		end
 	end
-	-- Las órdenes terminadas salen de la cola (quedan en el historial).
-	local keep = {}
-	for _, o in g.production.orders do
-		if o.done < o.qty then
-			table.insert(keep, o)
+	-- Los demás lotes con producción pendiente esperan una línea libre.
+	for _, lot in g.lots do
+		if not busy[lot.id] and Rules.lotProducing(lot) and lot.prodState ~= "pausado" then
+			lot.prodState = "cola"
 		end
 	end
-	g.production.orders = keep
-	-- Producción automática (requiere «Producción automática»): repite la ÚLTIMA versión guardada
-	-- del último diseño fabricado; si el proyecto se eliminó, repite la copia de la última orden terminada.
-	if g.production.auto and Rules.has(g, "p3") then
-		for line = 1, caps.lines do
-			local busy = false
-			for _, o in g.production.orders do
-				if o.line == line then
-					busy = true
-				end
+end
+
+function Simulation.stepSales(g: any, ctx: any, minutes: number)
+	local markets = {}
+	local realMin = Rules.realMinutes(minutes)
+	local baseline = Rules.eraBaseline(Rules.yearFrac(g))
+	local done = {}
+	for _, lot in g.lots do
+		if lot.saleState == "en venta" then
+			local avail = Rules.lotAvailable(lot)
+			local t = lot.design.type
+			markets[t] = markets[t] or Rules.market(g, t)
+			local rate = Rules.lotSalesRate(g, lot, markets[t])
+			lot.saleAcc += rate * realMin
+			local n = math.min(math.floor(lot.saleAcc), avail)
+			if n > 0 then
+				local revenue = n * lot.price
+				g.money += revenue
+				flow(g, "venta", revenue)
+				lot.sold += n
+				lot.revenue += revenue
+				lot.saleAcc -= n
+				lot.monthSold += n
+				local ds = GameState.day(g)
+				ds.revenue += revenue
+				ds.cogs += n * lot.unitCost
+				ds.units += n
+				ds.margin += n * (lot.price - lot.unitCost)
+				g.counters.unitsSold += n
+				g.counters.revenueTotal = (g.counters.revenueTotal or 0) + revenue
+				g.counters.marginTotal = (g.counters.marginTotal or 0) + n * (lot.price - lot.unitCost)
+				g.stats.month.sold += n
+				g.stats.month.rel += n * (lot.appeal - baseline)
 			end
-			if not busy and Rules.warehouseUsed(g) < caps.warehouse then
-				local snap = nil
-				for _, d in g.designs do
-					if d.id == g.production.lastDesign and not d.template then
-						snap = Simulation.designSnapshot(g, d)
-					end
-				end
-				snap = snap or g.production.lastSnap
-				if snap and #g.production.orders < Catalog.RULES.maxOrders then
-					table.insert(g.production.orders, Simulation.makeOrder(g, snap, 1, line, "media", true))
-				end
+			if Rules.lotAvailable(lot) == 0 then
+				-- Sin stock no se acumulan ventas «atrasadas».
+				lot.saleAcc = math.min(lot.saleAcc, 1)
+			end
+			if lot.produced >= lot.qty and Rules.lotAvailable(lot) == 0 and Rules.lotPending(lot) == 0 then
+				table.insert(done, lot)
 			end
 		end
 	end
-end
-
--- Concesionario --------------------------------------------------------------------
-
-Simulation.finalPrice = Rules.finalPrice
-
--- Interés de un cliente por una unidad (regla compartida con el cliente para mostrar la demanda).
-Simulation.interest = Rules.interest
-
-local function showroomUnits(g: any): { any }
-	local out = {}
-	for _, u in g.units do
-		if u.status == "salon" then
-			table.insert(out, u)
+	for _, lot in done do
+		lot.saleState = "agotado"
+		g.counters.lotsSoldOut = (g.counters.lotsSoldOut or 0) + 1
+		local profit = lot.revenue - lot.costSpent
+		local bonus = 0
+		if profit > 0 then
+			bonus = round(Rules.piPerMinute(g) * Catalog.ECON.soldOutPiMinutes)
+			Simulation.addPi(g, bonus)
+			g.reputation = clamp(g.reputation + 0.03, 1, 5)
 		end
+		Simulation.addXp(g, ctx, 120)
+		Simulation.archiveLot(g, lot)
+		Simulation.notify(g, ctx, "ok", "¡Agotado! " .. lot.design.name .. ": " .. Util.num(lot.sold) .. " autos vendidos · beneficio " .. money(profit) .. (bonus > 0 and (" · +" .. bonus .. " PI") or ""), "ventas")
 	end
-	return out
 end
 
-function Simulation.customerRate(g: any, step: number): number
-	local show = Rules.showroomUsed(g)
-	if show == 0 then
-		return 0
+-- Investigación: la generación de la sede llena el banco; el proyecto activo toma del banco.
+function Simulation.stepResearch(g: any, ctx: any, minutes: number)
+	local gain = Rules.piPerMinute(g) * Rules.realMinutes(minutes)
+	local a = g.research.active
+	if not a then
+		Simulation.addPi(g, gain)
+		return
 	end
-	local dif = Catalog.DIFFICULTIES[g.company.difficulty] or Catalog.DIFFICULTIES.normal
-	return 0.025 * step / 10 * (0.6 + g.reputation / 5) * dif.demand * (g.promo and Catalog.RULES.promoBoost or 1)
-		* (Rules.has(g, "mk1") and 1.15 or 1) * (1 + Rules.staffBonus(g, "marketing") * 0.3) * math.min(2, 0.6 + show * 0.25)
-end
-
-function Simulation.spawnCustomer(g: any, ctx: any): any
-	local show = showroomUnits(g)
-	if #show == 0 then
-		return nil
+	g.rp += gain
+	local n = Catalog.researchNode(a.id)
+	local draw = math.min(g.rp, n.rp - a.progress)
+	a.progress += draw
+	g.rp -= draw
+	if a.progress >= n.rp - 1e-6 then
+		table.insert(g.research.done, a.id)
+		g.research.active = nil
+		g.counters.researchDone += 1
+		Simulation.addXp(g, ctx, 150)
+		Simulation.notify(g, ctx, "ok", "Investigación completada: " .. n.name .. ". " .. n.gain, "investigacion")
 	end
-	local dif = Catalog.DIFFICULTIES[g.company.difficulty] or Catalog.DIFFICULTIES.normal
-	local target = pick(ctx, show)
-	local wants = target.type
-	if ctx.rng() >= 0.75 then
-		wants = pick(ctx, Util.keys(Catalog.TYPES))
-	end
-	local fp = Rules.finalPrice(target)
-	local budget = round(fp * (0.82 + ctx.rng() * 0.33) / 100) * 100
-	local c = {
-		id = GameState.uid(g, "k"),
-		name = pick(ctx, Catalog.CUSTOMER_NAMES),
-		budget = budget,
-		wants = wants,
-		pref = pick(ctx, Catalog.PREFS),
-		unitId = target.id,
-		patience = round((180 + ctx.rng() * 240) * dif.patience * (Rules.has(g, "l3") and 1.25 or 1)),
-		waited = 0,
-		state = "mirando",
-		offer = nil,
-		rounds = 0,
-		interest = 0,
-		rev = 0, -- cambia cada vez que cambia la negociación (invalida probabilidades mostradas)
-	}
-	c.interest = Simulation.interest(g, target, c)
-	table.insert(g.customers, c)
-	Simulation.notify(g, ctx, "info", c.name .. " entró al concesionario y mira el " .. target.name .. ".", "ventas")
-	return c
-end
-
-local function findUnit(g: any, id: any): any
-	for _, u in g.units do
-		if u.id == id then
-			return u
-		end
-	end
-	return nil
-end
-Simulation.findUnit = findUnit
-
-function Simulation.customerTick(g: any, ctx: any, minutes: number)
-	local now = Rules.absMinute(g)
-	for _, c in g.customers do
-		if c.state ~= "se fue" and c.state ~= "compró" then
-			local u = findUnit(g, c.unitId)
-			local active = true
-			if not u or u.status ~= "salon" then
-				-- Si su auto ya no está, mira otro del salón o se va.
-				local alt = showroomUnits(g)[1]
-				if alt then
-					c.unitId = alt.id
-					c.interest = Simulation.interest(g, alt, c)
-					c.offer = nil
-					c.state = "mirando"
-					c.waited = 0
-				else
-					c.state = "se fue"
-					c.leftAt = now
-					active = false
-				end
-				c.rev += 1
-			end
-			if active then
-				c.waited += minutes
-				if c.state == "mirando" and c.waited > 40 then
-					local uu = findUnit(g, c.unitId)
-					local fp = Rules.finalPrice(uu)
-					if c.interest >= 35 then
-						c.state = "oferta"
-						c.offer = math.min(c.budget, round(fp * (0.84 + c.interest / 1000) / 100) * 100)
-						if c.offer >= fp then
-							c.offer = fp
-						end
-						c.rev += 1
-						Simulation.notify(g, ctx, "info", c.name .. " ofrece " .. money(c.offer) .. " por el " .. uu.name .. ".", "ventas")
-					elseif c.waited > c.patience * 0.6 then
-						c.state = "se fue"
-						c.leftAt = now
-						c.rev += 1
-					end
-				end
-				if c.waited >= c.patience and c.state ~= "se fue" then
-					c.state = "se fue"
-					c.leftAt = now
-					c.rev += 1
-					Simulation.notify(g, ctx, "aviso", c.name .. " se fue del concesionario sin comprar.", "ventas")
-				end
-			end
-		end
-	end
-	local keep = {}
-	for _, c in g.customers do
-		local old = c.state == "se fue" and now - (c.leftAt or 0) > 600
-		if not old and c.state ~= "compró" then
-			table.insert(keep, c)
-		end
-	end
-	g.customers = keep
-end
-
--- Monto de contraoferta: siempre redondeado a $100 (el mismo redondeo que muestra el cliente).
-function Simulation.roundAmount(amount: number): number
-	return round(amount / 100) * 100
-end
-
--- Probabilidad (0–100) de que el cliente acepte una contraoferta. Un monto mayor a su presupuesto
--- nunca se acepta. La misma función responde la consulta del cliente y resuelve la acción.
-function Simulation.counterChance(c: any, amount: number): number
-	if amount > c.budget then
-		return 0
-	end
-	local offer = c.offer or c.budget * 0.85
-	local span = math.max(1, c.budget - offer)
-	local over = clamp((amount - offer) / span, 0, 1)
-	return clamp(round((c.interest / 100) * (95 - over * 70) - c.rounds * 8), 3, 95)
-end
-
--- Venta única y atómica: la unidad pasa a «vendido» y el dinero entra una sola vez.
--- opts = { fee = número | nil, listPrice = precio de lista al momento, offer = oferta del cliente }
-function Simulation.sellUnit(g: any, ctx: any, unitId: string, price: number, channel: string, buyer: string, opts: any?): any
-	local u = findUnit(g, unitId)
-	if not u then
-		return { ok = false, msg = "La unidad no existe." }
-	end
-	if u.status == "vendido" then
-		return { ok = false, msg = "Esta unidad ya fue vendida." }
-	end
-	price = round(price)
-	if not (price > 0) then
-		return { ok = false, msg = "Precio inválido." }
-	end
-	local fee = opts and opts.fee or 0
-	u.status = "vendido"
-	u.soldDay = g.time.day
-	u.soldPrice = price
-	Simulation.earn(g, price, "venta", "Venta de " .. u.name .. " (" .. u.serial .. ")")
-	if fee > 0 then
-		Simulation.spend(g, math.min(fee, g.money), "comision", "Comisión del mercado por " .. u.serial)
-	end
-	local margin = price - u.cost
-	local sale = {
-		id = GameState.uid(g, "s"),
-		day = g.time.day,
-		at = Util.clock(g.time.minute),
-		unitId = u.id,
-		serial = u.serial,
-		designId = u.designId,
-		designVersion = u.designVersion,
-		name = u.name,
-		type = u.type,
-		listPrice = opts and opts.listPrice or u.price,
-		finalListPrice = Rules.finalPrice(u),
-		offer = opts and opts.offer or nil,
-		price = price,
-		cost = u.cost,
-		fee = fee,
-		margin = margin,
-		channel = channel,
-		buyer = buyer,
-	}
-	table.insert(g.sales, sale)
-	local ds = GameState.day(g)
-	ds.revenue += price
-	ds.cogs += u.cost
-	ds.units += 1
-	ds.fees += fee
-	ds.margin += margin
-	g.counters.unitsSold += 1
-	g.counters.revenueTotal = (g.counters.revenueTotal or 0) + price
-	g.counters.marginTotal = (g.counters.marginTotal or 0) + margin
-	g.reputation = clamp(g.reputation + (u.quality - 55) / 600 + (Rules.has(g, "q2") and 0.02 or 0.008) - (margin < 0 and 0.01 or 0), 1, 5)
-	Simulation.addXp(g, ctx, 80)
-	for _, c in g.customers do
-		if c.unitId == u.id and c.state ~= "compró" then
-			c.unitId = nil
-			c.rev += 1
-		end
-	end
-	for _, l in g.market.mine do
-		if l.unitId == u.id and l.status == "activa" then
-			l.status = "vendida"
-		end
-	end
-	GameState.trim(g)
-	return { ok = true, msg = "Venta realizada: " .. u.name .. " por " .. money(price), saleId = sale.id }
+	g.rp = math.min(g.rp, Rules.piCap(g))
 end
 
 -- Personal --------------------------------------------------------------------------
@@ -562,30 +301,30 @@ end
 function Simulation.makeCandidates(g: any, ctx: any, n: number): { any }
 	local out = {}
 	for _ = 1, n do
-		local lvl = 1 + math.floor(ctx.rng() * math.min(6, 2 + g.level))
+		local lvl = 1 + math.floor(ctx.rng() * math.min(6, 1 + g.sede))
 		table.insert(out, {
 			id = GameState.uid(g, "c"),
 			name = pick(ctx, Catalog.FIRST) .. " " .. pick(ctx, Catalog.LAST),
 			role = pick(ctx, Catalog.ROLES),
 			level = lvl,
 			skill = clamp(40 + lvl * 7 + math.floor(ctx.rng() * 12), 30, 98),
-			salary = 600 + lvl * 280,
+			salary = 800 + lvl * 400,
 			fee = 3000 + lvl * 2500,
 		})
 	end
 	return out
 end
 
--- Cambio de día ---------------------------------------------------------------------
+-- Cierre de mes -------------------------------------------------------------------------
 
-function Simulation.dayRollover(g: any, ctx: any)
-	-- Los movimientos de este bloque pertenecen al día que empieza.
+function Simulation.monthRollover(g: any, ctx: any)
+	-- Los movimientos de este bloque pertenecen al mes que empieza.
 	local sal = Rules.salaries(g)
 	if sal > 0 then
 		local pay = math.min(sal, g.money)
 		if pay > 0 then
 			g.money -= pay
-			Simulation.ledger(g, "salarios", -pay, "Salarios del día")
+			Simulation.ledger(g, "salarios", -pay, "Salarios del mes")
 		end
 		if pay < sal then
 			g.reputation = clamp(g.reputation - 0.05, 1, 5)
@@ -593,18 +332,46 @@ function Simulation.dayRollover(g: any, ctx: any)
 		end
 	end
 	if g.promo then
-		if not Simulation.spend(g, Catalog.RULES.promoCostPerDay, "promocion", "Promoción del concesionario") then
+		local cost = Rules.sede(g).campaign
+		if not Simulation.spend(g, cost, "promocion", "Campaña publicitaria del mes") then
 			g.promo = false
-			Simulation.notify(g, ctx, "aviso", "La promoción se apagó por falta de fondos.", "ventas")
+			Simulation.notify(g, ctx, "aviso", "La campaña publicitaria se detuvo por falta de fondos.", "ventas")
 		end
 	end
-	g.rp += Rules.rpPerDay(g)
+	-- Reputación: se acerca al nivel que justifica el atractivo de lo que vendiste el mes pasado.
+	local m = g.stats.month
+	if m.sold > 0 then
+		local target = clamp(3 + (m.rel / m.sold) / 8, 1, 5)
+		local step = Catalog.ECON.reputationStep * (1 + (target > g.reputation and Rules.tech(g, "repGain") / 100 or 0))
+		g.reputation = clamp(g.reputation + (target - g.reputation) * step, 1, 5)
+	end
+	-- PI por ventas: +1 cada 50 autos, con tope de medio minuto de generación por mes.
+	local salesPi = math.min(m.sold / Catalog.ECON.salesPiPer, Rules.piPerMinute(g) * Catalog.ECON.salesPiCapMinutes)
+	if salesPi > 0 then
+		Simulation.addPi(g, salesPi)
+	end
+	g.stats.month = { sold = 0, rel = 0, salesPi = salesPi }
+	for _, lot in g.lots do
+		lot.lastMonthSold = lot.monthSold
+		lot.monthSold = 0
+	end
 	if #g.candidates < 3 then
 		for _, c in Simulation.makeCandidates(g, ctx, 2) do
 			table.insert(g.candidates, c)
 		end
 	end
-	market().refresh(g, ctx)
+	if g.time.day % 12 == 0 then
+		local y = Rules.year(g)
+		local news = {}
+		for _, key in Catalog.RESEARCH_ORDER do
+			for _, n in Catalog.RESEARCH[key].nodes do
+				if n.year == y then
+					table.insert(news, n.name)
+				end
+			end
+		end
+		Simulation.notify(g, ctx, "info", "Comienza " .. y .. "." .. (#news > 0 and (" Nuevas tecnologías para investigar: " .. table.concat(news, ", ") .. ".") or ""), #news > 0 and "investigacion" or nil)
+	end
 end
 
 -- Reloj -------------------------------------------------------------------------------
@@ -618,44 +385,12 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		if g.time.minute >= Catalog.RULES.dayMinutes then
 			g.time.minute -= Catalog.RULES.dayMinutes
 			g.time.day += 1
-			Simulation.dayRollover(g, ctx)
+			Simulation.monthRollover(g, ctx)
 		end
 		Simulation.stepProduction(g, ctx, step)
-		local waiting = 0
-		for _, c in g.customers do
-			if c.state ~= "se fue" then
-				waiting += 1
-			end
-		end
-		if waiting < Catalog.RULES.maxCustomers and ctx.rng() < Simulation.customerRate(g, step) then
-			Simulation.spawnCustomer(g, ctx)
-		end
-		Simulation.customerTick(g, ctx, step)
-		local ra = g.research.active
-		if ra then
-			ra.progress += step
-			local n = Catalog.researchNode(ra.id)
-			if ra.progress >= n.minutes then
-				table.insert(g.research.done, ra.id)
-				g.research.active = nil
-				g.counters.researchDone += 1
-				Simulation.addXp(g, ctx, 150)
-				Simulation.notify(g, ctx, "ok", "Investigación completada: " .. n.name .. ". " .. n.gain, "investigacion")
-			end
-		end
-		for _, e in g.employees do
-			if e.status == "descanso" then
-				e.energy = math.min(100, e.energy + step * 0.25)
-				if e.energy >= 100 then
-					e.status = "activo"
-					Simulation.notify(g, ctx, "info", e.name .. " volvió del descanso.", "personal")
-				end
-			elseif e.assign then
-				e.energy = math.max(0, e.energy - step * 0.02)
-			end
-		end
+		Simulation.stepSales(g, ctx, step)
+		Simulation.stepResearch(g, ctx, step)
 	end
-	market().tick(g, ctx)
 end
 
 return Simulation

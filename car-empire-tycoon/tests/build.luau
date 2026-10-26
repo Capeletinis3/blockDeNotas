@@ -7,7 +7,7 @@ local fs = require("@lune/fs")
 
 local Build = {}
 
-local SERVER_PURE = { "GameState", "Simulation", "Actions", "Market", "DataService", "Sessions", "Demo" }
+local SERVER_PURE = { "GameState", "Simulation", "Actions", "DataService", "Sessions", "Demo" }
 
 local MOCK_HEADER = 'local __M = require("../../mock")\n'
 	.. "local game, workspace, Instance, Enum, Color3, UDim, UDim2, Vector2, Vector3, CFrame, Font, Random, NumberSequence, NumberSequenceKeypoint, ColorSequence, ColorSequenceKeypoint, NumberRange, TweenInfo, typeof, warn, Rect, PhysicalProperties = "

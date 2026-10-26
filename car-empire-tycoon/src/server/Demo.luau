@@ -1,20 +1,18 @@
 --!strict
 --[[
-	Partidas de demostración (makeDemo de la V3): «tutorial», «operacion» (empresa en funcionamiento)
-	y «avanzada» (fábrica avanzada). Se juegan en memoria: nunca se guardan ni tocan las ranuras.
-	Módulo puro (sin servicios de Roblox).
+	Partidas de demostración: «tutorial» (empresa recién fundada en 1970), «operacion» (empresa en
+	funcionamiento en 1974) y «avanzada» (corporación en 1992). Se juegan en memoria: nunca se guardan ni
+	tocan las ranuras. Los lotes y las estadísticas de los meses anteriores son coherentes entre sí.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
-local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
 local DesignCalc = require(Shared.DesignCalc)
 
 local GameState = require(script.Parent.GameState)
 local Simulation = require(script.Parent.Simulation)
-local Market = require(script.Parent.Market)
 
 local Demo = {}
 
@@ -28,144 +26,151 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	end
 	local g = GameState.newGame({ name = kind == "tutorial" and "Demo Garaje" or "Vortex Motors", color = "#7667FF", logo = "pico", difficulty = "normal", now = now })
 	g.demo = kind
+	g.candidates = Simulation.makeCandidates(g, ctx, 5)
 	if kind == "tutorial" then
-		g.money = 50000
-		g.candidates = Simulation.makeCandidates(g, ctx, 5)
-		Market.refresh(g, ctx)
 		return g
 	end
 	local avanz = kind == "avanzada"
-	g.sede = avanz and 3 or 2
+	g.time.day = avanz and (22 * 12 + 3) or (4 * 12 + 2)
+	g.sede = avanz and 4 or 2
 	g.counters.sedeLevel = g.sede
-	g.level = avanz and 9 or 4
-	g.reputation = avanz and 4.6 or 3.9
-	g.money = avanz and 2400000 or 185000
-	g.gems = avanz and 260 or 80
-	g.rp = avanz and 900 or 120
-	g.research.done = avanz and { "m1", "m2", "m3", "e1", "e2", "mt1", "mt2", "p1", "p3", "p2", "mk1", "mk2", "q1", "q3", "l1", "a1" } or { "m1", "e1", "p1", "mk1" }
+	g.level = avanz and 12 or 4
+	g.reputation = avanz and 4.2 or 3.4
+	g.money = avanz and 12500000 or 240000
+	g.research.done = avanz
+			and { "mo1", "mo2", "mo3", "mo4", "mo5", "ca1", "ca2", "ca3", "ca4", "tr1", "tr2", "tr3", "se1", "se2", "se3", "se4", "co1", "co2", "co3", "co4", "pr1", "pr2", "pr3", "pr4", "el1", "el2", "ma1", "ma2", "ma3", "mk1", "mk2", "mk3" }
+		or { "mo1", "ca1", "se1", "pr1", "pr2", "mk1", "co1" }
 	g.counters.researchDone = #g.research.done
-	g.materials = avanz and { acero = 900, aluminio = 500, pintura = 260, electronica = 300, baterias = 220, cuero = 120 }
-		or { acero = 240, aluminio = 120, pintura = 60, electronica = 60, baterias = 40, cuero = 20 }
-	g.time.day = avanz and 64 or 21
-	for _, t in { "t1", "t2", "t3", "t4", "t5" } do
+	g.rp = avanz and 300 or 12
+	for _, s in g.stations do
+		s.level = avanz and 4 or 2
+	end
+	g.counters.stationUpgrades = avanz and 18 or 6
+	for _, t in { "t1", "t2", "t3", "t4", "t5", "t6", "s1" } do
 		g.claimed[t] = true
 	end
+	if avanz then
+		for _, t in { "s2", "s3", "s4", "s5", "s6" } do
+			g.claimed[t] = true
+		end
+	end
+
 	local function mk(baseId: string, name: string, paint: string, extra: any?): any
 		local d = DesignCalc.newDraft(g, baseId)
 		d.id = GameState.uid(g, "d")
 		d.name = name
 		d.version = 1
 		d.paint.primary = paint
+		d.modelYear = Rules.year(g) - 1
 		if extra then
 			for k, v in extra do
 				d[k] = v
 			end
 		end
+		d.generation = DesignCalc.generationLabel(d.modelYear, d.gen)
 		for _, it in DesignCalc.devItems(g, d) do
 			if not Util.contains(g.devPaid, it.key) then
 				table.insert(g.devPaid, it.key)
 			end
 		end
+		table.insert(g.designs, d)
 		return d
 	end
-	local ds = { mk("aurora", "Aurora GT", "#4F5BD5", { spoiler = true }), mk("brisa", "Brisa Sedán", "#E8ECF2"), mk("titan", "Titán SUV", "#2E7D5B") }
+	local ds
 	if avanz then
-		table.insert(ds, mk("rayo", "Rayo E", "#42B8E5"))
-		table.insert(ds, mk("vento", "Halcón Vento SS", "#F7C95C", { spoiler = true }))
-		ds[5].parts.motor = "v8"
+		ds = {
+			mk("brisa", "Brisa Sedán", "#E8ECF2", { objective = "Familiar", parts = { motor = "v6", turbo = "none", transmision = "auto4", traccion = "fwd", frenos = "abs", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } }),
+			mk("titan", "Titán SUV", "#2E7D5B", { objective = "Familiar" }),
+			mk("aurora", "Aurora GT", "#4F5BD5", { objective = "Deportivo", spoiler = true }),
+			mk("vento", "Halcón Vento SS", "#F7C95C", { objective = "Competición", spoiler = true }),
+		}
+	else
+		ds = {
+			mk("brisa", "Brisa Familiar", "#E8ECF2", { objective = "Familiar" }),
+			mk("pixel", "Pixel Ciudad", "#4F5BD5", { objective = "Económico" }),
+			mk("toro", "Toro Trabajo", "#8D6E4F", { objective = "Todoterreno" }),
+		}
 	end
-	g.designs = ds
-	local staff = avanz and 14 or 4
+	g.counters.designsSaved = #ds
+
+	-- Lotes: { diseño, encargadas, fabricadas, vendidas, estado de producción }
+	local function lot(d: any, qty: number, produced: number, sold: number, prodState: string, priceK: number?): any
+		local snap = Simulation.designSnapshot(g, d)
+		local l = Simulation.makeLot(g, snap, qty, round(snap.calc.price * (priceK or 1) / 10) * 10)
+		l.produced, l.sold = produced, sold
+		l.costSpent = produced * l.unitCost
+		l.revenue = sold * l.price
+		l.prodState = prodState
+		l.createdDay = g.time.day - 6
+		return l
+	end
+	local scale = avanz and 40 or 1
+	g.lots = {
+		lot(ds[1], 600 * scale, 420 * scale, 300 * scale, "produciendo"),
+		lot(ds[2], 300 * scale, 300 * scale, 180 * scale, "completado"),
+		lot(ds[3], 1000 * scale, 0, 0, "cola", 0.95),
+	}
+	if avanz then
+		table.insert(g.lots, lot(ds[4], 2500, 900, 640, "produciendo", 1.05))
+	end
+	local hist = lot(ds[1], 250 * scale, 250 * scale, 250 * scale, "completado")
+	hist.saleState = "agotado"
+	hist.endDay = g.time.day - 10
+	local retired = lot(ds[2], 200 * scale, 180 * scale, 160 * scale, "cancelado", 1.25)
+	retired.discarded = 20 * scale
+	retired.qty = retired.produced
+	retired.saleState = "retirado"
+	retired.lossDiscarded = retired.discarded * retired.unitCost
+	retired.endDay = g.time.day - 3
+	g.lotHistory = { retired, hist }
+	g.counters.lotsLaunched = #g.lots + 2
+	g.counters.lotsSoldOut = 1
+	g.counters.lotsRetired = 1
+
+	-- Personal
+	local staff = avanz and 12 or 4
 	local roles = { "Mecánico", "Ingeniero", "Vendedor", "Diseñador", "Inspector", "Marketing" }
-	local assigns = { "chasis", "motor", "ventas", "interior", "calidad", "marketing", "pintura", "laboratorio", "entrega" }
-	for i = 0, staff - 1 do
+	local assigns = { "chasis", "motor", "ventas", "laboratorio", "calidad", "marketing", "pintura", "interior", "entrega" }
+	for i = 1, staff do
+		local lvl = 2 + (i % 4)
 		table.insert(g.employees, {
 			id = GameState.uid(g, "e"),
-			name = Catalog.FIRST[i % #Catalog.FIRST + 1] .. " " .. Catalog.LAST[i % #Catalog.LAST + 1],
-			role = roles[i % #roles + 1],
-			level = 3 + i % 4,
-			skill = 60 + (i * 7) % 35,
-			salary = 1200 + (i % 4) * 300,
-			energy = 70 + (i * 13) % 30,
-			status = "activo",
-			assign = assigns[i % #assigns + 1],
+			name = Simulation.pick(ctx, { "Sofía Arce", "Mateo Ruiz", "Lara Sosa", "Julián Paz", "Carla Vega", "Ramiro Gil", "Elena Mora", "Diego Núñez" }),
+			role = roles[(i - 1) % #roles + 1],
+			level = lvl,
+			skill = 50 + lvl * 7,
+			salary = 800 + lvl * 400,
+			assign = assigns[(i - 1) % #assigns + 1],
 		})
 	end
 	g.counters.hires = staff
-	local letters = "VM"
-	-- Historial de ventas de los últimos 30 días (marcadas como demostración).
-	local dayNow = g.time.day
-	local serial = 0
-	local salaries = Rules.salaries(g)
-	for d = dayNow - 30, dayNow - 1 do
-		local n = avanz and (6 + math.floor(ctx.rng() * 6)) or (1 + math.floor(ctx.rng() * 3))
-		local agg = GameState.day(g, d)
-		for _ = 1, n do
-			local des = Simulation.pick(ctx, ds)
-			local c = DesignCalc.computeDesign(g, des)
-			local price = round(c.price * (0.92 + ctx.rng() * 0.12) / 100) * 100
-			serial += 1
-			local id = GameState.uid(g, "u")
-			local serialText = letters .. "-" .. string.format("%04d", serial)
-			table.insert(g.units, {
-				id = id, serial = serialText, designId = des.id, designVersion = 1, name = des.name, type = Catalog.base(des.baseId).type,
-				spec = Util.deepCopy(des), stats = Util.deepCopy(c), cost = c.unitCost, charged = { money = c.unitCost, mats = Util.deepCopy(c.mats), boost = false, factor = 1 },
-				quality = c.quality, status = "vendido", price = price, discount = 0, createdDay = d - 1, soldDay = d, soldPrice = price,
-			})
-			table.insert(g.sales, {
-				id = GameState.uid(g, "s"), day = d, at = "11:40", unitId = id, serial = serialText, designId = des.id, designVersion = 1, name = des.name,
-				type = Catalog.base(des.baseId).type, listPrice = c.price, finalListPrice = c.price, price = price, cost = c.unitCost, fee = 0,
-				margin = price - c.unitCost, channel = "concesionario", buyer = Simulation.pick(ctx, Catalog.CUSTOMER_NAMES), demo = true,
-			})
-			table.insert(g.ledger, { day = d, min = 600, type = "fabricacion", amount = -c.unitCost, note = "Fabricación (demostración)" })
-			table.insert(g.ledger, { day = d, min = 700, type = "venta", amount = price, note = "Venta (demostración)" })
-			agg.revenue += price
-			agg.cogs += c.unitCost
-			agg.units += 1
-			agg.margin += price - c.unitCost
-			agg.produced += 1
-			agg.flow.fabricacion = (agg.flow.fabricacion or 0) - c.unitCost
-			agg.flow.venta = (agg.flow.venta or 0) + price
-		end
-		table.insert(g.ledger, { day = d, min = 0, type = "salarios", amount = -salaries, note = "Salarios (demostración)" })
-		agg.flow.salarios = (agg.flow.salarios or 0) - salaries
+
+	-- Meses anteriores: ventas y gastos coherentes con los lotes (demostración).
+	local sold, produced, revenue, margin = 0, 0, 0, 0
+	for d = g.time.day - 23, g.time.day do
+		local ds2 = GameState.day(g, d)
+		local units = round((avanz and 900 or 22) * (0.75 + ctx.rng() * 0.5))
+		local avg = g.lots[1].price
+		local cost = g.lots[1].unitCost
+		ds2.units = units
+		ds2.revenue = units * avg
+		ds2.cogs = units * cost
+		ds2.margin = units * (avg - cost)
+		ds2.produced = round(units * 1.1)
+		ds2.flow.venta = ds2.revenue
+		ds2.flow.fabricacion = -ds2.produced * cost
+		ds2.flow.salarios = -Rules.salaries(g)
+		sold += units
+		produced += ds2.produced
+		revenue += ds2.revenue
+		margin += ds2.margin
 	end
-	g.counters.unitsSold = #g.sales
-	g.counters.unitsProduced = #g.sales
-	g.counters.designsSaved = #ds
-	g.counters.serial = serial
-	-- Unidades actuales: las primeras van al salón, el resto al almacén.
-	local caps = Rules.caps(g)
-	for i = 0, (avanz and 10 or 4) - 1 do
-		local des = ds[i % #ds + 1]
-		local c = DesignCalc.computeDesign(g, des)
-		serial += 1
-		g.counters.serial = serial
-		table.insert(g.units, {
-			id = GameState.uid(g, "u"), serial = letters .. "-" .. string.format("%04d", serial), designId = des.id, designVersion = 1, name = des.name,
-			type = Catalog.base(des.baseId).type, spec = Util.deepCopy(des), stats = Util.deepCopy(c), cost = c.unitCost,
-			charged = { money = c.unitCost, mats = Util.deepCopy(c.mats), boost = false, factor = 1 }, quality = c.quality,
-			status = i < caps.showroom and "salon" or "almacen", price = c.price, discount = 0, createdDay = dayNow - 1,
-		})
-	end
-	local function order(d: any, qty: number, line: number, prio: string)
-		local o = Simulation.makeOrder(g, Simulation.designSnapshot(g, d), qty, line, prio)
-		table.insert(g.production.orders, o)
-	end
-	order(ds[1], avanz and 6 or 2, 1, "alta")
-	order(ds[2], 3, 1, "media")
-	if avanz then
-		order(ds[4], 4, 2, "alta")
-		g.production.auto = true
-	end
-	Simulation.sortOrders(g)
-	g.production.lastDesign = ds[1].id
-	g.candidates = Simulation.makeCandidates(g, ctx, 5)
-	GameState.trim(g)
-	Market.refresh(g, ctx)
-	for _ = 1, avanz and 4 or 2 do
-		Simulation.spawnCustomer(g, ctx)
-	end
+	g.counters.unitsSold = sold + (avanz and 15000 or 0)
+	g.counters.unitsProduced = produced + (avanz and 16000 or 0)
+	g.counters.revenueTotal = revenue
+	g.counters.marginTotal = margin
+	table.insert(g.ledger, { day = g.time.day - 2, min = 0, type = "desarrollo", amount = -16000, note = "Licencia del modelo Brisa Sedán (demostración)" })
+	table.insert(g.ledger, { day = g.time.day - 1, min = 0, type = "investigacion", amount = -9600, note = "Investigación: Control de calidad estadístico (demostración)" })
 	return g
 end
 

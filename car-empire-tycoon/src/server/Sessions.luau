@@ -27,7 +27,6 @@ local Util = require(Shared.Util)
 local GameState = require(script.Parent.GameState)
 local Simulation = require(script.Parent.Simulation)
 local Actions = require(script.Parent.Actions)
-local Market = require(script.Parent.Market)
 local DataService = require(script.Parent.DataService)
 local Demo = require(script.Parent.Demo)
 
@@ -243,7 +242,6 @@ function Sessions:activate(s: any, key: string, demoGame: any?)
 		s.profile.active = key
 		s.game = s.profile.slots[key]
 	end
-	Market.refresh(s.game, s.ctx)
 	if #s.game.candidates == 0 then
 		s.game.candidates = Simulation.makeCandidates(s.game, s.ctx, 5)
 	end
@@ -598,13 +596,8 @@ function Sessions:request(player: any, action: any, payload: any): any
 		self.deps.log("Error en la acción " .. action .. ": " .. tostring(result))
 		return { ok = false, msg = "Error interno del servidor. No se aplicó la acción." }
 	end
-	if result.debug and self.deps.debug then
-		self.deps.log(string.format("[diagnóstico] %s: probabilidad %s, tirada %s", action, tostring(result.debug.chance), tostring(result.debug.roll)))
-	end
-	-- Los datos de la tirada nunca viajan al cliente.
-	result.debug = nil
 	if Actions.economic[action] and requestId then
-		local stored = { ok = result.ok, msg = result.msg, sold = result.sold, left = result.left }
+		local stored = { ok = result.ok, msg = result.msg, lotId = result.lotId, designId = result.designId }
 		s.processed[requestId] = stored
 		if result.ok then
 			table.insert(s.profile.processed, requestId)
@@ -625,8 +618,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	end
 	return {
 		ok = result.ok, msg = result.msg, quiet = result.quiet, duplicate = result.duplicate,
-		designId = result.designId, version = result.version, orderId = result.orderId, saleId = result.saleId,
-		sold = result.sold, left = result.left, chance = result.chance, amount = result.amount, rev = result.rev, offer = result.offer,
+		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid,
 	}
 end
 
