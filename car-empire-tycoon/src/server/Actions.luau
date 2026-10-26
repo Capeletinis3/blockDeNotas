@@ -222,7 +222,7 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 		return fail("Ya tenés otro diseño llamado «" .. d.name .. "». Elegí un nombre distinto.")
 	end
 
-	local items = DesignCalc.devItems(g, d)
+	local items = DesignCalc.devItems(g, d, DesignCalc.engineeringKind(source, d))
 	local cash = 0
 	for _, it in items do
 		if not it.paid and not it.stock then
@@ -245,9 +245,11 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 					end
 				end
 			else
-				Simulation.spend(g, it.cost, "desarrollo", it.label)
+				Simulation.spend(g, it.cost, "desarrollo", it.label .. (it.engineering and (": " .. d.name) or ""))
 			end
-			table.insert(g.devPaid, it.key)
+			if it.key then
+				table.insert(g.devPaid, it.key)
+			end
 		end
 	end
 
@@ -294,6 +296,12 @@ function Actions.dupDesign(g: any, _ctx: any, payload: any): any
 		name = Util.truncateChars(d.name, 16) .. " copia " .. n
 		n += 1
 	end
+	-- Un duplicado es un modelo nuevo (año actual, 1.ª generación): paga la ingeniería como cualquier modelo
+	-- nuevo; la licencia y los prototipos ya estaban pagados.
+	local eng = d.template and 0 or DesignCalc.engineeringCost(g, d, "nuevo")
+	if eng > 0 and not Simulation.spend(g, eng, "desarrollo", "Ingeniería del modelo: " .. name) then
+		return fail("Fondos insuficientes: la ingeniería del modelo nuevo cuesta " .. money(eng) .. ".")
+	end
 	local copy = Util.deepCopy(d)
 	copy.id = GameState.uid(g, "d")
 	copy.name = name
@@ -304,7 +312,7 @@ function Actions.dupDesign(g: any, _ctx: any, payload: any): any
 	copy.generation = DesignCalc.generationLabel(copy.modelYear, 1)
 	copy.createdDay = g.time.day
 	table.insert(g.designs, copy)
-	return { ok = true, msg = "Duplicado: «" .. name .. "». No se cobra desarrollo (ya estaba pagado).", designId = copy.id }
+	return { ok = true, msg = "Duplicado: «" .. name .. "»" .. (eng > 0 and (" · ingeniería " .. money(eng)) or "") .. ". La licencia y los prototipos ya estaban pagados.", designId = copy.id }
 end
 
 -- Eliminar un proyecto no toca unidades fabricadas ni órdenes: cada una tiene su copia.
@@ -367,6 +375,7 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 		lot.price = p
 	end
 	table.insert(g.lots, lot)
+	Simulation.registerModel(g, lot)
 	g.counters.lotsLaunched = (g.counters.lotsLaunched or 0) + 1
 	Simulation.addXp(g, ctx, 60)
 	local lines = Rules.sede(g).lines
@@ -484,17 +493,40 @@ function Actions.upgradeStation(g: any, ctx: any, payload: any): any
 	return { ok = true, msg = st[2] .. " mejorada a nivel " .. s.level .. ": la fábrica produce " .. Util.num(Rules.lineRate(g), 1) .. " autos/min por línea." }
 end
 
--- Campaña publicitaria (requiere «Publicidad en radio y TV»): +25 % de atractivo, costo mensual según la sede.
-function Actions.toggleCampaign(g: any, _ctx: any, _payload: any): any
-	if not g.promo and Rules.tech(g, "campaign") <= 0 then
-		return fail("Requiere investigar «" .. Catalog.researchNode("mk1").name .. "».")
+--[[ Campaña publicitaria por niveles (Catalog.CAMPAIGNS): cada nivel requiere su investigación. Al activar
+	o subir de nivel se paga el primer mes enseguida (así no se puede activar justo después del cobro mensual
+	y apagarla antes del siguiente); bajar o apagar no devuelve nada. payload = { level = 0..3 } ]]
+function Actions.setCampaign(g: any, _ctx: any, payload: any): any
+	local lvl = arg(payload, "level")
+	if not isInt(lvl, 0, #Catalog.CAMPAIGNS) then
+		return fail("Nivel de campaña inválido.")
 	end
-	local cost = Rules.sede(g).campaign
-	if not g.promo and g.money < cost then
-		return fail("Necesitás al menos " .. money(cost) .. " para el primer mes.")
+	local cur = tonumber(g.promo) or 0
+	if lvl == cur then
+		return { ok = true, quiet = true }
 	end
-	g.promo = not g.promo
-	return { ok = true, msg = g.promo and ("Campaña activada: +" .. round(Catalog.ECON.campaignBoost * 100) .. " % de atractivo para todos tus autos, " .. money(cost) .. " al empezar cada mes.") or "Campaña desactivada." }
+	if lvl == 0 then
+		g.promo = 0
+		return { ok = true, msg = "Campaña publicitaria desactivada." }
+	end
+	local why = Rules.campaignBlock(g, lvl)
+	if why then
+		return fail(why .. ".")
+	end
+	local c = Catalog.CAMPAIGNS[lvl]
+	local cost = Rules.campaignCost(g, lvl)
+	if lvl > cur then
+		if not Simulation.spend(g, cost, "promocion", "Campaña «" .. c.name .. "» (primer mes)") then
+			return fail("Fondos insuficientes: el primer mes cuesta " .. money(cost) .. ".")
+		end
+	end
+	g.promo = lvl
+	return { ok = true, msg = "Campaña «" .. c.name .. "»: +" .. round(c.boost * 100) .. " % de atractivo para todos tus autos, " .. money(cost) .. " por mes." }
+end
+
+-- Compatibilidad: el botón anterior prendía o apagaba la campaña del primer nivel.
+function Actions.toggleCampaign(g: any, ctx: any, _payload: any): any
+	return Actions.setCampaign(g, ctx, { level = ((tonumber(g.promo) or 0) > 0) and 0 or 1 })
 end
 
 -- Investigación ------------------------------------------------------------------------------
@@ -691,7 +723,7 @@ Actions.handlers = {
 	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
 	createLot = Actions.createLot, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
-	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign,
+	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
 	hire = Actions.hire, moreCandidates = Actions.moreCandidates, fire = Actions.fire, assign = Actions.assign,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
@@ -704,7 +736,7 @@ Actions.readOnly = {}
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, setLotPrice = true, closeSale = true,
-	upgradeStation = true, toggleCampaign = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
+	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
 	claimMission = true, claimDaily = true, expandSede = true,
 }
 

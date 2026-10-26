@@ -15,7 +15,7 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 3
+GameState.SCHEMA = 4
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en venta / agotado / retirado.
@@ -51,7 +51,10 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		time = { day = 0, minute = 0, speed = 1 },
 		designs = {},
 		lots = {},
-		lotHistory = {},
+		lotHistory = {}, -- historial reciente (lotes livianos)
+		modelHistory = {}, -- historial permanente: un resumen por modelo y generación
+		launched = {}, -- diseños que ya cobraron la bonificación de lanzamiento exitoso
+		marketShare = {}, -- cuota de mercado por tipo (promedio móvil mensual)
 		employees = {},
 		candidates = {},
 		stations = freshStations(),
@@ -65,10 +68,10 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 			revenueTotal = 0, marginTotal = 0,
 		},
 		-- Agregados por mes y acumuladores del mes en curso (reputación y PI por ventas).
-		stats = { days = {}, month = { sold = 0, rel = 0, salesPi = 0 } },
+		stats = { days = {}, month = { sold = 0, rel = 0, salesPi = 0, bonusPi = 0 } },
 		tutorial = { skipped = false, tips = true },
 		daily = { last = "", streak = 0 },
-		promo = false, -- campaña publicitaria
+		promo = 0, -- nivel de campaña publicitaria (0 = sin campaña; Catalog.CAMPAIGNS)
 		notifications = {},
 	}
 end
@@ -243,7 +246,7 @@ function GameState.validate(g: any): (boolean, string?)
 	end
 	for _, st in Catalog.STATIONS do
 		local s = g.stations[st[1]]
-		if type(s) ~= "table" or not isInt(s.level, 1, 6) then
+		if type(s) ~= "table" or not isInt(s.level, 1, 10) then
 			return fail("La estación «" .. st[2] .. "» está dañada.")
 		end
 	end
@@ -276,9 +279,14 @@ function GameState.validate(g: any): (boolean, string?)
 		if type(sn) ~= "table" or type(sn.name) ~= "string" or not isInt(sn.version, 1) or not Catalog.TYPES[sn.type] then
 			return "El lote " .. l.id .. " no tiene la copia del diseño."
 		end
-		local e = checkSpec(sn.spec, "Lote " .. l.id) or checkCalc(sn.calc, "Lote " .. l.id)
-		if e then
-			return e
+		-- Los lotes activos llevan la copia completa; los del historial reciente, una versión liviana.
+		if active then
+			local e = checkSpec(sn.spec, "Lote " .. l.id) or checkCalc(sn.calc, "Lote " .. l.id)
+			if e then
+				return e
+			end
+		elseif type(sn.spec) ~= "table" or type(sn.spec.paint) ~= "table" then
+			return "El lote " .. l.id .. " del historial está dañado."
 		end
 		if not isInt(l.qty, 0, Catalog.RULES.maxLotQty) or not isInt(l.produced, 0, l.qty) or not isInt(l.sold, 0) or not isInt(l.discarded, 0) then
 			return "El lote " .. l.id .. " tiene cantidades inválidas."
@@ -342,6 +350,25 @@ function GameState.validate(g: any): (boolean, string?)
 	end
 	if type(g.claimed) ~= "table" or type(g.daily) ~= "table" or type(g.tutorial) ~= "table" then
 		return fail("Las misiones están dañadas.")
+	end
+	if not isList(g.modelHistory) or type(g.launched) ~= "table" or type(g.marketShare) ~= "table" then
+		return fail("El historial de modelos está dañado.")
+	end
+	for _, e in g.modelHistory do
+		if type(e) ~= "table" or type(e.key) ~= "string" or type(e.name) ~= "string" or type(e.spec) ~= "table" then
+			return fail("Hay un modelo dañado en el historial.")
+		end
+		for _, k in { "lots", "produced", "sold", "discarded" } do
+			if not isInt(e[k], 0) then
+				return fail("El historial de «" .. e.name .. "» tiene cantidades inválidas.")
+			end
+		end
+		if e.sold + e.discarded > e.produced or not nonNeg(e.revenue) or not nonNeg(e.cost) then
+			return fail("El historial de «" .. e.name .. "» no es coherente.")
+		end
+	end
+	if not isInt(g.promo, 0, #Catalog.CAMPAIGNS) then
+		return fail("La campaña publicitaria está dañada.")
 	end
 	return true, nil
 end
@@ -566,6 +593,64 @@ MIGRATIONS[2] = function(g: any, _now: number)
 	g.schema = 3
 end
 
+--[[ 3 → 4: historial permanente por modelo y generación, historial reciente liviano, categoría de piezas
+	«Seguridad», campañas por nivel y cuota de mercado. No se borra nada: cada lote del historial suma sus
+	números al resumen de su modelo antes de quedar en versión liviana. ]]
+MIGRATIONS[3] = function(g: any, _now: number)
+	local function addSafety(spec: any)
+		if type(spec) == "table" and type(spec.parts) == "table" and spec.parts.seguridad == nil then
+			spec.parts.seguridad = "basica"
+		end
+	end
+	for _, d in g.designs or {} do
+		addSafety(d)
+	end
+	for _, l in g.lots or {} do
+		if type(l) == "table" and type(l.design) == "table" then
+			addSafety(l.design.spec)
+		end
+	end
+	g.modelHistory = type(g.modelHistory) == "table" and g.modelHistory or {}
+	g.launched = type(g.launched) == "table" and g.launched or {}
+	g.marketShare = type(g.marketShare) == "table" and g.marketShare or {}
+	-- Del más viejo al más nuevo, para que el resumen quede con el último nombre del modelo.
+	local hist = type(g.lotHistory) == "table" and g.lotHistory or {}
+	local slim = {}
+	for i = #hist, 1, -1 do
+		local l = hist[i]
+		if type(l) == "table" and type(l.design) == "table" and type(l.design.spec) == "table" then
+			addSafety(l.design.spec)
+			local e = GameState.modelEntry(g, l)
+			e.lots += 1
+			e.produced += l.produced or 0
+			e.sold += l.sold or 0
+			e.discarded += l.discarded or 0
+			e.revenue += l.revenue or 0
+			e.cost += l.costSpent or 0
+			e.bestLotSold = math.max(e.bestLotSold, l.sold or 0)
+			e.bestLotProfit = math.max(e.bestLotProfit, (l.revenue or 0) - (l.costSpent or 0))
+			e.bestMonth = math.max(e.bestMonth, l.lastMonthSold or 0)
+			e.lastDay = math.max(e.lastDay, l.endDay or 0)
+			table.insert(slim, 1, GameState.slimLot(l))
+		end
+	end
+	g.lotHistory = slim
+	for _, l in g.lots or {} do
+		if type(l) == "table" and type(l.design) == "table" and type(l.design.spec) == "table" then
+			GameState.modelEntry(g, l)
+			if (l.sold or 0) >= Catalog.ECON.launchSold then
+				g.launched[l.designId] = true
+			end
+		end
+	end
+	-- Campaña: antes era sí/no; ahora es un nivel (el «sí» pasa a radio y prensa).
+	g.promo = (g.promo == true) and 1 or (tonumber(g.promo) or 0)
+	if type(g.stats) == "table" and type(g.stats.month) == "table" then
+		g.stats.month.bonusPi = g.stats.month.bonusPi or 0
+	end
+	g.schema = 4
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -670,12 +755,73 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	return profile, damaged
 end
 
+-- Historial permanente ------------------------------------------------------------------------
+
+function GameState.modelKey(design: any): string
+	return tostring(design.lineage or design.id) .. "#" .. tostring(design.gen or 1)
+end
+
+-- Configuración compacta de un diseño (lo que se eligió en el editor), para el historial permanente.
+function GameState.compactSpec(spec: any): any
+	return {
+		baseId = spec.baseId, objective = spec.objective, segment = spec.segment, chassis = spec.chassis, quality = spec.quality,
+		parts = Util.deepCopy(spec.parts), paint = { primary = spec.paint.primary, secondary = spec.paint.secondary, finish = spec.paint.finish },
+		wheels = { size = spec.wheels and spec.wheels.size }, generation = spec.generation,
+	}
+end
+
+-- Entrada del historial permanente del modelo y la generación del lote (la crea si no existe).
+function GameState.modelEntry(g: any, lot: any): any
+	local d = lot.design
+	local key = GameState.modelKey(d)
+	for _, e in g.modelHistory do
+		if e.key == key then
+			return e
+		end
+	end
+	local c = d.calc or {}
+	local e = {
+		key = key, lineage = d.lineage or d.id, gen = d.gen or 1, name = d.name, modelYear = d.modelYear, type = d.type,
+		spec = GameState.compactSpec(d.spec),
+		stats = { hp = c.hp, top = c.top, accel = c.accel, consumption = c.consumption, consUnit = c.consUnit, comfort = c.comfort, safety = c.safety, durability = c.durability, quality = c.quality, unitCost = c.unitCost, price = c.price },
+		lots = 0, produced = 0, sold = 0, discarded = 0, revenue = 0, cost = 0, bestLotSold = 0, bestLotProfit = 0, bestMonth = 0,
+		firstDay = lot.createdDay or g.time.day, lastDay = lot.createdDay or g.time.day,
+	}
+	table.insert(g.modelHistory, e)
+	return e
+end
+
+-- Versión liviana de un lote terminado para el historial reciente (sin la copia completa del diseño:
+-- la configuración queda una sola vez en el historial permanente).
+function GameState.slimLot(l: any): any
+	local d = l.design
+	local spec = d.spec or {}
+	local paint = spec.paint or {}
+	local out = table.clone(l)
+	out.design = {
+		id = d.id, version = d.version or 1, name = d.name, brand = d.brand, baseId = d.baseId, type = d.type,
+		gen = d.gen or 1, modelYear = d.modelYear, lineage = d.lineage or d.id,
+		spec = { baseId = spec.baseId, generation = spec.generation, paint = { primary = paint.primary or "#888888", secondary = paint.secondary or "#222222" } },
+	}
+	return out
+end
+
 -- Límites de tamaño para que el registro no crezca sin control (los lotes son agregados: producir 50.000
 -- autos no agrega 50.000 registros).
 function GameState.trim(g: any)
 	local R = Catalog.RULES
 	while #g.ledger > R.maxLedger do
 		table.remove(g.ledger, 1)
+	end
+	while #g.modelHistory > R.maxModelHistory do
+		-- Se descarta el modelo con menos ventas (nunca los importantes).
+		local worst, wi = math.huge, 1
+		for i, e in g.modelHistory do
+			if e.sold < worst then
+				worst, wi = e.sold, i
+			end
+		end
+		table.remove(g.modelHistory, wi)
 	end
 	while #g.lotHistory > R.maxLotHistory do
 		table.remove(g.lotHistory)
@@ -708,6 +854,44 @@ function GameState.view(g: any): any
 		sedeName = Rules.sede(g).name,
 	}
 	return v
+end
+
+-- Datos que cambian cada segundo (dinero, reloj, contadores de lotes, PI…). Se envían solos mientras la
+-- estructura de la partida no cambie (GameState.structKey), en lugar de la partida completa.
+local LOT_LIVE = { "produced", "sold", "discarded", "prodState", "saleState", "prodProgress", "revenue", "costSpent", "monthSold", "lastMonthSold", "bestMonth", "price" }
+function GameState.live(g: any): any
+	local lots = {}
+	for _, l in g.lots do
+		local x = { id = l.id }
+		for _, k in LOT_LIVE do
+			x[k] = l[k]
+		end
+		table.insert(lots, x)
+	end
+	local key = Rules.dayKey(g.time.day)
+	local caps = Rules.caps(g)
+	return {
+		money = g.money, rp = g.rp, xp = g.xp, level = g.level, reputation = g.reputation, bankFull = g.bankFull,
+		time = table.clone(g.time),
+		counters = table.clone(g.counters),
+		month = table.clone(g.stats.month),
+		dayKey = key,
+		day = g.stats.days[key] and Util.deepCopy(g.stats.days[key]) or nil,
+		research = g.research.active and table.clone(g.research.active) or nil,
+		lots = lots,
+		derived = { caps = caps, lineRate = caps.perLine, piPerMinute = Rules.piPerMinute(g), piCap = Rules.piCap(g), year = Rules.year(g), xpNext = Rules.xpForLevel(g.level), sedeName = Rules.sede(g).name },
+	}
+end
+
+-- Firma de la estructura: si cambia, el cliente recibe la partida completa.
+function GameState.structKey(g: any): string
+	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
+		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), g.research.active and g.research.active.id or "",
+		tostring(#g.candidates), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory) }
+	for _, l in g.lots do
+		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
+	end
+	return table.concat(parts, "|")
 end
 
 -- Resumen de una ranura para el menú de inicio.

@@ -331,6 +331,11 @@ local function newEditor(draft: any, sourceId: string?, saved: any?, step: numbe
 	}
 end
 
+-- Qué ingeniería paga guardar el borrador actual (nuevo modelo, nueva versión o solo cambios estéticos).
+local function devKind(e: any, d: any): string
+	return DesignCalc.engineeringKind(e and e.sourceId and e.saved or nil, d)
+end
+
 local function findDesign(id: any): any
 	for _, d in App.g.designs do
 		if d.id == id then
@@ -483,7 +488,7 @@ function Screen.askUnsaved(proceed: () -> (), title: string?)
 	App.openDialog("unsaved", {
 		title = title or "Tenés cambios sin guardar",
 		name = e and e.draft.name or "",
-		pending = e and DesignCalc.devPending(App.g, e.draft) or 0,
+		pending = e and DesignCalc.devPending(App.g, e.draft, devKind(e, e.draft)) or 0,
 		onSave = function(btn: any)
 			save(btn, function()
 				App.closeDialog()
@@ -774,7 +779,7 @@ local function panelHeader(e: any, d: any, title: string): Frame
 end
 
 local function panelFooter(g: any, e: any, d: any, c: any, next: Instance?): Frame
-	local pend = DesignCalc.devPending(g, d)
+	local pend = DesignCalc.devPending(g, d, devKind(e, d))
 	local money = Ui.inline(Util.money(g.money), { size = Ui.S.sm, weight = W.bold })
 	App.live(function(gg: any)
 		money.Text = Util.money(gg.money)
@@ -793,7 +798,7 @@ local function panelFooter(g: any, e: any, d: any, c: any, next: Instance?): Fra
 		Screen.goStep(e.step + 1)
 	end, { kbd = "]", flex = 2, name = "Siguiente" })
 	local foot = Ui.col({
-		Ui.between("Desarrollo pendiente <font size=\"11\">(se paga una vez al guardar)</font>", pend > 0 and Util.money(pend) or "$0", { color = pend > 0 and T.or_ or T.gr }),
+		Ui.between("Desarrollo e ingeniería <font size=\"11\">(se paga al guardar)</font>", pend > 0 and Util.money(pend) or "$0", { color = pend > 0 and T.or_ or T.gr }),
 		Ui.between("Fabricación por unidad <font size=\"11\">(se paga al fabricar)</font>", Util.money(c.unitCost)),
 		Ui.row({ Ui.grow(Ui.text("Dinero disponible", { size = Ui.S.sm, color = T.mut })), money }, 10),
 		pend > g.money and Ui.note("y", "No alcanza el dinero para pagar el desarrollo al guardar. Elegí piezas más simples o conseguí fondos.") or nil,
@@ -1398,8 +1403,8 @@ end
 local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 	local e = ed()
 	local b = Catalog.base(d.baseId)
-	local items = DesignCalc.devItems(g, d)
-	local pend = DesignCalc.devPending(g, d)
+	local items = DesignCalc.devItems(g, d, devKind(e, d))
+	local pend = DesignCalc.devPending(g, d, devKind(e, d))
 	local saved = e.sourceId ~= nil and not e.dirty
 	local margin = c.price - c.unitCost
 	local est = Rules.designSalesEstimate(g, c, d, c.price)
@@ -1424,7 +1429,7 @@ local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 		table.insert(devRows, Ui.line(it.label, it.paid and "Pagado" or (it.stock and "Pieza en inventario" or Util.money(it.cost)), { size = Ui.S.sm, color = (it.paid or it.stock) and T.gr or T.tx }))
 	end
 	table.insert(devRows, Ui.line("<b>Pendiente</b>", Util.money(pend), { border = false, color = pend > 0 and T.or_ or T.gr }))
-	section("Desarrollo (pago único al guardar)", { Ui.card(devRows, { gap = 0, pad = { 4, 12 } }) }, 8).Parent = body
+	section("Desarrollo e ingeniería (se paga al guardar)", { Ui.card(devRows, { gap = 0, pad = { 4, 12 } }) }, 8).Parent = body
 	local statRows = {}
 	for _, s in Catalog.STAT_DEFS do
 		local k = s[1]
@@ -1802,13 +1807,13 @@ function Screen.build(parent: Instance)
 					Screen.setCam("angulo")
 				end, { small = true, icon = "reset", iconSize = 16, name = "RestablecerCamara" }),
 			}, 10, { Pad = { 6, 6, 0, 6 } }))
-			local pend = DesignCalc.devPending(g, d)
+			local pend = DesignCalc.devPending(g, d, devKind(e, d))
 			local toolsCol = Ui.col({
 				Ui.col(cams, 2),
 				glass({
 					Ui.inline("Fabricación por unidad", { size = Ui.S.xs, color = T.mut }),
 					Ui.inline(Util.money(c.unitCost), { size = 17, weight = W.bold }),
-					Ui.text("Desarrollo pendiente (una vez)", { size = Ui.S.xs, color = T.mut }),
+					Ui.text("Desarrollo e ingeniería al guardar", { size = Ui.S.xs, color = T.mut }),
 					Ui.inline(pend > 0 and Util.money(pend) or "Nada pendiente", { size = Ui.S.base, weight = W.bold, color = pend > 0 and T.or_ or T.gr }),
 					Ui.text("Ventas estimadas: " .. Util.num(Rules.designSalesEstimate(g, c, d, c.price).rate, 1) .. " por minuto", { size = Ui.S.xs, color = T.mut }),
 				}, { Name = "CostosEditor", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = GLASS, BackgroundTransparency = 0.1, Corner = 12, Pad = 14, List = { dir = "V", gap = 4 } }),

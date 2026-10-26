@@ -174,4 +174,36 @@ function Util.keys(t: { [any]: any }): { any }
 	return out
 end
 
+-- Aplica sobre la vista completa de la partida (cliente) los datos del segundo a segundo que manda el
+-- servidor (GameState.live). Solo toca campos que existen en la vista: nunca agrega lotes ni diseños.
+function Util.mergeLive(game: any, live: any)
+	for _, k in { "money", "rp", "xp", "level", "reputation", "time", "counters", "derived" } do
+		if live[k] ~= nil then
+			game[k] = live[k]
+		end
+	end
+	game.bankFull = live.bankFull
+	if game.stats then
+		game.stats.month = live.month or game.stats.month
+		if live.dayKey and live.day then
+			game.stats.days[live.dayKey] = live.day
+		end
+	end
+	if game.research then
+		game.research.active = live.research
+	end
+	local byId = {}
+	for _, l in live.lots or {} do
+		byId[l.id] = l
+	end
+	for _, l in game.lots or {} do
+		local x = byId[l.id]
+		if x then
+			for k, v in x do
+				l[k] = v
+			end
+		end
+	end
+end
+
 return Util

@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
+local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local CarModel = require(Shared.CarModel)
 local Rules = require(Shared.Rules)
@@ -154,6 +155,7 @@ function Garage:buildEmptyPlot(i: number)
 	model.Parent = self.root
 	plot.model = model
 	plot.sig = nil
+	plot.sedeLevel, plot.sedeModel = nil, nil
 	self:plotPart(i, "Piso", Vector3.new(PLOT_W, 0.4, PLOT_D), CFrame.new(0, 0.2, 0), Color3.fromHex("#1D2029"))
 	local free = self:plotPart(i, "Libre", Vector3.new(16, 0.2, 6), CFrame.new(0, 0.5, PLOT_D / 2 - 6), Color3.fromHex("#292D38"))
 	label(free, "Garaje libre", UDim2.fromOffset(160, 36), Vector3.new(0, 3, 0), C.mut)
@@ -225,6 +227,7 @@ function Garage:buildPlot(i: number, company: any)
 	model.Parent = self.root
 	plot.model = model
 	plot.sig = nil
+	plot.sedeLevel, plot.sedeModel = nil, nil
 	local brand = Color3.fromHex(company.color)
 
 	self:plotPart(i, "Piso", Vector3.new(PLOT_W, 0.4, PLOT_D), CFrame.new(0, 0.2, 0), C.floor, { Material = Enum.Material.Concrete })
@@ -334,12 +337,40 @@ local function signature(g: any): string
 end
 
 -- Refleja el estado de la partida en el garaje. Reconstruye lo dinámico solo si cambió.
+--[[ Fase 3D futura: cada sede puede tener su edificio en ServerStorage.CarEmpireAssets.Sedes.<asset>
+	(Catalog.SEDES[n].asset), ubicado con su PrimaryPart en el centro de la parcela. Si no existe, la
+	parcela conserva el edificio provisional; la sede cambia igual sus beneficios. Ver docs/FASE-3D.md. ]]
+function Garage:applySedeModel(i: number, sedeLevel: number)
+	local plot = self.plots[i]
+	if plot.sedeLevel == sedeLevel then
+		return
+	end
+	plot.sedeLevel = sedeLevel
+	if plot.sedeModel then
+		plot.sedeModel:Destroy()
+		plot.sedeModel = nil
+	end
+	local def = Catalog.SEDES[sedeLevel]
+	local ok, asset = pcall(function()
+		local folder = game:GetService("ServerStorage"):FindFirstChild("CarEmpireAssets")
+		local sedes = folder and folder:FindFirstChild("Sedes")
+		return sedes and def and def.asset and sedes:FindFirstChild(def.asset)
+	end)
+	if ok and asset and asset:IsA("Model") and plot.model then
+		local m = (asset :: Model):Clone()
+		m:PivotTo(plot.cf)
+		m.Parent = plot.model
+		plot.sedeModel = m
+	end
+end
+
 function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	local i = self.byPlayer[player]
 	if not i then
 		return
 	end
 	local plot = self.plots[i]
+	self:applySedeModel(i, g.sede or 1)
 	if refreshSign then
 		self:refreshSign(i, g.company)
 	end

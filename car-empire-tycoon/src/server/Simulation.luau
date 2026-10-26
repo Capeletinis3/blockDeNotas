@@ -99,9 +99,34 @@ function Simulation.addXp(g: any, ctx: any, n: number)
 	end
 end
 
--- Puntos de investigación al banco (con tope de Catalog.RULES.piBankMinutes minutos de generación).
-function Simulation.addPi(g: any, n: number)
-	g.rp = math.min(Rules.piCap(g), g.rp + n)
+-- Generación de la sede al banco de PI: se detiene al llegar al tope (Catalog.RULES.piBankMinutes) y
+-- avisa una vez; nunca quita PI que ya estaban en el banco.
+function Simulation.addPi(g: any, n: number, ctx: any?)
+	local cap = Rules.piCap(g)
+	if g.rp >= cap then
+		if not g.bankFull then
+			g.bankFull = true
+			Simulation.notify(g, ctx, "aviso", "El banco de investigación está lleno (" .. math.floor(g.rp) .. " PI). Elegí una investigación para no desperdiciar la generación de la sede.", "investigacion")
+		end
+		return
+	end
+	g.bankFull = nil
+	g.rp = math.min(cap, g.rp + n)
+end
+
+--[[ PI por jugar (ventas, lotes agotados con ganancia, lanzamientos exitosos). Comparten un tope por mes
+	(Catalog.ECON.bonusPiCapMinutes de la generación de la sede) para que no se puedan farmear repitiendo
+	acciones baratas. Se suman aunque el banco esté lleno: una recompensa nunca desaparece en silencio.
+	Devuelve los PI otorgados. ]]
+function Simulation.bonusPi(g: any, amount: number): number
+	local m = g.stats.month
+	local cap = Rules.piPerMinute(g) * Catalog.ECON.bonusPiCapMinutes
+	local give = math.max(0, math.min(amount, cap - (m.bonusPi or 0)))
+	if give > 0 then
+		m.bonusPi = (m.bonusPi or 0) + give
+		g.rp += give
+	end
+	return give
 end
 
 -- Lotes ------------------------------------------------------------------------------
@@ -151,7 +176,15 @@ function Simulation.makeLot(g: any, snap: any, qty: number, price: number): any
 	}
 end
 
--- Saca un lote de la lista activa y lo guarda en el historial (más reciente primero).
+-- Historial permanente: entrada del modelo y generación de este lote (se crea al lanzarlo).
+function Simulation.registerModel(g: any, lot: any): any
+	local e = GameState.modelEntry(g, lot)
+	GameState.trim(g)
+	return e
+end
+
+-- Saca un lote de la lista activa: suma sus números al historial permanente y guarda una versión liviana
+-- en el historial reciente (más reciente primero; sin la copia completa del diseño).
 function Simulation.archiveLot(g: any, lot: any)
 	for i, l in g.lots do
 		if l.id == lot.id then
@@ -160,7 +193,21 @@ function Simulation.archiveLot(g: any, lot: any)
 		end
 	end
 	lot.endDay = g.time.day
-	table.insert(g.lotHistory, 1, lot)
+	lot.bestMonth = math.max(lot.bestMonth or 0, lot.monthSold or 0)
+	local e = Simulation.registerModel(g, lot)
+	local profit = lot.revenue - lot.costSpent
+	e.lots += 1
+	e.produced += lot.produced
+	e.sold += lot.sold
+	e.discarded += lot.discarded
+	e.revenue += lot.revenue
+	e.cost += lot.costSpent
+	e.bestLotSold = math.max(e.bestLotSold, lot.sold)
+	e.bestLotProfit = math.max(e.bestLotProfit, profit)
+	e.bestMonth = math.max(e.bestMonth, lot.bestMonth)
+	e.lastDay = g.time.day
+	e.name = lot.design.name
+	table.insert(g.lotHistory, 1, GameState.slimLot(lot))
 	GameState.trim(g)
 end
 
@@ -247,6 +294,12 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 				g.counters.marginTotal = (g.counters.marginTotal or 0) + n * (lot.price - lot.unitCost)
 				g.stats.month.sold += n
 				g.stats.month.rel += n * (lot.appeal - baseline)
+				-- Lanzamiento exitoso: la primera vez que un diseño llega a launchSold ventas (una vez por diseño).
+				if lot.sold >= Catalog.ECON.launchSold and not g.launched[lot.designId] then
+					g.launched[lot.designId] = true
+					local pi = math.floor(Simulation.bonusPi(g, Rules.piPerMinute(g) * Catalog.ECON.launchPiMinutes))
+					Simulation.notify(g, ctx, "ok", "Lanzamiento exitoso: " .. lot.design.name .. " llegó a " .. Catalog.ECON.launchSold .. " ventas." .. (pi > 0 and (" +" .. pi .. " PI") or ""), "ventas")
+				end
 			end
 			if Rules.lotAvailable(lot) == 0 then
 				-- Sin stock no se acumulan ventas «atrasadas».
@@ -262,9 +315,9 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 		g.counters.lotsSoldOut = (g.counters.lotsSoldOut or 0) + 1
 		local profit = lot.revenue - lot.costSpent
 		local bonus = 0
-		if profit > 0 then
-			bonus = round(Rules.piPerMinute(g) * Catalog.ECON.soldOutPiMinutes)
-			Simulation.addPi(g, bonus)
+		-- Lote exitoso: solo cuenta si es de un tamaño razonable (un lote de una unidad no da PI).
+		if profit > 0 and lot.qty >= Catalog.ECON.soldOutMinQty then
+			bonus = math.floor(Simulation.bonusPi(g, Rules.piPerMinute(g) * Catalog.ECON.soldOutPiMinutes))
 			g.reputation = clamp(g.reputation + 0.03, 1, 5)
 		end
 		Simulation.addXp(g, ctx, 120)
@@ -278,9 +331,10 @@ function Simulation.stepResearch(g: any, ctx: any, minutes: number)
 	local gain = Rules.piPerMinute(g) * Rules.realMinutes(minutes)
 	local a = g.research.active
 	if not a then
-		Simulation.addPi(g, gain)
+		Simulation.addPi(g, gain, ctx)
 		return
 	end
+	-- Con un proyecto activo la generación va al proyecto (el banco aporta lo que tenga ahorrado).
 	g.rp += gain
 	local n = Catalog.researchNode(a.id)
 	local draw = math.min(g.rp, n.rp - a.progress)
@@ -293,7 +347,6 @@ function Simulation.stepResearch(g: any, ctx: any, minutes: number)
 		Simulation.addXp(g, ctx, 150)
 		Simulation.notify(g, ctx, "ok", "Investigación completada: " .. n.name .. ". " .. n.gain, "investigacion")
 	end
-	g.rp = math.min(g.rp, Rules.piCap(g))
 end
 
 -- Personal --------------------------------------------------------------------------
@@ -331,10 +384,11 @@ function Simulation.monthRollover(g: any, ctx: any)
 			Simulation.notify(g, ctx, "error", "No alcanzó el dinero para pagar todos los salarios. Bajó la reputación.", "personal")
 		end
 	end
-	if g.promo then
-		local cost = Rules.sede(g).campaign
-		if not Simulation.spend(g, cost, "promocion", "Campaña publicitaria del mes") then
-			g.promo = false
+	local camp = Rules.campaign(g)
+	if camp then
+		local cost = Rules.campaignCost(g, camp.level)
+		if not Simulation.spend(g, cost, "promocion", "Campaña «" .. camp.name .. "» del mes") then
+			g.promo = 0
 			Simulation.notify(g, ctx, "aviso", "La campaña publicitaria se detuvo por falta de fondos.", "ventas")
 		end
 	end
@@ -345,15 +399,23 @@ function Simulation.monthRollover(g: any, ctx: any)
 		local step = Catalog.ECON.reputationStep * (1 + (target > g.reputation and Rules.tech(g, "repGain") / 100 or 0))
 		g.reputation = clamp(g.reputation + (target - g.reputation) * step, 1, 5)
 	end
-	-- PI por ventas: +1 cada 50 autos, con tope de medio minuto de generación por mes.
-	local salesPi = math.min(m.sold / Catalog.ECON.salesPiPer, Rules.piPerMinute(g) * Catalog.ECON.salesPiCapMinutes)
-	if salesPi > 0 then
-		Simulation.addPi(g, salesPi)
-	end
-	g.stats.month = { sold = 0, rel = 0, salesPi = salesPi }
+	-- PI por ventas del mes: +1 cada 50 autos (dentro del tope mensual de bonificaciones).
+	local salesPi = Simulation.bonusPi(g, m.sold / Catalog.ECON.salesPiPer)
+	g.stats.month = { sold = 0, rel = 0, salesPi = salesPi, bonusPi = 0 }
 	for _, lot in g.lots do
+		lot.bestMonth = math.max(lot.bestMonth or 0, lot.monthSold)
 		lot.lastMonthSold = lot.monthSold
 		lot.monthSold = 0
+	end
+	-- Cuota de mercado de tu empresa por tipo (promedio móvil): los rivales la usan para reaccionar.
+	for _, typeId in Catalog.TYPE_ORDER do
+		local mk = Rules.market(g, typeId)
+		local mine = 0
+		for _, w in mk.lots do
+			mine += w
+		end
+		local share = mk.total > 0 and mk.demand > 0 and mine / mk.total or 0
+		g.marketShare[typeId] = (g.marketShare[typeId] or 0) * 0.8 + share * 0.2
 	end
 	if #g.candidates < 3 then
 		for _, c in Simulation.makeCandidates(g, ctx, 2) do
@@ -371,6 +433,34 @@ function Simulation.monthRollover(g: any, ctx: any)
 			end
 		end
 		Simulation.notify(g, ctx, "info", "Comienza " .. y .. "." .. (#news > 0 and (" Nuevas tecnologías para investigar: " .. table.concat(news, ", ") .. ".") or ""), #news > 0 and "investigacion" or nil)
+		-- Competencia: generaciones nuevas de los rivales y bajas de precio para competir con vos.
+		local rivalNews = {}
+		for _, typeId in Catalog.TYPE_ORDER do
+			for _, o in Rules.rivalOffers(typeId, y, g) do
+				if o.launched == y and o.gen > 1 then
+					table.insert(rivalNews, o.rival.name .. " lanzó el " .. o.name)
+				elseif o.cut >= 0.05 then
+					table.insert(rivalNews, o.rival.name .. " bajó " .. round(o.cut * 100) .. " % el precio del " .. o.name)
+				end
+			end
+		end
+		if #rivalNews > 0 then
+			g.rivalNews = { year = y, items = rivalNews }
+			Simulation.notify(g, ctx, "info", "Competencia en " .. y .. ": " .. table.concat(rivalNews, " · ") .. ".", "mercado")
+		end
+		-- Los lanzamientos de diseños que ya no existen no necesitan recordarse.
+		local alive = {}
+		for _, d in g.designs do
+			alive[d.id] = true
+		end
+		for _, l in g.lots do
+			alive[l.designId] = true
+		end
+		for id in g.launched do
+			if not alive[id] then
+				g.launched[id] = nil
+			end
+		end
 	end
 end
 

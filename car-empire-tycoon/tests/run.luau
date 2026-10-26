@@ -219,7 +219,19 @@ test("[P2] Diseñar y guardar un auto: desarrollo una sola vez, año de modelo y
 	-- Mismo modelo otra vez: la licencia ya está pagada.
 	local m1 = g.money
 	local r2 = Actions.saveDesign(g, ctx, { draft = draftFor(g, "pixel", "Pixel Dos") })
-	check(r2.ok and r2.paid == 0 and g.money == m1, "sin volver a pagar el desarrollo")
+	local eng = DesignCalc.engineeringCost(g, g.designs[2] or d, "nuevo")
+	check(r2.ok and r2.paid == eng and g.money == m1 - eng, "la licencia no se vuelve a pagar: solo la ingeniería del modelo nuevo (" .. tostring(r2.paid) .. ")")
+	-- Cambios estéticos no pagan ingeniería; cambiar una pieza paga la de una versión.
+	local v = jsonCopy(g.designs[2])
+	v.paint.primary = "#D6333F"
+	local m2 = g.money
+	local r3 = Actions.saveDesign(g, ctx, { draft = v, sourceId = v.id })
+	check(r3.ok and r3.paid == 0 and g.money == m2, "pintar de nuevo no cuesta ingeniería")
+	v = jsonCopy(g.designs[2])
+	v.parts.motor = "i4e"
+	local r4 = Actions.saveDesign(g, ctx, { draft = v, sourceId = v.id })
+	check(r4.ok and r4.paid == DesignCalc.engineeringCost(g, v, "version"), "cambiar el motor paga la ingeniería de una versión")
+	check(DesignCalc.engineeringCost(g, v, "nuevo") < DesignCalc.engineeringCost({ time = { day = 40 * 12 }, research = { done = {} }, employees = {} }, v, "nuevo"), "la ingeniería cuesta más en épocas modernas")
 	check(not Actions.saveDesign(g, ctx, { draft = draftFor(g, "pixel", "pixel uno") }).ok, "nombre repetido rechazado")
 	-- Saneamiento: el cliente no puede inventar piezas ni bases.
 	local bad = draftFor(g, "pixel")
@@ -452,7 +464,15 @@ test("[P9][P10][P11] Cerrar venta: descarta lo no vendido sin reintegro, cancela
 	eq(lot.qty, produced, "lo pendiente no se fabricó ni se cobró")
 	eq(lot.costSpent, produced * lot.unitCost, "costo = solo lo fabricado")
 	eq(lot.lossDiscarded, avail * lot.unitCost, "pérdida registrada")
-	check(findLot(g, lot.id) == nil and findHist(g, lot.id) == lot, "en el historial, no en venta")
+	local h = findHist(g, lot.id)
+	check(findLot(g, lot.id) == nil and h ~= nil and h.saleState == "retirado" and h.discarded == avail, "en el historial, no en venta")
+	local entry = nil
+	for _, e in g.modelHistory do
+		if e.key == lot.design.lineage .. "#" .. lot.design.gen then
+			entry = e
+		end
+	end
+	check(entry ~= nil and entry.discarded == avail and entry.sold == sold and entry.produced == produced, "el historial permanente suma el lote retirado")
 	-- [P10] nunca vuelve a vender ni a fabricar.
 	local unitsSold, unitsProduced = g.counters.unitsSold, g.counters.unitsProduced
 	runReal(g, ctx, 10, lotInvariants)
@@ -804,7 +824,14 @@ local function makeServer(store: any, jobId: string, clock: any, opts: any?)
 			return text, nil
 		end,
 		push = function(player: any, payload: any)
-			pushed[player] = jsonCopy(payload)
+			if payload.tick then
+				-- Envío liviano del segundo a segundo: se aplica sobre la última partida completa (como el cliente).
+				if pushed[player] and pushed[player].game then
+					Util.mergeLive(pushed[player].game, jsonCopy(payload.live))
+				end
+			else
+				pushed[player] = jsonCopy(payload)
+			end
 		end,
 		notice = function() end,
 		garage = nil,

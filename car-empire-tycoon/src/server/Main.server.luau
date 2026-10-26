@@ -13,6 +13,13 @@ local HttpService = game:GetService("HttpService")
 
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Util = require(Shared.Util)
+-- Modelos 3D definitivos (fase futura): si existen en ReplicatedStorage.CarEmpireAssets.Cars, se usan.
+require(Shared.CarModel).assetResolver = function(baseId: string): Model?
+	local assets = ReplicatedStorage:FindFirstChild("CarEmpireAssets")
+	local cars = assets and assets:FindFirstChild("Cars")
+	local m = cars and cars:FindFirstChild(baseId)
+	return (m and m:IsA("Model")) and m or nil
+end
 
 local GameState = require(script.Parent.GameState)
 local DataService = require(script.Parent.DataService)

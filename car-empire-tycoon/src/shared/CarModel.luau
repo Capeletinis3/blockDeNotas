@@ -92,7 +92,42 @@ end
 	spec: diseño. opts.ghost = semitransparente (unidad en fabricación); opts.brandColor = color del emblema.
 	Devuelve el Model. model:GetAttribute("length"|"height"|"width") da las dimensiones reales para encuadrar.
 ]]
+--[[ Fase 3D futura: CarModel.assetResolver(baseId) puede devolver un Model definitivo para esa base (lo
+	configuran Main.server y Main.client buscando ReplicatedStorage.CarEmpireAssets.Cars.<baseId>; el frente
+	hacia −Z y el pivote a ras del suelo). Las piezas con el atributo «Pintura» = "primaria" o "secundaria"
+	toman los colores del diseño. Sin recursos se usa el modelo provisional. Ver docs/FASE-3D.md. ]]
+CarModel.assetResolver = nil :: ((string) -> Model?)?
+
+function CarModel.fromAssets(spec: any): Model?
+	local resolver = CarModel.assetResolver
+	if not resolver then
+		return nil
+	end
+	local ok, found = pcall(resolver, tostring(spec.baseId))
+	if not ok or not found then
+		return nil
+	end
+	local m = (found :: Model):Clone()
+	local paint = spec.paint or {}
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			local role = d:GetAttribute("Pintura")
+			if role == "primaria" and paint.primary then
+				d.Color = Color3.fromHex(paint.primary)
+			elseif role == "secundaria" and paint.secondary then
+				d.Color = Color3.fromHex(paint.secondary)
+			end
+			d.Anchored = true
+		end
+	end
+	return m
+end
+
 function CarModel.build(spec: any, opts: { ghost: boolean?, brandColor: string? }?): Model
+	local custom = CarModel.fromAssets(spec)
+	if custom then
+		return custom
+	end
 	local base = Catalog.base(spec.baseId) or Catalog.BASES[1]
 	local s = SHAPES[base.type] or SHAPES.sedan
 	local ghost = opts and opts.ghost or false

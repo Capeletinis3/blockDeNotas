@@ -17,15 +17,18 @@ local Catalog = {}
 Catalog.CALENDAR = { startYear = 1970, endYear = 2030, realSecondsPerYear = 660, months = 12 }
 
 Catalog.RULES = {
-	version = 3,
+	version = 4,
 	minutesPerRealSecond = 10, -- a velocidad 1×, 1 s real = 10 min de juego
 	-- Minutos de juego de un mes: 660 s/año × 10 min/s ÷ 12 = 550.
 	dayMinutes = Catalog.CALENDAR.realSecondsPerYear * 10 / Catalog.CALENDAR.months,
-	piBankMinutes = 3, -- PI que se acumulan sin investigación activa: hasta 3 minutos de generación
+	-- Banco de PI: la generación de la sede se acumula hasta este equivalente en minutos aunque no haya
+	-- investigación activa (las bonificaciones y misiones se suman aunque el banco esté lleno).
+	piBankMinutes = 20,
 	maxLotQty = 1000000, -- tope técnico de un lote (la capacidad y el dinero son el límite real)
 	maxActiveLots = 16, -- lotes produciendo o en venta a la vez
-	maxLotHistory = 60, -- lotes agotados o retirados que se conservan con su resumen
-	maxDesigns = 30,
+	maxLotHistory = 40, -- historial reciente: lotes agotados o retirados con su detalle (versión liviana)
+	maxModelHistory = 400, -- historial permanente: un resumen por modelo y generación
+	maxDesigns = 60,
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
 	slots = 3, -- empresas por cuenta
@@ -41,18 +44,36 @@ Catalog.RULES = {
 Catalog.ECON = {
 	unitCostScale = 0.12,
 	priceMarkup = 1.3, -- precio de referencia = costo × 1,3 + prima de calidad y prestaciones
-	priceElasticity = 2.2, -- cuánto cambian las ventas con el precio respecto de la referencia
+	priceElasticity = 2.8, -- cuánto cambian las ventas con el precio respecto de la referencia
 	appealScale = 12, -- puntos de atractivo que multiplican las ventas por e (≈ ×2,7)
 	outsideWeight = 45, -- peso del «resto del mercado» (marcas chicas) en el reparto de la demanda
 	eraBaseline = { [1970] = 50, [2030] = 75 }, -- atractivo medio que el mercado espera cada año
 	priceMin = 0.5, -- precio mínimo = costo × 0,5 (vender a pérdida es posible pero se avisa)
 	priceMax = 3, -- precio máximo = referencia × 3
-	campaignBoost = 0.25, -- campaña publicitaria: +25 % de atractivo
 	reputationStep = 0.08, -- cuánto se acerca la reputación cada mes al nivel que justifican tus ventas
-	salesPiPer = 50, -- +1 PI por cada 50 autos vendidos…
-	salesPiCapMinutes = 0.5, -- …con un tope de medio minuto de la generación de la sede por mes
-	soldOutPiMinutes = 2, -- lote agotado con ganancia: +2 minutos de generación de PI
-	researchMoneyPerPi = 600, -- costo en dinero de una investigación ($ por PI)
+	-- PI por jugar (bonificaciones). Todas comparten un tope mensual para que no se puedan farmear
+	-- repitiendo acciones baratas (por ejemplo, lotes de una unidad).
+	salesPiPer = 50, -- +1 PI por cada 50 autos vendidos en el mes
+	soldOutPiMinutes = 1, -- lote agotado con ganancia (de al menos soldOutMinQty unidades): +1 min de generación
+	soldOutMinQty = 100,
+	launchSold = 100, -- lanzamiento exitoso: el diseño llega a 100 ventas (una vez por diseño): +1 min
+	launchPiMinutes = 1,
+	bonusPiCapMinutes = 0.6, -- tope de todas las bonificaciones: 0,6 min de generación por mes de juego
+	-- Ingeniería de un modelo nuevo o de una generación nueva (crece con la época: desarrollar un auto
+	-- moderno cuesta mucho más). Una versión con cambios mecánicos paga engineeringVersion; los cambios
+	-- estéticos (pintura, llantas, interior, nombre) no pagan ingeniería.
+	engineering = { { 1970, 3000 }, { 1980, 30000 }, { 1990, 300000 }, { 2000, 2000000 }, { 2010, 6000000 }, { 2030, 12000000 } },
+	engineeringVersion = 0.25,
+	-- Costo en dinero de una investigación: $ por PI según la época (los ingresos crecen con los años).
+	researchMoneyPerPi = { { 1970, 600 }, { 1980, 1500 }, { 1990, 4000 }, { 2000, 8000 }, { 2010, 12000 }, { 2030, 16000 } },
+}
+
+-- Campañas publicitarias: cada nivel requiere su investigación (y su época). boost = atractivo extra para
+-- todos los autos en venta; cost = multiplicador del costo mensual base de la sede (SEDES[i].campaign).
+Catalog.CAMPAIGNS = {
+	{ level = 1, name = "Radio y prensa", research = "mk1", boost = 0.15, cost = 1 },
+	{ level = 2, name = "Televisión nacional", research = "mk2", boost = 0.3, cost = 2.5 },
+	{ level = 3, name = "Campaña digital", research = "mk4", boost = 0.45, cost = 5 },
 }
 
 -- Investigación: duración objetivo por nivel de importancia (minutos reales con la sede esperada de la época).
@@ -63,7 +84,7 @@ Catalog.RESEARCH_TIERS = {
 	b = { label = "Gran avance", minutes = 12.5 },
 }
 -- Generación de PI que se espera tener en cada época (para dimensionar los costos, no para dar PI).
-Catalog.EXPECTED_PI = { { 1970, 3 }, { 1972, 8 }, { 1976, 20 }, { 1984, 45 }, { 1996, 90 }, { 2030, 90 } }
+Catalog.EXPECTED_PI = { { 1970, 3 }, { 1972, 8 }, { 1975, 20 }, { 1982, 45 }, { 1994, 90 }, { 2030, 90 } }
 
 -- Las diferencias son solo las que la simulación aplica de verdad: dinero inicial,
 -- paciencia de los clientes y frecuencia con que llegan al concesionario.
@@ -140,35 +161,35 @@ Catalog.BASES = {
 	{ id = "pixel", name = "Pixel C1", brand = "Nordia", type = "compacto", level = 1, year = 1970, research = nil, rarity = "Común",
 		dev = 12000, unit = 7800, weight = 1080, handling = 58, comfort = 60, durability = 80, quality = 55, safety = 40, drag = 0.33, build = 150,
 		tags = { "combustion" }, mats = { acero = 6, aluminio = 2, pintura = 1, electronica = 1 }, pop = 1.2,
-		defaults = { motor = "i4", turbo = "none", transmision = "man4", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } },
+		defaults = { motor = "i4", turbo = "none", transmision = "man4", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
 	{ id = "brisa", name = "Brisa Sedán", brand = "Vortex", type = "sedan", level = 1, year = 1970, research = nil, rarity = "Común",
 		dev = 16000, unit = 10500, weight = 1350, handling = 60, comfort = 72, durability = 82, quality = 60, safety = 45, drag = 0.29, build = 180,
 		tags = { "combustion" }, mats = { acero = 8, aluminio = 3, pintura = 1, electronica = 1 }, pop = 1.1,
-		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } },
+		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
 	{ id = "toro", name = "Toro Pickup", brand = "Kodiak", type = "pickup", level = 1, year = 1970, research = nil, rarity = "Común",
 		dev = 14000, unit = 9800, weight = 1750, handling = 46, comfort = 52, durability = 92, quality = 56, safety = 38, drag = 0.40, build = 230,
 		tags = { "combustion", "offroad" }, mats = { acero = 13, aluminio = 2, pintura = 2, electronica = 1 }, pop = 0.95,
-		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "x4", frenos = "std", suspension = "offroad", neumaticos = "at", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } },
+		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "x4", frenos = "std", suspension = "offroad", neumaticos = "at", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
 	{ id = "duna", name = "Duna Coupé", brand = "Halcón", type = "clasico", level = 1, year = 1970, research = nil, rarity = "Rara",
 		dev = 22000, unit = 12500, weight = 1320, handling = 62, comfort = 64, durability = 72, quality = 64, safety = 40, drag = 0.36, build = 260,
 		tags = { "combustion" }, mats = { acero = 9, aluminio = 2, pintura = 2, electronica = 1, cuero = 2 }, pop = 0.9,
-		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none" } },
+		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
 	{ id = "aurora", name = "Aurora GT", brand = "Vortex", type = "deportivo", level = 1, year = 1975, research = "ca2", rarity = "Rara",
 		dev = 30000, unit = 16500, weight = 1380, handling = 74, comfort = 55, durability = 74, quality = 66, safety = 42, drag = 0.30, build = 240,
 		tags = { "combustion" }, mats = { acero = 7, aluminio = 5, pintura = 1, electronica = 2 }, pop = 1.0,
-		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "sport", suspension = "sport", neumaticos = "sport", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none" } },
+		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "sport", suspension = "sport", neumaticos = "sport", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
 	{ id = "titan", name = "Titán SUV", brand = "Kodiak", type = "suv", level = 1, year = 1983, research = "ca3", rarity = "Común",
 		dev = 26000, unit = 15000, weight = 1850, handling = 52, comfort = 74, durability = 86, quality = 62, safety = 55, drag = 0.36, build = 230,
 		tags = { "combustion", "offroad" }, mats = { acero = 11, aluminio = 3, pintura = 2, electronica = 2 }, pop = 1.05,
-		defaults = { motor = "v6", turbo = "none", transmision = "auto3", traccion = "x4", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } },
+		defaults = { motor = "v6", turbo = "none", transmision = "auto3", traccion = "x4", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
 	{ id = "vento", name = "Halcón Vento SS", brand = "Halcón", type = "superdeportivo", level = 1, year = 1986, research = "ca4", rarity = "Legendaria",
 		dev = 90000, unit = 42000, weight = 1450, handling = 84, comfort = 44, durability = 66, quality = 80, safety = 50, drag = 0.27, build = 360,
 		tags = { "combustion" }, mats = { acero = 5, aluminio = 9, pintura = 2, electronica = 3 }, pop = 0.7,
-		defaults = { motor = "v8", turbo = "none", transmision = "man5", traccion = "rwd", frenos = "sport", suspension = "sport", neumaticos = "sport", bateria = "b12", refrigeracion = "pro", escape = "sport", peso = "none" } },
+		defaults = { motor = "v8", turbo = "none", transmision = "man5", traccion = "rwd", frenos = "sport", suspension = "sport", neumaticos = "sport", bateria = "b12", refrigeracion = "pro", escape = "sport", peso = "none", seguridad = "basica" } },
 	{ id = "rayo", name = "Rayo E", brand = "Kairo", type = "electrico", level = 1, year = 2010, research = "el5", rarity = "Rara",
 		dev = 38000, unit = 19000, weight = 1720, handling = 66, comfort = 76, durability = 84, quality = 70, safety = 70, drag = 0.24, build = 250,
 		tags = { "electrico" }, mats = { acero = 6, aluminio = 5, pintura = 1, electronica = 4, baterias = 8 }, pop = 1.0,
-		defaults = { motor = "em200", turbo = "none", transmision = "single", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "ev60", refrigeracion = "std", escape = "none", peso = "none" } },
+		defaults = { motor = "em200", turbo = "none", transmision = "single", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "ev60", refrigeracion = "std", escape = "none", peso = "none", seguridad = "basica" } },
 }
 
 Catalog.CATS = {
@@ -183,6 +204,7 @@ Catalog.CATS = {
 	{ "refrigeracion", "Refrigeración" },
 	{ "escape", "Escape" },
 	{ "peso", "Peso" },
+	{ "seguridad", "Seguridad" },
 }
 
 --[[ Piezas por categoría
@@ -197,9 +219,14 @@ end
 
 Catalog.PARTS = {
 	-- Motor
+	P("i4e", "motor", "4 cilindros 1.3", "Común", 1970, nil, 0, 1700, "combustion", { hp = 68, kg = -25, eff = 9, dur = 5 }, "El más económico: gasta poco y casi no se rompe."),
 	P("i4", "motor", "4 cilindros 1.6", "Común", 1970, nil, 0, 2200, "combustion", { hp = 95, kg = 0, eff = 4, dur = 4 }, "Económico y confiable."),
+	P("i4v", "motor", "4 cilindros 2.0 16V", "Rara", 1984, "mo4", 7000, 3300, "combustion", { hp = 140, kg = 10, eff = 5, dur = 3, q = 2 }, "Inyección electrónica y cuatro válvulas por cilindro."),
+	P("i3t", "motor", "3 cilindros 1.0 turbo", "Rara", 2012, "mo8", 9000, 3000, "combustion", { hp = 120, kg = -30, eff = 13, dur = 2, q = 2 }, "Pequeño, con inyección directa y turbo integrado."),
 	P("v6", "motor", "V6 2.8", "Rara", 1970, nil, 6000, 4800, "combustion", { hp = 150, kg = 60, eff = -4, q = 2 }, "Más fuerza para sedanes y pickups."),
+	P("v6i", "motor", "V6 3.5 de distribución variable", "Rara", 1993, "mo6", 12000, 6200, "combustion", { hp = 235, kg = 55, eff = -1, q = 4, dur = 2 }, "Potente y eficiente a la vez."),
 	P("v8", "motor", "V8 5.0", "Épica", 1970, "mo2", 18000, 9500, "combustion", { hp = 230, kg = 110, eff = -10, q = 4, dur = -3 }, "Gran cilindrada para deportivos."),
+	P("v8d", "motor", "V8 6.2 de inyección directa", "Épica", 2006, "mo8", 26000, 12500, "combustion", { hp = 430, kg = 120, eff = -6, q = 6 }, "Mucha potencia con un consumo razonable."),
 	P("em200", "motor", "Motor eléctrico 200 kW", "Rara", 2010, "el5", 8000, 6000, "electrico", { hp = 270, kg = 40, eff = 10, dur = 4 }, "Silencioso, par inmediato."),
 	P("em350", "motor", "Motor eléctrico 350 kW", "Épica", 2016, "el6", 20000, 11000, "electrico", { hp = 470, kg = 70, eff = 4, q = 4 }, "Doble motor de alto rendimiento."),
 	-- Sobrealimentación
@@ -254,6 +281,12 @@ Catalog.PARTS = {
 	P("none", "peso", "Sin reducción", "Común", 1970, nil, 0, 0, nil, {}, "Carrocería de serie."),
 	P("lite", "peso", "Paneles de aluminio (−40 kg)", "Común", 1985, "ma3", 4000, 900, nil, { kg = -40, comfort = -1 }, "Capó y puertas de aluminio."),
 	P("carbon", "peso", "Fibra de carbono (−90 kg)", "Épica", 2000, "ma5", 14000, 3800, nil, { kg = -90, q = 3 }, "Techo, capó y paneles de carbono."),
+	-- Seguridad (paquetes: cada uno incluye lo del anterior)
+	P("basica", "seguridad", "Seguridad básica", "Común", 1970, nil, 0, 0, nil, {}, "Cinturones abdominales: lo mínimo de la época."),
+	P("cint3", "seguridad", "Cinturones de tres puntos", "Común", 1970, "se1", 1000, 300, nil, { safety = 8 }, "Cinturones de tres puntos y apoyacabezas."),
+	P("airbag", "seguridad", "Bolsas de aire frontales", "Rara", 1989, "se4", 6000, 1100, nil, { safety = 18, kg = 8 }, "Cinturones y bolsas de aire para conductor y acompañante."),
+	P("airbag6", "seguridad", "Seis bolsas de aire y control de estabilidad", "Rara", 1998, "se5", 9000, 1700, nil, { safety = 24, kg = 12, grip = 2, q = 1 }, "Bolsas frontales y laterales, y control electrónico de estabilidad."),
+	P("adas", "seguridad", "Asistentes de conducción", "Épica", 2014, "se6", 15000, 2600, nil, { safety = 32, kg = 14, grip = 2, q = 3 }, "Frenado autónomo de emergencia, carril y punto ciego."),
 }
 
 -- Nombres de investigaciones (se completan con el árbol al final del módulo; quedan los de versiones viejas).
@@ -335,11 +368,11 @@ Catalog.MATERIALS = {
 --[[ Sedes. La sede define la capacidad de la fábrica (líneas × autos por minuto de cada línea), el alcance
 	comercial (cuántos concesionarios venden tus autos) y la generación de puntos de investigación (PI/min). ]]
 Catalog.SEDES = {
-	{ level = 1, name = "Garaje inicial", lines = 1, perLine = 15, reach = 1, pi = 3, staff = 3, campaign = 4000, cost = 0, req = { sold = 0, rep = 0 } },
-	{ level = 2, name = "Empresa pequeña", lines = 2, perLine = 20, reach = 2.5, pi = 8, staff = 8, campaign = 12000, cost = 300000, req = { sold = 300, rep = 3.0 } },
-	{ level = 3, name = "Sede empresarial", lines = 3, perLine = 35, reach = 6, pi = 20, staff = 16, campaign = 35000, cost = 2500000, req = { sold = 3000, rep = 3.4 } },
-	{ level = 4, name = "Corporación automotriz", lines = 4, perLine = 60, reach = 14, pi = 45, staff = 30, campaign = 90000, cost = 18000000, req = { sold = 25000, rep = 3.9 } },
-	{ level = 5, name = "Imperio automotriz", lines = 5, perLine = 100, reach = 30, pi = 90, staff = 50, campaign = 220000, cost = 100000000, req = { sold = 150000, rep = 4.3 } },
+	{ level = 1, name = "Garaje inicial", asset = "Sede1", lines = 1, perLine = 15, reach = 1, pi = 3, staff = 3, campaign = 4000, cost = 0, req = { sold = 0, rep = 0 } },
+	{ level = 2, name = "Empresa pequeña", asset = "Sede2", lines = 2, perLine = 20, reach = 2.5, pi = 8, staff = 8, campaign = 12000, cost = 300000, req = { sold = 300, rep = 3.0 } },
+	{ level = 3, name = "Sede empresarial", asset = "Sede3", lines = 3, perLine = 35, reach = 6, pi = 20, staff = 16, campaign = 35000, cost = 2500000, req = { sold = 3000, rep = 3.4 } },
+	{ level = 4, name = "Corporación automotriz", asset = "Sede4", lines = 4, perLine = 60, reach = 11, pi = 45, staff = 30, campaign = 100000, cost = 60000000, req = { sold = 20000, rep = 3.9 } },
+	{ level = 5, name = "Imperio automotriz", asset = "Sede5", lines = 5, perLine = 100, reach = 20, pi = 90, staff = 50, campaign = 300000, cost = 400000000, req = { sold = 100000, rep = 4.3 } },
 }
 
 -- Estaciones de la fábrica (mejoras): cada nivel suma velocidad de producción. { id, nombre, rol ideal }
@@ -398,12 +431,12 @@ Catalog.RESEARCH = {
 		{ id = "tr5", name = "Automática de 8 velocidades", year = 2008, tier = "n", req = { "tr3" }, fx = {}, gain = "Habilita la automática de 8 velocidades" },
 	} },
 	seguridad = { label = "Seguridad", nodes = {
-		{ id = "se1", name = "Cinturones de tres puntos", year = 1970, tier = "s", req = {}, fx = { safety = 8 }, gain = "+8 de seguridad en todos los autos" },
+		{ id = "se1", name = "Cinturones de tres puntos", year = 1970, tier = "s", req = {}, fx = {}, gain = "Habilita el paquete «Cinturones de tres puntos» (+8 de seguridad)" },
 		{ id = "se2", name = "Zonas de deformación", year = 1977, tier = "n", req = { "se1" }, fx = { safety = 10 }, gain = "+10 de seguridad" },
 		{ id = "se3", name = "Frenos ABS", year = 1986, tier = "i", req = { "se2" }, fx = {}, gain = "Habilita frenos con ABS" },
-		{ id = "se4", name = "Bolsas de aire", year = 1989, tier = "i", req = { "se2" }, fx = { safety = 15 }, gain = "+15 de seguridad" },
-		{ id = "se5", name = "Control de estabilidad", year = 1998, tier = "n", req = { "se3" }, fx = { safety = 8, handling = 4 }, gain = "+8 de seguridad y +4 de manejo" },
-		{ id = "se6", name = "Asistentes de conducción", year = 2014, tier = "b", req = { "se5" }, fx = { safety = 14, quality = 3 }, gain = "+14 de seguridad y +3 de calidad" },
+		{ id = "se4", name = "Bolsas de aire", year = 1989, tier = "i", req = { "se2" }, fx = {}, gain = "Habilita el paquete «Bolsas de aire frontales» (+18 de seguridad)" },
+		{ id = "se5", name = "Control de estabilidad", year = 1998, tier = "n", req = { "se3", "se4" }, fx = { handling = 4 }, gain = "+4 de manejo y habilita el paquete de seis bolsas de aire y estabilidad (+24 de seguridad)" },
+		{ id = "se6", name = "Asistentes de conducción", year = 2014, tier = "b", req = { "se5" }, fx = { quality = 2 }, gain = "+2 de calidad y habilita el paquete de asistentes de conducción (+32 de seguridad)" },
 	} },
 	confort = { label = "Comodidad e interiores", nodes = {
 		{ id = "co1", name = "Aire acondicionado", year = 1972, tier = "s", req = {}, fx = { comfort = 6 }, gain = "+6 de comodidad" },
@@ -441,10 +474,10 @@ Catalog.RESEARCH = {
 		{ id = "ma7", name = "Aerodinámica activa", year = 2012, tier = "n", req = { "ma1" }, fx = { spoilerGrip = 4 }, gain = "+4 de manejo con alerón instalado" },
 	} },
 	marketing = { label = "Marketing", nodes = {
-		{ id = "mk1", name = "Publicidad en radio y TV", year = 1970, tier = "s", req = {}, fx = { demand = 5, campaign = 1 }, gain = "+5 % de demanda y habilita campañas publicitarias" },
-		{ id = "mk2", name = "Red de concesionarios", year = 1981, tier = "n", req = { "mk1" }, fx = { demand = 10 }, gain = "+10 % de demanda" },
+		{ id = "mk1", name = "Publicidad en radio y TV", year = 1970, tier = "s", req = {}, fx = { demand = 5, campaign = 1 }, gain = "+5 % de demanda y habilita campañas de radio y prensa (+15 % de atractivo)" },
+		{ id = "mk2", name = "Red de concesionarios", year = 1981, tier = "n", req = { "mk1" }, fx = { demand = 10 }, gain = "+10 % de demanda y habilita campañas de televisión nacional (+30 %)" },
 		{ id = "mk3", name = "Garantía extendida", year = 1987, tier = "n", req = { "mk2" }, fx = { repGain = 50 }, gain = "La reputación sube 50 % más rápido" },
-		{ id = "mk4", name = "Marketing por internet", year = 1998, tier = "n", req = { "mk2" }, fx = { demand = 10 }, gain = "+10 % de demanda" },
+		{ id = "mk4", name = "Marketing por internet", year = 1998, tier = "n", req = { "mk2" }, fx = { demand = 10 }, gain = "+10 % de demanda y habilita la campaña digital (+45 %)" },
 		{ id = "mk5", name = "Redes sociales", year = 2009, tier = "i", req = { "mk4" }, fx = { demand = 15 }, gain = "+15 % de demanda" },
 	} },
 }
@@ -454,19 +487,32 @@ Catalog.RESEARCH = {
 -- Precio típico de cada tipo de vehículo (referencia para los modelos rivales, en dólares del juego).
 Catalog.RIVAL_PRICE = { compacto = 2900, sedan = 3500, clasico = 4500, pickup = 4300, deportivo = 5500, suv = 5200, superdeportivo = 10800, electrico = 8200 }
 
+--[[ Marcas rivales (ficticias). Compiten con las mismas reglas que el jugador: atractivo frente a lo que
+	espera la época, precio frente a su precio justo y alcance comercial. Estrategia:
+	  offset  = atractivo por encima (o debajo) del esperado según el año (su ritmo tecnológico)
+	  price   = posicionamiento de precio respecto del precio justo (<1 barato, >1 caro)
+	  react   = cuánto bajan sus precios cuando tu empresa les quita mercado en ese tipo
+	  reach   = alcance comercial según el año (crecen o se achican)
+	Cada modelo tiene una generación nueva cada `cycle` años (mejora y después envejece). ]]
 Catalog.RIVALS = {
-	{ id = "kodiak", name = "Kodiak Motors", color = "#8D6E4F", types = { pickup = 1970, suv = 1984, sedan = 1970 }, offset = { { 1970, 2 }, { 2030, 2 } },
-		models = { pickup = "Grizzly", suv = "Yukon", sedan = "Marshal" } },
-	{ id = "nordia", name = "Nordia", color = "#3B82F6", types = { compacto = 1970, sedan = 1970, electrico = 2014 }, offset = { { 1970, 1 }, { 2030, 2 } },
-		models = { compacto = "Fjord", sedan = "Polar", electrico = "Aurora-e" } },
-	{ id = "halcon", name = "Halcón", color = "#D6333F", types = { deportivo = 1970, clasico = 1970, superdeportivo = 1974 }, offset = { { 1970, 4 }, { 2030, 4 } },
-		models = { deportivo = "Rapaz", clasico = "Cóndor", superdeportivo = "Furia" } },
-	{ id = "kairo", name = "Kairo Cars", color = "#42E58D", types = { compacto = 1972, sedan = 1975, suv = 1990, electrico = 2011 }, offset = { { 1970, -3 }, { 1990, 3 }, { 2030, 5 } },
-		models = { compacto = "Mika", sedan = "Sora", suv = "Taiga", electrico = "Volt" } },
-	{ id = "velox", name = "Velox Auto", color = "#F7C95C", types = { compacto = 1970, deportivo = 1978, clasico = 1970 }, offset = { { 1970, 0 }, { 2030, 1 } },
-		models = { compacto = "Chispa", deportivo = "Saeta", clasico = "Ronda" } },
-	{ id = "imperial", name = "Imperial", color = "#B3AAFF", types = { sedan = 1970, suv = 1995, superdeportivo = 1990 }, offset = { { 1970, 3 }, { 2030, 4 } },
-		models = { sedan = "Regente", suv = "Monarca", superdeportivo = "Corona" } },
+	{ id = "kodiak", name = "Kodiak Motors", color = "#8D6E4F", strategy = "Volumen y robustez", cycle = 7,
+		types = { pickup = 1970, suv = 1984, sedan = 1970 }, offset = { { 1970, 2 }, { 2030, 1 } }, price = 0.95, react = 0.5,
+		reach = { { 1970, 1.2 }, { 2000, 2.2 }, { 2030, 2.5 } }, models = { pickup = "Grizzly", suv = "Yukon", sedan = "Marshal" } },
+	{ id = "nordia", name = "Nordia", color = "#3B82F6", strategy = "Eficiencia y seguridad", cycle = 6,
+		types = { compacto = 1970, sedan = 1970, electrico = 2014 }, offset = { { 1970, 1 }, { 1990, 2 }, { 2030, 3 } }, price = 1.0, react = 0.3,
+		reach = { { 1970, 1.0 }, { 2030, 2.5 } }, models = { compacto = "Fjord", sedan = "Polar", electrico = "Aurora-e" } },
+	{ id = "halcon", name = "Halcón", color = "#D6333F", strategy = "Deportivos premium", cycle = 5,
+		types = { deportivo = 1970, clasico = 1970, superdeportivo = 1974 }, offset = { { 1970, 4 }, { 2030, 5 } }, price = 1.15, react = 0.1,
+		reach = { { 1970, 0.8 }, { 2030, 1.4 } }, models = { deportivo = "Rapaz", clasico = "Cóndor", superdeportivo = "Furia" } },
+	{ id = "kairo", name = "Kairo Cars", color = "#42E58D", strategy = "Precio bajo y ascenso tecnológico", cycle = 5,
+		types = { compacto = 1972, sedan = 1975, suv = 1990, electrico = 2011 }, offset = { { 1970, -4 }, { 1990, 2 }, { 2030, 5 } }, price = 0.85, react = 0.7,
+		reach = { { 1970, 0.4 }, { 1995, 2.0 }, { 2030, 3.2 } }, models = { compacto = "Mika", sedan = "Sora", suv = "Taiga", electrico = "Volt" } },
+	{ id = "velox", name = "Velox Auto", color = "#F7C95C", strategy = "Autos económicos", cycle = 8,
+		types = { compacto = 1970, deportivo = 1978, clasico = 1970 }, offset = { { 1970, 0 }, { 2000, -1 }, { 2030, -1 } }, price = 0.88, react = 0.6,
+		reach = { { 1970, 1.0 }, { 2030, 1.3 } }, models = { compacto = "Chispa", deportivo = "Saeta", clasico = "Ronda" } },
+	{ id = "imperial", name = "Imperial", color = "#B3AAFF", strategy = "Lujo", cycle = 7,
+		types = { sedan = 1970, suv = 1995, superdeportivo = 1990 }, offset = { { 1970, 3 }, { 2030, 4 } }, price = 1.25, react = 0.1,
+		reach = { { 1970, 0.9 }, { 2030, 1.6 } }, models = { sedan = "Regente", suv = "Monarca", superdeportivo = "Corona" } },
 }
 
 -- Misiones. go = pantalla a la que lleva el botón «Ir». kind = tutorial | historia | anual (se reinicia cada año).
@@ -525,7 +571,7 @@ Catalog.STAT_DEFS = {
 	{ "accel", "0 a 100 km/h", "s", "Segundos para llegar a 100 km/h. Menos es mejor.", -1, 16 },
 	{ "handling", "Manejo", "índice 0–100", "Agarre y estabilidad en curvas. Más es mejor.", 1, 100 },
 	{ "stop", "Frenado 100→0", "m", "Metros para detenerse desde 100 km/h. Menos es mejor.", -1, 60 },
-	{ "durability", "Durabilidad", "índice 0–100", "Resistencia al desgaste. Más es mejor.", 1, 100 },
+	{ "durability", "Fiabilidad", "índice 0–100", "Resistencia al desgaste y a las fallas. Más es mejor.", 1, 100 },
 	{ "consumption", "Consumo", "", "Combustible o energía cada 100 km. Menos es mejor.", -1, 25 },
 	{ "comfort", "Comodidad", "índice 0–100", "Confort de marcha. Más es mejor.", 1, 100 },
 	{ "safety", "Seguridad", "índice 0–100", "Protección de los ocupantes. Pesa mucho en autos familiares.", 1, 100 },
@@ -632,7 +678,7 @@ for _, key in Catalog.RESEARCH_ORDER do
 		-- PI = minutos objetivo × PI/min que se espera tener en ese año (más importante = más largo;
 		-- una sede más grande lo termina más rápido). El dinero acompaña al PI.
 		n.rp = math.max(3, math.floor(tier.minutes * Catalog.interp(Catalog.EXPECTED_PI, n.year) + 0.5))
-		n.cost = math.floor(n.rp * Catalog.ECON.researchMoneyPerPi / 100 + 0.5) * 100
+		n.cost = math.floor(n.rp * Catalog.interp(Catalog.ECON.researchMoneyPerPi, n.year) / 100 + 0.5) * 100
 		n.lab = 1
 		researchIndex[n.id] = n
 		Catalog.RESEARCH_NAMES[n.id] = n.name

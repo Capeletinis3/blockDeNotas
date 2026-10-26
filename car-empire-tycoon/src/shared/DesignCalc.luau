@@ -214,7 +214,7 @@ function DesignCalc.designDiscount(g: any): number
 	end
 	local n = 0
 	for _, e in g.employees do
-		if e.assign == "diseno" and e.status == "activo" then
+		if e.assign == "diseno" then
 			n += 1
 		end
 	end
@@ -237,7 +237,38 @@ end
 -- Ítems de desarrollo: licencia del modelo base + prototipo de cada pieza distinta de la de serie.
 -- Cada ítem se paga una sola vez por empresa (claves en g.devPaid). Una pieza suelta del
 -- inventario cubre su prototipo (se consume al guardar).
-function DesignCalc.devItems(g: any, d: any): { any }
+--[[ Qué ingeniería paga guardar este diseño: "nuevo" (modelo o generación nueva), "version" (cambios en
+	base, piezas, calidad u objetivo de un diseño existente) o "estetico" (solo pintura, llantas, interior,
+	carrocería o nombre: no paga). `saved` = el diseño guardado que se está editando, o nil si es nuevo. ]]
+function DesignCalc.engineeringKind(saved: any?, d: any): string
+	if saved == nil then
+		return "nuevo"
+	end
+	if saved.baseId ~= d.baseId or saved.quality ~= d.quality or saved.objective ~= d.objective or saved.chassis ~= d.chassis then
+		return "version"
+	end
+	for _, c in Catalog.CATS do
+		if (saved.parts or {})[c[1]] ~= (d.parts or {})[c[1]] then
+			return "version"
+		end
+	end
+	return "estetico"
+end
+
+function DesignCalc.engineeringCost(g: any, d: any, kind: string?): number
+	if kind == "estetico" then
+		return 0
+	end
+	local base = Catalog.interp(Catalog.ECON.engineering, DesignCalc.year(g)) * (0.7 + 0.06 * (d.quality or 0))
+	if kind == "version" then
+		base *= Catalog.ECON.engineeringVersion
+	end
+	return round(base * (1 - DesignCalc.designDiscount(g)) / 100) * 100
+end
+
+-- Costos de guardar: licencia del modelo y prototipos (una vez por empresa) e ingeniería (cada modelo,
+-- generación o versión con cambios mecánicos). kind = DesignCalc.engineeringKind(...); nil = no incluirla.
+function DesignCalc.devItems(g: any, d: any, kind: string?): { any }
 	local b = Catalog.base(d.baseId)
 	local items = { { key = "base:" .. b.id, label = "Licencia del modelo " .. b.name, cost = b.dev } }
 	for _, p in DesignCalc.designParts(d) do
@@ -251,12 +282,15 @@ function DesignCalc.devItems(g: any, d: any): { any }
 		it.paid = g ~= nil and Util.contains(g.devPaid, it.key)
 		it.stock = false
 	end
+	if kind ~= nil and kind ~= "estetico" then
+		table.insert(items, { label = kind == "nuevo" and "Ingeniería del modelo" or "Ingeniería de la nueva versión", cost = DesignCalc.engineeringCost(g, d, kind), paid = false, stock = false, engineering = true })
+	end
 	return items
 end
 
-function DesignCalc.devPending(g: any, d: any): number
+function DesignCalc.devPending(g: any, d: any, kind: string?): number
 	local total = 0
-	for _, it in DesignCalc.devItems(g, d) do
+	for _, it in DesignCalc.devItems(g, d, kind) do
 		if not it.paid and not it.stock then
 			total += it.cost
 		end

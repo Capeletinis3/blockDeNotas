@@ -93,12 +93,13 @@ function Rules.salaries(g: any): number
 	return n
 end
 
+-- Nivel máximo de las estaciones: 2 por nivel de sede (hasta 10 con el Imperio automotriz).
 function Rules.maxStationLevel(g: any): number
-	return math.min(6, (g.sede or 1) + 1)
+	return math.min(10, (g.sede or 1) * 2)
 end
 
 function Rules.upgradeCost(s: any): number
-	return Util.round(5000 * math.pow(2.2, s.level - 1) / 100) * 100
+	return Util.round(5000 * math.pow(2.6, s.level - 1) / 100) * 100
 end
 
 -- Multiplicador de la fábrica: mejoras de estaciones, tecnología y personal asignado a las estaciones.
@@ -190,11 +191,15 @@ function Rules.indices(calc: any): any
 	else
 		eco = Util.clamp(100 - (calc.consumption - 5) * 7, 0, 100)
 	end
+	-- Prestaciones: aceleración (70 %) y velocidad máxima (30 %). Seguridad: protección (85 %) y frenado (15 %).
+	local accelIdx = Util.clamp(100 * (1 - (calc.accel - 4) / 12), 0, 100)
+	local topIdx = Util.clamp(((calc.top or 150) - 120) / 2.2, 0, 100)
+	local brakeIdx = Util.clamp(100 - ((calc.stop or 45) - 30) * 3, 0, 100)
 	return {
-		power = Util.clamp(100 * (1 - (calc.accel - 4) / 12), 0, 100),
+		power = accelIdx * 0.7 + topIdx * 0.3,
 		eco = eco,
 		comfort = calc.comfort,
-		safety = calc.safety or 40,
+		safety = (calc.safety or 40) * 0.85 + brakeIdx * 0.15,
 		dur = calc.durability,
 		hand = calc.handling,
 		quality = calc.quality,
@@ -228,34 +233,75 @@ function Rules.demand(g: any, type: string, yearFrac: number?): number
 	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * dif.demand
 end
 
--- Modelos rivales que se venden este año en ese tipo: { rival, name, appeal, weight }.
-function Rules.rivalOffers(type: string, yearFrac: number): { any }
+-- Precio justo de un auto de ese tipo, ese año y ese atractivo (referencia de los rivales).
+function Rules.fairPrice(type: string, yearFrac: number, appealOverBaseline: number): number
+	return (Catalog.RIVAL_PRICE[type] or 4000) * (1 + appealOverBaseline * 0.03) * (1 + (yearFrac - 1970) * 0.006)
+end
+
+--[[ Modelos rivales que se venden este año en ese tipo: { rival, name, gen, since, appeal, price, fair,
+	segment, reach, weight, launched }. Con `g` los rivales reaccionan a la cuota que tu empresa tuvo el
+	último tiempo en ese tipo (g.marketShare) bajando precios según su estrategia. El peso en el reparto se
+	calcula con las mismas reglas que tus lotes: atractivo, precio frente a su precio justo y alcance. ]]
+function Rules.rivalOffers(type: string, yearFrac: number, g: any?): { any }
 	local out = {}
 	local baseline = Rules.eraBaseline(yearFrac)
+	local share = g and g.marketShare and g.marketShare[type] or 0
 	for i, r in Catalog.RIVALS do
 		local since = r.types[type]
 		if since and yearFrac >= since then
-			-- Nueva generación cada 6 años; el atractivo oscila un poco con el ciclo del modelo.
+			-- Generación nueva cada `cycle` años: sale mejor que el promedio y envejece hasta la próxima.
+			local cycle = r.cycle or 6
 			local age = yearFrac - since
-			local gen = math.floor(age / 6) + 1
-			local cycle = (age % 6) / 6
-			local offset = Catalog.interp(r.offset, yearFrac) + 2 - cycle * 4 + math.sin(i * 1.7 + gen) * 1.5
+			local gen = math.floor(age / cycle) + 1
+			local phase = (age % cycle) / cycle
+			local offset = Catalog.interp(r.offset, yearFrac) + 2 - phase * 4 + math.sin(i * 1.7 + gen) * 1.2
 			local appeal = baseline + offset
-			local seg = offset >= 3.5 and "Premium" or (offset >= 0 and "Masivo" or "Económico")
+			local fair = Rules.fairPrice(type, yearFrac, offset)
+			local cut = math.min(0.25, (r.react or 0) * math.max(0, share - 0.15))
+			local price = math.floor(fair * (r.price or 1) * (1 - cut) / 10 + 0.5) * 10
+			local reach = Catalog.interp(r.reach or { { 1970, 1 } }, yearFrac)
+			local seg = (r.price or 1) >= 1.1 and "Premium" or ((r.price or 1) <= 0.9 and "Económico" or "Masivo")
 			table.insert(out, {
 				rival = r,
-				name = r.models[type] .. (gen > 1 and (" '" .. string.sub(tostring(math.floor(since + (gen - 1) * 6)), 3)) or ""),
+				name = r.models[type] .. (gen > 1 and (" '" .. string.sub(tostring(math.floor(since + (gen - 1) * cycle)), 3)) or ""),
 				since = since,
 				gen = gen,
+				launched = math.floor(since + (gen - 1) * cycle),
 				segment = seg,
-				-- Precio de lista: el típico del tipo, más caro cuanto mejor posicionado y más moderno.
-				price = math.floor((Catalog.RIVAL_PRICE[type] or 4000) * (1 + offset * 0.03) * (1 + (yearFrac - 1970) * 0.006) / 10 + 0.5) * 10,
+				price = price,
+				fair = fair,
+				cut = cut,
 				appeal = appeal,
-				weight = math.exp((appeal - baseline) / ECON.appealScale),
+				reach = reach,
+				weight = math.exp((appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, fair) * reach,
 			})
 		end
 	end
 	return out
+end
+
+-- Campaña publicitaria activa (Catalog.CAMPAIGNS) o nil. g.promo guarda el nivel (0 = sin campaña).
+function Rules.campaign(g: any): any
+	local lvl = tonumber(g.promo) or 0
+	return Catalog.CAMPAIGNS[lvl]
+end
+
+-- Motivo por el que no se puede usar un nivel de campaña, o nil.
+function Rules.campaignBlock(g: any, lvl: number): string?
+	local c = Catalog.CAMPAIGNS[lvl]
+	if not c then
+		return "Nivel de campaña desconocido"
+	end
+	if not Rules.has(g, c.research) then
+		local n = Catalog.researchNode(c.research)
+		return "Requiere investigar «" .. (n and n.name or c.research) .. "»"
+	end
+	return nil
+end
+
+function Rules.campaignCost(g: any, lvl: number): number
+	local c = Catalog.CAMPAIGNS[lvl]
+	return c and Util.round(Rules.sede(g).campaign * c.cost / 100) * 100 or 0
 end
 
 -- Multiplicador comercial de la empresa: alcance de la sede × reputación × tecnologías × campaña × personal.
@@ -263,7 +309,8 @@ function Rules.playerMult(g: any): number
 	local s = Rules.sede(g)
 	local rep = 0.6 + g.reputation * 0.14
 	local tech = 1 + Rules.tech(g, "demand") / 100
-	local campaign = g.promo and (1 + ECON.campaignBoost) or 1
+	local c = Rules.campaign(g)
+	local campaign = c and (1 + c.boost) or 1
 	local staff = 1 + math.min(0.25, (Rules.staffBonus(g, "ventas") + Rules.staffBonus(g, "marketing")) * 0.05)
 	return s.reach * rep * tech * campaign * staff
 end
@@ -289,7 +336,7 @@ end
 	lotes del jugador en venta con stock. Devuelve { demand, total, outside, rivals = {…}, lots = { [id] = peso } }. ]]
 function Rules.market(g: any, type: string): any
 	local yf = Rules.yearFrac(g)
-	local m = { demand = Rules.demand(g, type, yf), outside = ECON.outsideWeight, rivals = Rules.rivalOffers(type, yf), lots = {} }
+	local m = { demand = Rules.demand(g, type, yf), outside = ECON.outsideWeight, rivals = Rules.rivalOffers(type, yf, g), lots = {} }
 	local total = m.outside
 	for _, r in m.rivals do
 		total += r.weight

@@ -103,7 +103,24 @@ function Sessions:push(s: any)
 	if s.leaving then
 		return
 	end
+	s.sentKey = s.game and GameState.structKey(s.game) or nil
+	s.fullAt = self.deps.clock()
 	self.deps.push(s.player, self:payload(s))
+end
+
+--[[ Envío del segundo a segundo: si la estructura de la partida no cambió (mismos lotes y estados, mismo
+	mes, mismas notificaciones…) se manda solo lo que cambia (GameState.live, ~2 KB) en lugar de la partida
+	completa. Cada 30 s se manda igual la partida completa como resguardo. ]]
+function Sessions:pushTick(s: any)
+	if s.leaving then
+		return
+	end
+	local g = s.game
+	if not g or s.sentKey ~= GameState.structKey(g) or self.deps.clock() - (s.fullAt or 0) >= 30 then
+		self:push(s)
+		return
+	end
+	self.deps.push(s.player, { tick = true, live = GameState.live(g) })
 end
 
 -- Guardado -------------------------------------------------------------------------------------
@@ -640,7 +657,7 @@ function Sessions:tick()
 				if self.deps.garage and s.hasPlot then
 					self.deps.garage.update(player, g)
 				end
-				self:push(s)
+				self:pushTick(s)
 			end
 			if s.canSave and not s.saving then
 				local due = s.pendingSave and clock - s.lastSave >= Sessions.MIN_SAVE_GAP

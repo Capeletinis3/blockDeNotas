@@ -7,6 +7,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
+local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
 local DesignCalc = require(Shared.DesignCalc)
@@ -79,7 +80,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	local ds
 	if avanz then
 		ds = {
-			mk("brisa", "Brisa Sedán", "#E8ECF2", { objective = "Familiar", parts = { motor = "v6", turbo = "none", transmision = "auto4", traccion = "fwd", frenos = "abs", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none" } }),
+			mk("brisa", "Brisa Sedán", "#E8ECF2", { objective = "Familiar", parts = { motor = "v6", turbo = "none", transmision = "auto4", traccion = "fwd", frenos = "abs", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "airbag" } }),
 			mk("titan", "Titán SUV", "#2E7D5B", { objective = "Familiar" }),
 			mk("aurora", "Aurora GT", "#4F5BD5", { objective = "Deportivo", spoiler = true }),
 			mk("vento", "Halcón Vento SS", "#F7C95C", { objective = "Competición", spoiler = true }),
@@ -122,7 +123,18 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	retired.saleState = "retirado"
 	retired.lossDiscarded = retired.discarded * retired.unitCost
 	retired.endDay = g.time.day - 3
-	g.lotHistory = { retired, hist }
+	-- El historial pasa por el mismo camino que el juego: resumen permanente + versión liviana.
+	for _, l in { hist, retired } do
+		local endDay = l.endDay
+		Simulation.archiveLot(g, l)
+		g.lotHistory[1].endDay = endDay
+	end
+	for _, l in g.lots do
+		Simulation.registerModel(g, l)
+		if l.sold >= Catalog.ECON.launchSold then
+			g.launched[l.designId] = true
+		end
+	end
 	-- Estados de producción coherentes con las líneas de la sede (sin avanzar el tiempo).
 	Simulation.stepProduction(g, ctx, 0)
 	g.counters.lotsLaunched = #g.lots + 2

@@ -16,6 +16,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Rules = require(Shared.Rules)
+local Util = require(Shared.Util)
 local Ui = require(script.Parent.Ui)
 local T = Ui.T
 
@@ -666,6 +667,14 @@ local function leaveEditor()
 end
 
 function App.onState(payload: any)
+	-- Segundo a segundo el servidor manda solo lo que cambia: se aplica sobre la última partida completa.
+	if payload.tick then
+		if not (App.payload and App.payload.game) then
+			return
+		end
+		Util.mergeLive(App.payload.game, payload.live)
+		payload = App.payload
+	end
 	local hadGame = App.g ~= nil
 	App.payload = payload
 	App.g = payload.game

@@ -3,6 +3,14 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
+local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
+-- Modelos 3D definitivos (fase futura): si existen en ReplicatedStorage.CarEmpireAssets.Cars, se usan.
+require(Shared.CarModel).assetResolver = function(baseId: string): Model?
+	local assets = ReplicatedStorage:FindFirstChild("CarEmpireAssets")
+	local cars = assets and assets:FindFirstChild("Cars")
+	local m = cars and cars:FindFirstChild(baseId)
+	return (m and m:IsA("Model")) and m or nil
+end
 
 local App = require(script.Parent.App)
 require(script.Parent.WorldPrompts).start()
