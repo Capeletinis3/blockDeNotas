@@ -14,6 +14,9 @@ local Catalog = {}
 -- Calendario (parámetro central de equilibrio): un año de juego dura `realSecondsPerYear` segundos reales
 -- a velocidad 1×. La simulación avanza en minutos de juego (10 por segundo real); un «período» interno
 -- (g.time.day) es un MES del calendario.
+-- endYear = último año con contenido histórico (tecnologías, demanda, rivales). Al llegar, el año visible
+-- queda en endYear y el juego sigue en «años comerciales extra» (g.time.day sigue contando meses). Para
+-- ampliar la historia basta con subir endYear y agregar contenido de esos años.
 Catalog.CALENDAR = { startYear = 1970, endYear = 2030, realSecondsPerYear = 660, months = 12 }
 
 Catalog.RULES = {
@@ -24,6 +27,14 @@ Catalog.RULES = {
 	-- Banco de PI: la generación de la sede se acumula hasta este equivalente en minutos aunque no haya
 	-- investigación activa (las bonificaciones y misiones se suman aunque el banco esté lleno).
 	piBankMinutes = 20,
+	-- El banco acelera la investigación activa: aporta hasta bankSpeedup veces la generación de la sede
+	-- por minuto (con 1, se investiga hasta el doble de rápido). Ahorrar sirve, pero no completa al instante.
+	bankSpeedup = 1,
+	-- Difusión tecnológica: una tecnología de hace más de diffusionGrace años cuesta diffusionPerYear menos
+	-- por año (PI y dinero), hasta diffusionFloor de su costo. Quien va atrasado se pone al día más rápido.
+	diffusionGrace = 1,
+	diffusionPerYear = 0.08,
+	diffusionFloor = 0.4,
 	maxLotQty = 1000000, -- tope técnico de un lote (la capacidad y el dinero son el límite real)
 	maxActiveLots = 16, -- lotes produciendo o en venta a la vez
 	maxLotHistory = 40, -- historial reciente: lotes agotados o retirados con su detalle (versión liviana)
@@ -78,10 +89,10 @@ Catalog.CAMPAIGNS = {
 
 -- Investigación: duración objetivo por nivel de importancia (minutos reales con la sede esperada de la época).
 Catalog.RESEARCH_TIERS = {
-	s = { label = "Mejora pequeña", minutes = 1.5 },
-	n = { label = "Mejora", minutes = 4 },
-	i = { label = "Tecnología importante", minutes = 8 },
-	b = { label = "Gran avance", minutes = 12.5 },
+	s = { label = "Mejora pequeña", minutes = 2 },
+	n = { label = "Mejora", minutes = 5 },
+	i = { label = "Tecnología importante", minutes = 9.5 },
+	b = { label = "Gran avance", minutes = 14 },
 }
 -- Generación de PI que se espera tener en cada época (para dimensionar los costos, no para dar PI).
 Catalog.EXPECTED_PI = { { 1970, 3 }, { 1972, 8 }, { 1975, 20 }, { 1982, 45 }, { 1994, 90 }, { 2030, 90 } }

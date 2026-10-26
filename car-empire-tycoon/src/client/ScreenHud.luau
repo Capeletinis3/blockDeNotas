@@ -321,9 +321,16 @@ local function hud1(g: any): Frame
 
 	local items: { Instance? } = { brand }
 	if deskOnly then
-		local f, v = res("cal", T.bl2, T.bl, 0.16, "FECHA", Util.gameDate(g.time.day), { name = "Fecha" })
+		local function kicker(gg: any): string
+			local extra = Util.extraYears(gg.time.day)
+			return extra > 0 and ("FECHA · AÑO EXTRA " .. extra) or "FECHA"
+		end
+		local f, v, k = res("cal", T.bl2, T.bl, 0.16, kicker(g), Util.gameDate(g.time.day), { name = "Fecha" })
 		App.live(function(gg: any)
 			v.Text = Util.gameDate(gg.time.day)
+			if k then
+				k.Text = kicker(gg)
+			end
 		end)
 		table.insert(items, f)
 	end

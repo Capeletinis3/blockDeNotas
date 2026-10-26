@@ -334,13 +334,20 @@ function Simulation.stepResearch(g: any, ctx: any, minutes: number)
 		Simulation.addPi(g, gain, ctx)
 		return
 	end
-	-- Con un proyecto activo la generación va al proyecto (el banco aporta lo que tenga ahorrado).
-	g.rp += gain
+	-- Con un proyecto activo la generación va al proyecto y el banco lo acelera: aporta hasta
+	-- bankSpeedup veces la generación (nunca lo completa de golpe).
 	local n = Catalog.researchNode(a.id)
-	local draw = math.min(g.rp, n.rp - a.progress)
-	a.progress += draw
-	g.rp -= draw
-	if a.progress >= n.rp - 1e-6 then
+	local need = Rules.activeRp(g)
+	local fromBank = math.min(g.rp, gain * Catalog.RULES.bankSpeedup)
+	local add = math.min(gain + fromBank, need - a.progress)
+	-- Primero se usa la generación; del banco sale solo lo que falta.
+	local usedBank = math.max(0, add - gain)
+	a.progress += add
+	g.rp -= usedBank
+	if add < gain then
+		g.rp = math.min(g.rp + (gain - add), math.max(g.rp, Rules.piCap(g))) -- sobrante del último paso
+	end
+	if a.progress >= need - 1e-6 then
 		table.insert(g.research.done, a.id)
 		g.research.active = nil
 		g.counters.researchDone += 1
@@ -422,7 +429,10 @@ function Simulation.monthRollover(g: any, ctx: any)
 			table.insert(g.candidates, c)
 		end
 	end
-	if g.time.day % 12 == 0 then
+	if g.time.day % 12 == 0 and Rules.extraYears(g) > 0 then
+		-- Después del último año histórico: el calendario visible queda fijo y se cuentan años comerciales.
+		Simulation.notify(g, ctx, "info", "Año comercial " .. Rules.extraYears(g) .. " después de " .. Catalog.CALENDAR.endYear .. ": la historia llegó a su fin por ahora, pero tu empresa sigue fabricando, vendiendo e investigando.", nil)
+	elseif g.time.day % 12 == 0 then
 		local y = Rules.year(g)
 		local news = {}
 		for _, key in Catalog.RESEARCH_ORDER do

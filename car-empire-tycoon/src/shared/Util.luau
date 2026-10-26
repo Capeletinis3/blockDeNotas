@@ -118,12 +118,21 @@ end
 
 -- Calendario: g.time.day cuenta MESES desde enero del año inicial (1970); ver Catalog.CALENDAR.
 local START_YEAR = 1970
+local END_YEAR = 2030 -- último año histórico visible (Catalog.CALENDAR.endYear; ver Util.setCalendar)
 Util.MONTHS = { "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic" }
 function Util.setStartYear(y: number)
 	START_YEAR = y
 end
+function Util.setCalendar(startYear: number, endYear: number)
+	START_YEAR, END_YEAR = startYear, endYear
+end
+-- Año histórico visible: no pasa del último año con contenido.
 function Util.yearOf(month: number): number
-	return START_YEAR + math.floor(month / 12)
+	return math.min(END_YEAR, START_YEAR + math.floor(month / 12))
+end
+-- Años comerciales jugados después del último año histórico (0 mientras dura la historia).
+function Util.extraYears(month: number): number
+	return math.max(0, START_YEAR + math.floor(month / 12) - END_YEAR)
 end
 function Util.gameDate(month: number): string
 	return Util.MONTHS[(math.floor(month) % 12) + 1] .. " " .. Util.yearOf(month)

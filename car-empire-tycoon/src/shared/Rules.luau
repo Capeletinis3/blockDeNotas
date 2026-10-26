@@ -22,15 +22,38 @@ function Rules.has(g: any, researchId: string?): boolean
 	return g ~= nil and g.research ~= nil and Util.contains(g.research.done, researchId)
 end
 
+Util.setCalendar(Catalog.CALENDAR.startYear, Catalog.CALENDAR.endYear)
+
 -- Calendario ------------------------------------------------------------------------
 
+-- Año histórico visible (tecnologías, demanda, rivales, año de modelo). Se detiene en el último año con
+-- contenido (Catalog.CALENDAR.endYear); después el juego sigue en años comerciales extra.
 function Rules.year(g: any): number
+	return math.min(Catalog.CALENDAR.endYear, Catalog.CALENDAR.startYear + math.floor(g.time.day / 12))
+end
+
+-- Año con decimales (para curvas de demanda y la expectativa del mercado), con el mismo tope.
+function Rules.yearFrac(g: any): number
+	return math.min(Catalog.CALENDAR.endYear + 0.99, Catalog.CALENDAR.startYear + (g.time.day + g.time.minute / MONTH) / 12)
+end
+
+-- Año comercial interno (sin tope): numera los años para las misiones anuales también después de endYear.
+function Rules.periodYear(g: any): number
 	return Catalog.CALENDAR.startYear + math.floor(g.time.day / 12)
 end
 
--- Año con decimales (para curvas de demanda y la expectativa del mercado).
-function Rules.yearFrac(g: any): number
-	return Catalog.CALENDAR.startYear + (g.time.day + g.time.minute / MONTH) / 12
+-- ¿Se puede lanzar una nueva generación de este diseño? Hace falta un año de modelo posterior o, después del
+-- último año histórico (cuando el año visible ya no cambia), que haya pasado al menos un año comercial.
+function Rules.canNewGeneration(g: any, parent: any): boolean
+	if (parent.modelYear or Rules.year(g)) < Rules.year(g) then
+		return true
+	end
+	return Rules.extraYears(g) > 0 and g.time.day - (parent.createdDay or 0) >= 12
+end
+
+-- Años comerciales extra jugados después del último año histórico.
+function Rules.extraYears(g: any): number
+	return math.max(0, Rules.periodYear(g) - Catalog.CALENDAR.endYear)
 end
 
 function Rules.absMinute(g: any): number
@@ -411,14 +434,45 @@ function Rules.researchState(g: any, n: any): string
 end
 
 -- Segundos reales que faltan (a 1×) para terminar la investigación activa con el banco y la generación actual.
+-- Costo de investigar `n` hoy: PI y dinero, con el descuento por difusión de las tecnologías viejas.
+function Rules.researchCost(g: any, n: any): (number, number, number)
+	local R = Catalog.RULES
+	local age = Rules.year(g) - n.year - R.diffusionGrace
+	local factor = age > 0 and math.max(R.diffusionFloor, 1 - R.diffusionPerYear * age) or 1
+	local rp = math.max(1, math.floor(n.rp * factor + 0.5))
+	local money = math.floor(n.cost * factor / 100 + 0.5) * 100
+	return rp, money, factor
+end
+
+-- PI que pide el proyecto activo (fijados al empezar).
+function Rules.activeRp(g: any): number
+	local a = g.research.active
+	if not a then
+		return 0
+	end
+	return a.rp or Catalog.researchNode(a.id).rp
+end
+
+-- Minutos reales (a 1×) para juntar `left` PI con la generación de la sede y el banco como acelerador.
+function Rules.researchMinutesFor(g: any, left: number, bank: number?): number
+	local pi = math.max(0.01, Rules.piPerMinute(g))
+	local fast = pi * (1 + Catalog.RULES.bankSpeedup)
+	local b = bank or g.rp
+	local tFast = b / (pi * Catalog.RULES.bankSpeedup) -- minutos que dura el banco a máxima velocidad
+	if left <= fast * tFast then
+		return left / fast
+	end
+	return tFast + (left - fast * tFast) / pi
+end
+
+-- Segundos reales (a 1×) que faltan para terminar la investigación activa.
 function Rules.researchEta(g: any): number?
 	local a = g.research.active
 	if not a then
 		return nil
 	end
-	local n = Catalog.researchNode(a.id)
-	local left = math.max(0, n.rp - a.progress - g.rp)
-	return left / math.max(0.01, Rules.piPerMinute(g)) * 60
+	local left = math.max(0, Rules.activeRp(g) - a.progress)
+	return Rules.researchMinutesFor(g, left) * 60
 end
 
 -- Estadísticas por mes --------------------------------------------------------------------
@@ -520,7 +574,7 @@ function Rules.missionValue(g: any, m: any): number
 end
 
 function Rules.missionKey(g: any, m: any): string
-	return m.kind == "anual" and (m.id .. "@" .. Rules.year(g)) or m.id
+	return m.kind == "anual" and (m.id .. "@" .. Rules.periodYear(g)) or m.id
 end
 
 function Rules.missionState(g: any, m: any): string

@@ -211,7 +211,9 @@ function GameState.validate(g: any): (boolean, string?)
 	if type(t) ~= "table" or not isInt(t.day, 0) or not isFinite(t.minute) or t.minute < 0 or t.minute >= Catalog.RULES.dayMinutes or not Util.contains(Catalog.RULES.speeds, t.speed) then
 		return fail("El reloj de la partida está dañado.")
 	end
-	if g.time.day > (Catalog.CALENDAR.endYear - Catalog.CALENDAR.startYear + 40) * 12 then
+	-- Sin tope por el año final: después de endYear el juego sigue en años comerciales extra. Solo se
+	-- descarta un valor absurdo (más de 5.000 años de juego).
+	if g.time.day > 12 * 5000 then
 		return fail("El reloj de la partida está dañado.")
 	end
 	if type(g.counters) ~= "table" then
@@ -237,7 +239,7 @@ function GameState.validate(g: any): (boolean, string?)
 		end
 	end
 	local ra = g.research.active
-	if ra ~= nil and (type(ra) ~= "table" or not Catalog.researchNode(ra.id) or not nonNeg(ra.progress) or not nonNeg(ra.paid)) then
+	if ra ~= nil and (type(ra) ~= "table" or not Catalog.researchNode(ra.id) or not nonNeg(ra.progress) or not nonNeg(ra.paid) or (ra.rp ~= nil and not nonNeg(ra.rp))) then
 		return fail("La investigación en curso está dañada.")
 	end
 	-- Estaciones

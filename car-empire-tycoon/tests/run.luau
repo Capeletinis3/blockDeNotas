@@ -158,7 +158,9 @@ test("[P1] Una empresa nueva comienza en enero de 1970 y el calendario avanza so
 	check(Catalog.CALENDAR.endYear >= 2030, "llega hasta 2030")
 	-- Una partida guardada que pasó 2030 sigue funcionando (el calendario es extensible).
 	g.time.day = (2040 - 1970) * 12 + 5
-	eq(Rules.year(g), 2040, "más allá de 2030")
+	eq(Rules.year(g), 2030, "después de 2030 el año visible queda en 2030")
+	eq(Rules.periodYear(g), 2040, "y se cuentan años comerciales")
+	eq(Util.gameDate(g.time.day), "Jun 2030", "fecha visible")
 	Simulation.simulate(g, ctx, 600)
 	check(GameState.validate(g), "válida en 2040")
 end)
@@ -588,6 +590,7 @@ test("[P13] Investigación bloqueada por requisitos y por época", function()
 	g.time.day = (1977 - 1970) * 12
 	check(Rules.researchState(g, turbo) == "disponible", "con época y requisito, disponible")
 	-- Cancelar devuelve el dinero y los PI.
+	g.money = 1000000
 	local m2, rp2 = g.money, g.rp
 	check(Actions.startResearch(g, ctx, { id = "mo3" }).ok, "empieza turbo")
 	Simulation.simulate(g, ctx, 60)
@@ -944,8 +947,9 @@ test("[C21] Desbloquear una tecnología de otra década (cuando llega su año y 
 	check(Rules.researchState(g, n) == "disponible", "con requisito y año")
 	check(Actions.startResearch(g, ctx, { id = "mo4" }).ok, "empieza")
 	g.rp = n.rp
-	Simulation.simulate(g, ctx, 10)
-	check(Util.contains(g.research.done, "mo4"), "terminada")
+	check(runUntil(g, ctx, function()
+		return Util.contains(g.research.done, "mo4")
+	end, 120), "terminada (el banco acelera, no completa de golpe)")
 	g.time.day = (1984 - 1970) * 12 -- el motor llega al mercado un año después de la tecnología
 	local d = DesignCalc.newDraft(g, "brisa")
 	check(DesignCalc.partBlock(g, d, Catalog.part("motor", "i4v")) == nil, "habilita el motor 2.0 16V de los 80")

@@ -39,8 +39,8 @@ end
 
 -- Minutos reales (a 1×) que tardaría una investigación con el banco y la generación actuales.
 function Screen.etaMinutes(g: any, n: any): number
-	local left = math.max(0, n.rp - g.rp)
-	return left / math.max(0.01, g.derived.piPerMinute)
+	local rp = Rules.researchCost(g, n)
+	return Rules.researchMinutesFor(g, rp)
 end
 
 -- Investigación sugerida: la disponible que antes se termina (más PI ahorrados primero); a igual
@@ -49,8 +49,8 @@ function Screen.suggested(g: any): any
 	local best = nil
 	for _, key in Catalog.RESEARCH_ORDER do
 		for _, n in Catalog.RESEARCH[key].nodes do
-			if Rules.researchState(g, n) == "disponible" and g.money >= n.cost then
-				if not best or n.rp < best.rp or (n.rp == best.rp and n.year < best.year) then
+			if Rules.researchState(g, n) == "disponible" and g.money >= select(2, Rules.researchCost(g, n)) then
+				if not best or Rules.researchCost(g, n) < Rules.researchCost(g, best) or (n.rp == best.rp and n.year < best.year) then
 					best = n
 				end
 			end
@@ -71,8 +71,8 @@ local function nodeCard(g: any, n: any, suggested: boolean?): Frame
 		why = table.concat(miss, " · ")
 	elseif g.research.active then
 		why = "Ya hay una investigación en curso"
-	elseif g.money < n.cost then
-		why = "Fondos insuficientes (" .. Util.money(n.cost) .. ")"
+	elseif g.money < select(2, Rules.researchCost(g, n)) then
+		why = "Fondos insuficientes (" .. Util.money(select(2, Rules.researchCost(g, n))) .. ")"
 	end
 	local reqs: { Instance? } = {}
 	if #n.req > 0 then
@@ -88,7 +88,7 @@ local function nodeCard(g: any, n: any, suggested: boolean?): Frame
 		App.live(function(gg: any)
 			local a = gg.research.active
 			if a and a.id == n.id then
-				Ui.setBar(fill, a.progress / n.rp * 100)
+				Ui.setBar(fill, a.progress / Rules.activeRp(gg) * 100)
 			end
 		end)
 		action = bar
@@ -105,7 +105,10 @@ local function nodeCard(g: any, n: any, suggested: boolean?): Frame
 	return Ui.card({
 		Ui.row({ Ui.chip(tostring(n.year), "cn"), Ui.grow(Ui.text(n.name, { size = Ui.S.sm, weight = W.bold })), suggested and Ui.chip("★ Sugerida", "cv") or nil, Ui.chip(chip[1], chip[2]) }, 8, { wrap = App.isPhone() }),
 		Ui.text(n.gain, { size = Ui.S.xs, color = T.tx2 }),
-		Ui.text((tier and tier.label or "") .. " · " .. Util.money(n.cost) .. " · " .. Util.num(n.rp) .. " PI" .. eta, { size = Ui.S.xs, color = T.mut }),
+		(function()
+			local rp, cost, factor = Rules.researchCost(g, n)
+			return Ui.text((tier and tier.label or "") .. " · " .. Util.money(cost) .. " · " .. Util.num(rp) .. " PI" .. ((factor < 1 and st ~= "hecha") and (" (−" .. Util.round((1 - factor) * 100) .. " % por difusión)") or "") .. eta, { size = Ui.S.xs, color = T.mut })
+		end)(),
 		#reqs > 0 and Ui.col(reqs, 2) or nil,
 		action,
 	}, { gap = 6, stroke = st == "activa" and T.vi or (st == "hecha" and Color3.fromHex("#226043") or nil), name = "Nodo_" .. n.id })
@@ -159,12 +162,13 @@ function Screen.build(main: Frame, side: Frame)
 	local current: { Instance? } = { Ui.lbl("En curso") }
 	if a then
 		local n = Catalog.researchNode(a.id)
-		local bar, fill = Ui.bar(a.progress / n.rp * 100, T.vi)
+		local need = Rules.activeRp(g)
+		local bar, fill = Ui.bar(a.progress / need * 100, T.vi)
 		local lbl = Ui.text("", { size = Ui.S.xs })
 		local function upd(gg: any, ra: any)
-			Ui.setBar(fill, ra.progress / n.rp * 100)
+			Ui.setBar(fill, ra.progress / need * 100)
 			local eta = Rules.researchEta(gg) or 0
-			lbl.Text = math.floor(ra.progress) .. "/" .. n.rp .. " PI · " .. math.floor(ra.progress / n.rp * 100) .. " % · faltan ≈ " .. Util.realTime(eta / math.max(1, gg.time.speed))
+			lbl.Text = math.floor(ra.progress) .. "/" .. need .. " PI · " .. math.floor(ra.progress / need * 100) .. " % · faltan ≈ " .. Util.realTime(eta / math.max(1, gg.time.speed)) .. (gg.rp > 0 and (" · el banco acelera ×" .. (1 + Catalog.RULES.bankSpeedup)) or "")
 		end
 		upd(g, a)
 		App.live(function(gg: any)
@@ -189,7 +193,7 @@ function Screen.build(main: Frame, side: Frame)
 			})
 		end, { small = true, name = "CancelarInvestigacion" }))
 	else
-		table.insert(current, Ui.text("No hay investigación en curso. Elegí una disponible: los PI ahorrados se aplican enseguida.", { size = Ui.S.sm, color = T.mut }))
+		table.insert(current, Ui.text("No hay investigación en curso. Elegí una disponible: los PI ahorrados la aceleran hasta ×2.", { size = Ui.S.sm, color = T.mut }))
 	end
 	if not a and sug then
 		table.insert(current, Ui.note("v", "Sugerida: <b>" .. sug.name .. "</b> (" .. sug.year .. ") · " .. sug.gain .. " · ≈ " .. Util.realTime(Screen.etaMinutes(g, sug) * 60) .. ".", Ui.button("Investigar", "p", function()
@@ -215,7 +219,7 @@ function Screen.build(main: Frame, side: Frame)
 		Ui.between("· de la sede (" .. sede.name .. ")", sede.pi .. " PI/min"),
 		Ui.between("· del personal del laboratorio", "+" .. Util.num(g.derived.piPerMinute - sede.pi, 1) .. " PI/min (máx. +30 %)"),
 		nx and Ui.text("Con «" .. nx.name .. "» la sede genera " .. nx.pi .. " PI/min.", { size = Ui.S.xs, color = T.mut }) or nil,
-		Ui.text("Sin investigación activa se ahorran hasta " .. Catalog.RULES.piBankMinutes .. " minutos de generación. También dan PI las ventas (1 cada " .. Catalog.ECON.salesPiPer .. " autos), los lanzamientos exitosos (" .. Catalog.ECON.launchSold .. " ventas de un diseño nuevo) y los lotes de " .. Catalog.ECON.soldOutMinQty .. "+ unidades agotados con ganancia, con un tope mensual; y las misiones. Esas recompensas se suman aunque el banco esté lleno.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+		Ui.text("Sin investigación activa se ahorran hasta " .. Catalog.RULES.piBankMinutes .. " minutos de generación; con un proyecto activo esos PI lo aceleran hasta ×" .. (1 + Catalog.RULES.bankSpeedup) .. ". Las tecnologías de hace más de " .. Catalog.RULES.diffusionGrace .. " años cuestan menos (difusión). También dan PI las ventas (1 cada " .. Catalog.ECON.salesPiPer .. " autos), los lanzamientos exitosos (" .. Catalog.ECON.launchSold .. " ventas de un diseño nuevo) y los lotes de " .. Catalog.ECON.soldOutMinQty .. "+ unidades agotados con ganancia, con un tope mensual; y las misiones. Esas recompensas se suman aunque el banco esté lleno.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 	}, { gap = 6, name = "PI" }).Parent = side
 	Ui.card({
 		Ui.lbl("Progreso"),

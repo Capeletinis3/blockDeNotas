@@ -247,13 +247,13 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 		local best = nil
 		for _, key in Catalog.RESEARCH_ORDER do
 			for _, n in Catalog.RESEARCH[key].nodes do
-				if Rules.researchState(g, n) == "disponible" and #g.lots > 0 and g.money >= n.cost * 3 and (not best or n.rp < best.rp) then
+				if Rules.researchState(g, n) == "disponible" and #g.lots > 0 and g.money >= select(2, Rules.researchCost(g, n)) * 3 and (not best or Rules.researchCost(g, n) < Rules.researchCost(g, best)) then
 					best = n
 				end
 			end
 		end
 		if best and Actions.startResearch(g, ctx, { id = best.id }).ok then
-			table.insert(log.research, { start = t / 60, id = best.id, name = best.name, rp = best.rp, cost = best.cost, tier = best.tier })
+			table.insert(log.research, { start = t / 60, id = best.id, name = best.name, rp = g.research.active.rp, cost = g.research.active.paid, tier = best.tier, year = Rules.year(g), nodeYear = best.year })
 		end
 	end
 	local function upgrade()
@@ -400,13 +400,19 @@ end
 function Bot.researchSummary(log: any): any
 	local finishes = {}
 	local byTier = {}
+	local lag, lagN = 0, 0
 	for _, r in log.research do
 		if r.finish then
 			table.insert(finishes, r.finish)
-			local bt = byTier[r.tier] or { n = 0, total = 0 }
+			local bt = byTier[r.tier] or { n = 0, total = 0, max = 0 }
 			bt.n += 1
 			bt.total += r.finish - r.start
+			bt.max = math.max(bt.max, r.finish - r.start)
 			byTier[r.tier] = bt
+			if r.year and r.nodeYear then
+				lag += r.year - r.nodeYear
+				lagN += 1
+			end
 		end
 	end
 	table.sort(finishes)
@@ -414,7 +420,7 @@ function Bot.researchSummary(log: any): any
 	for i = 2, #finishes do
 		gaps += finishes[i] - finishes[i - 1]
 	end
-	return { done = #finishes, avgGap = #finishes > 1 and gaps / (#finishes - 1) or 0, byTier = byTier }
+	return { done = #finishes, avgGap = #finishes > 1 and gaps / (#finishes - 1) or 0, byTier = byTier, avgLag = lagN > 0 and lag / lagN or 0 }
 end
 
 if not _G.BALANCE_AS_MODULE then
@@ -425,11 +431,11 @@ if not _G.BALANCE_AS_MODULE then
 	print("Bot de balance · dificultad " .. dif .. " · " .. minutes .. " minutos reales" .. (flat and " · estrategia plana" or ""))
 	local log = Bot.play(dif, minutes, { verbose = true, flat = flat })
 	local rs = Bot.researchSummary(log)
-	print(string.format("\nInvestigaciones terminadas: %d · una cada %.1f min en promedio", rs.done, rs.avgGap))
+	print(string.format("\nInvestigaciones terminadas: %d · una cada %.1f min en promedio · se investigan %.1f años después de aparecer", rs.done, rs.avgGap, rs.avgLag))
 	for _, k in { "s", "n", "i", "b" } do
 		local bt = rs.byTier[k]
 		if bt then
-			print(string.format("  %-22s %2d · duración media %.1f min", Catalog.RESEARCH_TIERS[k].label, bt.n, bt.total / bt.n))
+			print(string.format("  %-22s %2d · duración media %.1f min · máxima %.1f min", Catalog.RESEARCH_TIERS[k].label, bt.n, bt.total / bt.n, bt.max))
 		end
 	end
 	print("\nPor década (ingresos · fabricación · flujo neto · dinero al cerrar · sede · tecnologías):")

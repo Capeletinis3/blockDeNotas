@@ -100,7 +100,7 @@ function Screen.designRow(g: any, d: any): Frame
 		table.insert(actions, Ui.button("Nueva generación", "default", function()
 			App.closeAllDialogs()
 			App.go("editor", { newGenOf = d.id })
-		end, { small = true, name = "NuevaGeneracion", disabled = (d.modelYear or 0) >= Rules.year(g), why = "Una nueva generación necesita un año de modelo posterior (" .. tostring(d.modelYear) .. ")." }))
+		end, { small = true, name = "NuevaGeneracion", disabled = not Rules.canNewGeneration(g, d), why = "Una nueva generación necesita al menos un año desde la anterior (" .. tostring(d.modelYear) .. ")." }))
 	end
 	local dup
 	dup = Ui.button("Duplicar", "q", function()

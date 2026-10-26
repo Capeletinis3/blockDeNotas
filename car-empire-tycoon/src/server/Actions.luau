@@ -196,8 +196,8 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 		if not parent or parent.template then
 			return fail("El modelo del que querías crear una nueva generación ya no existe.")
 		end
-		if (parent.modelYear or year) >= year then
-			return fail("Una nueva generación necesita un año de modelo posterior a " .. tostring(parent.modelYear) .. ". Esperá al año próximo.")
+		if not Rules.canNewGeneration(g, parent) then
+			return fail("Una nueva generación necesita al menos un año desde la anterior (" .. tostring(parent.modelYear) .. "). Esperá al año próximo.")
 		end
 		d.lineage = parent.lineage or parent.id
 		d.gen = maxGen(g, d.lineage) + 1
@@ -545,16 +545,13 @@ function Actions.startResearch(g: any, _ctx: any, payload: any): any
 	if g.research.active then
 		return fail("Ya hay una investigación en curso.")
 	end
-	if not Simulation.spend(g, n.cost, "investigacion", "Investigación: " .. n.name) then
-		return fail("Fondos insuficientes: cuesta " .. money(n.cost) .. ".")
+	local rp, cost, factor = Rules.researchCost(g, n)
+	if not Simulation.spend(g, cost, "investigacion", "Investigación: " .. n.name) then
+		return fail("Fondos insuficientes: cuesta " .. money(cost) .. ".")
 	end
-	g.research.active = { id = n.id, progress = 0, paid = n.cost }
-	-- Los PI ahorrados se aplican enseguida.
-	local draw = math.min(g.rp, n.rp)
-	g.research.active.progress = draw
-	g.rp -= draw
+	g.research.active = { id = n.id, progress = 0, paid = cost, rp = rp }
 	local eta = Rules.researchEta(g) or 0
-	return { ok = true, msg = "Investigando «" .. n.name .. "»: " .. n.rp .. " PI" .. (draw > 0 and (" (" .. math.floor(draw) .. " ya aplicados del banco)") or "") .. " · ≈ " .. Util.realTime(eta) .. " a " .. Util.num(Rules.piPerMinute(g), 1) .. " PI/min." }
+	return { ok = true, msg = "Investigando «" .. n.name .. "»: " .. rp .. " PI" .. (factor < 1 and (" (−" .. round((1 - factor) * 100) .. " % por ser una tecnología conocida)") or "") .. " · ≈ " .. Util.realTime(eta) .. (g.rp > 0 and " con los PI ahorrados como acelerador" or "") .. "." }
 end
 
 function Actions.cancelResearch(g: any, _ctx: any, _payload: any): any
