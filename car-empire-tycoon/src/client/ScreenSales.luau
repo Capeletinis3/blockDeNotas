@@ -177,7 +177,7 @@ function Screen.build(main: Frame, side: Frame)
 	local tabs, tab = Sheet.tabs("ventas", { { "salon", "Salón y clientes", offers > 0 and offers or nil }, { "hist", "Historial de ventas" } }, "salon")
 	tabs.Parent = main
 	if tab == "salon" then
-		local sec: { Instance? } = { Ui.row({ Ui.grow(Ui.lbl("Clientes en el concesionario")), Ui.inline("Llegan solo si hay autos en el salón", { size = Ui.S.xs, color = T.mut }) }, 10) }
+		local sec: { Instance? } = { Ui.row({ Ui.grow(Ui.lbl("Clientes en el concesionario")), (App.narrowPhone and Ui.text("Llegan solo si hay autos en el salón", { size = Ui.S.xs, color = T.mut, width = 150, align = "R" }) or Ui.inline("Llegan solo si hay autos en el salón", { size = Ui.S.xs, color = T.mut })) }, 10) }
 		if #cust == 0 then
 			table.insert(sec, Ui.empty("users", #show > 0 and "Todavía no llegó nadie. Los clientes aparecen con el tiempo de juego; una promoción atrae más." or "El salón está vacío. Enviá un auto desde el almacén para recibir clientes."))
 		end

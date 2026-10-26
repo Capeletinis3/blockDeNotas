@@ -201,6 +201,13 @@ function Garage:prompt(parent: Instance, action: string, object: string, screen:
 	pp.MaxActivationDistance = 14
 	pp.RequiresLineOfSight = false
 	pp.KeyboardKeyCode = Enum.KeyCode.E
+	-- La indicación se dibuja en el cliente con el aspecto de la V3 (WorldPrompts).
+	pp.Style = Enum.ProximityPromptStyle.Custom
+	pp:SetAttribute("CarEmpire", true)
+	local owner = self.plots[index].owner
+	if owner then
+		pp:SetAttribute("OwnerId", owner.UserId)
+	end
 	pp.Triggered:Connect(function(who: Player)
 		self.onPrompt(who, self.plots[index].owner, screen)
 	end)

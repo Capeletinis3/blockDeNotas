@@ -129,6 +129,8 @@ local function updateScale()
 		App.layout = "desktop"
 	end
 	App.narrowPhone = App.vw <= 600
+	-- Como en el CSS de la V3: a ≤900 px las grillas de 3 y 4 columnas pasan a 2.
+	Ui.gridTwo = App.vw <= 900
 	toastList.Size = UDim2.fromOffset(math.min(360, App.vw - 32), 0)
 	toastList.Position = App.layout == "phone" and UDim2.new(1, -16, 1, -90) or UDim2.new(1, -16, 1, -56)
 	toastList.AnchorPoint = Vector2.new(1, 1)
@@ -647,6 +649,14 @@ local function applySettings(settings: any)
 	end
 end
 
+local lastIdentity: string? = nil
+local function leaveEditor()
+	App.ui.editor = nil
+	if App.screens.editor and App.screens.editor.leave then
+		App.screens.editor.leave()
+	end
+end
+
 function App.onState(payload: any)
 	local hadGame = App.g ~= nil
 	App.payload = payload
@@ -655,11 +665,20 @@ function App.onState(payload: any)
 	if payload.profile then
 		applySettings(payload.profile.settings)
 	end
+	-- El borrador del editor pertenece a una empresa: al cambiar de ranura o entrar a una demostración
+	-- no se arrastra a la otra partida.
+	local identity = App.g and (tostring(payload.profile and payload.profile.active) .. "|" .. tostring(App.g.demo)) or nil
+	if App.g and hadGame and identity ~= lastIdentity then
+		leaveEditor()
+		App.closeAllDialogs()
+		App.ui.route = "juego"
+	end
+	lastIdentity = identity
 	if App.g and not hadGame and App.ui.route ~= "editor" then
 		App.ui.route = "juego"
 	elseif not App.g and hadGame then
 		App.ui.route = "menu"
-		App.ui.editor = nil
+		leaveEditor()
 	end
 	local sig = structuralSig(payload)
 	local focused = UserInputService:GetFocusedTextBox()

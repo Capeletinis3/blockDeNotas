@@ -411,7 +411,7 @@ Dialogs.order = function(box: Frame, params: any)
 			st.priority = v
 			App.renderDialog()
 		end, { fill = true, name = "PrioridadOrden" }) }, 6),
-	}, App.isPhone() and 1 or 3, nil, 10).Parent = b
+	}, 3, nil, 10).Parent = b
 	Ui.grid({
 		(Ui.kv("Costo por unidad" .. (factor > 1 and " (acelerada)" or ""), Util.money(cost), { sub = "Se cobra al empezar cada unidad" })),
 		(Ui.kv("Costo total estimado", Util.money(cost * qty), { sub = "Tenés " .. Util.money(g.money) })),

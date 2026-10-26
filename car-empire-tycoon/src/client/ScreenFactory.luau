@@ -330,7 +330,8 @@ function Screen.build(main: Frame, side: Frame)
 		local section = Ui.card({
 			Ui.row({
 				Ui.grow(Ui.inline("Línea " .. line, { size = 15, weight = W.bold })),
-				#orders > 0 and Ui.row({
+				(#orders > 0 and App.narrowPhone) and Ui.text(#orders .. " orden" .. (#orders > 1 and "es" or "") .. " · arrastrá o usá las flechas para reordenar", { size = Ui.S.xs, color = T.mut, width = 210, align = "R" })
+				or #orders > 0 and Ui.row({
 					Ui.inline(#orders .. " orden" .. (#orders > 1 and "es" or "") .. " · arrastrá", { size = Ui.S.xs, color = T.mut }),
 					Ui.icon("drag", 12, T.mut),
 					Ui.inline("o usá las flechas para reordenar", { size = Ui.S.xs, color = T.mut }),

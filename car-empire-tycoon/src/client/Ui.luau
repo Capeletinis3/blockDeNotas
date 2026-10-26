@@ -350,6 +350,11 @@ function Ui.grow(child: Instance?, props: { [string]: any }?): Frame
 		local c = child :: any
 		if c.Size.X.Scale == 0 and c.AutomaticSize ~= Enum.AutomaticSize.XY then
 			c.Size = UDim2.new(1, 0, c.Size.Y.Scale, c.Size.Y.Offset)
+		elseif c:IsA("TextLabel") and c.AutomaticSize == Enum.AutomaticSize.XY and c.TextTruncate == Enum.TextTruncate.None then
+			-- Como .grow en la V3: si falta lugar, el texto pasa a la línea siguiente en vez de desbordarse.
+			c.Size = UDim2.new(1, 0, 0, 0)
+			c.AutomaticSize = Enum.AutomaticSize.Y
+			c.TextWrapped = true
 		end
 	end
 	local flex = Instance.new("UIFlexItem")
@@ -405,8 +410,12 @@ function Ui.hr(color: Color3?): Frame
 end
 
 -- Grilla de columnas iguales (.grid2/.grid3/.grid4) con filas de alto automático.
+Ui.gridTwo = false
 function Ui.grid(children: { Instance? }, columns: number, _cellHeight: number?, gap: number?): Frame
 	local g = gap or 10
+	if Ui.gridTwo and (columns == 3 or columns == 4) then
+		columns = 2
+	end
 	local wrap = new("Frame", { Name = "Grilla", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, List = { dir = "V", gap = g } })
 	local list: { Instance } = {}
 	for _, c in children do

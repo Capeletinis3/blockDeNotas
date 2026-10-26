@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local App = require(script.Parent.App)
+require(script.Parent.WorldPrompts).start()
 App.screens.status = require(script.Parent.ScreenStatus)
 App.screens.menu = require(script.Parent.ScreenMenu)
 App.screens.company = require(script.Parent.ScreenCompany)

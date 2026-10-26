@@ -1,13 +1,20 @@
-# Car Empire Tycoon · Roblox (etapa 2: revisión y ampliación)
+# Car Empire Tycoon · Roblox (etapa 3: fidelidad con la V3)
 
 Juego tycoon de autos en Roblox (Rojo + Luau) basado en el prototipo `reference/Car-Empire-Tycoon-V3.html`.
 La V3 es la referencia visual y de reglas: catálogos, fórmulas de precio y estadísticas, fabricación,
 clientes, misiones e investigación se portaron con sus números. El servidor valida toda la economía.
+En esta etapa cada pantalla, diálogo y estado se reprodujo con la distribución, los colores, los textos y
+el comportamiento de la V3, y se comparó con capturas de las mismas escenas: ver
+[`docs/COMPARACION-V3.md`](docs/COMPARACION-V3.md) (completo / diferente / falta, adaptaciones y
+**diferencias que quedan**).
 
 > **Importante:** este trabajo se hizo sin poder ejecutar Roblox Studio. Lo verificado es: pruebas de
 > lógica (Lune), pruebas de interfaz sin pantalla sobre un entorno Roblox simulado, análisis estático
-> (Selene) y la generación del `.rbxl` con Rojo. El aspecto visual, la física, las cámaras, el
-> DataStore real y el multijugador real **no están probados**: ver la lista de pruebas en Studio al final.
+> (Selene), la generación del `.rbxl` con Rojo y una **vista previa** de la interfaz (el árbol de la
+> interfaz real dibujado con una emulación del diseño de Roblox) comparada con capturas de la V3. La
+> vista previa no dibuja el mundo 3D ni los ViewportFrame y usa otra fuente: el aspecto final, la física,
+> las cámaras, el DataStore real y el multijugador real **no están probados en Studio**: ver la lista de
+> pruebas al final.
 > No hay que considerar el juego terminado hasta pasar esa lista.
 
 ## Estructura
@@ -30,12 +37,15 @@ car-empire-tycoon/
 │   ├─ Simulation.luau         Reloj, cambio de día, fabricación, desgaste, clientes, ventas
 │   ├─ Market.luau             Mercado simulado con vendedores ficticios
 │   ├─ GameState.luau          Partida nueva, validación, migración, vista para el cliente
+│   ├─ Demo.luau               Demostraciones de la V3 (tutorial, empresa en marcha, fábrica avanzada)
 │   ├─ DataService.luau        DataStore: candado de sesión, reintentos, datos dañados intactos
 │   └─ Garage.luau             Vestíbulo + 8 garajes provisionales con ProximityPrompts
 ├─ src/client/  → StarterPlayer.StarterPlayerScripts.CarEmpireClient
 │   ├─ Main.client.luau        Registro de pantallas y diálogos, eventos, atajos
 │   ├─ App.luau                Estado, navegación, distribuciones, diálogos, valores en vivo
-│   ├─ Ui.luau, Icons.luau     Componentes con los colores de la V3 e íconos dibujados
+│   ├─ Ui.luau                 Componentes con las medidas y colores del CSS de la V3
+│   ├─ Icons.luau, IconData    Íconos de la V3 (trazos SVG convertidos a líneas)
+│   ├─ WorldPrompts.luau       Indicaciones «E …» y puntos del garaje con el aspecto de la V3
 │   ├─ ScreenMenu/Company      Inicio con ranuras de empresas y creación de empresa
 │   ├─ ScreenHud/Sheet         HUD de la sede y hojas de cada sección
 │   ├─ ScreenEditor            Editor de 4 pasos con vista 3D
@@ -45,6 +55,11 @@ car-empire-tycoon/
 ├─ tests/run.luau              Pruebas de lógica (Lune)
 ├─ tests/ui.luau + mock.luau   Pruebas de interfaz sin pantalla (cliente y servidor reales)
 ├─ tests/verify_place.luau     Verifica que un .rbxl contenga exactamente los scripts de src/
+├─ tests/preview, scenes, dump Vista previa: lleva la partida a escenas con nombre y vuelca la interfaz
+├─ tools/preview/              v3.js (capturas de la V3), render.js (dibuja la interfaz de Roblox),
+│                              compare.js (V3 arriba, Roblox abajo), roblox-layout.js (emulación)
+├─ tools/icons/                Genera IconData.luau desde los íconos de la V3
+├─ docs/COMPARACION-V3.md      Comparación pantalla por pantalla y diferencias que quedan
 └─ reference/                  Prototipo V3 original
 ```
 
@@ -70,6 +85,14 @@ lune run tests/run.luau                 # lógica del servidor y guardado
 lune run tests/ui.luau                  # interfaz sin pantalla
 lune run tests/verify_place.luau CarEmpireTycoon.rbxl
 selene src                              # análisis estático
+```
+
+**Comparación visual con la V3** (requiere Node y Playwright con Chromium):
+```
+node tools/preview/v3.js out/v3 1600 900            # capturas de la V3 (filtro opcional: 4.º argumento)
+lune run tests/preview.luau out/rbx 1600 900        # vuelca la interfaz de Roblox en las mismas escenas
+node tools/preview/render.js out/rbx out/rbx-png    # la dibuja
+node tools/preview/compare.js out/v3 out/rbx-png out/cmp
 ```
 
 ## Revisión inicial (estado que tenía la etapa 1)
@@ -147,12 +170,26 @@ selene src                              # análisis estático
 ### 6. Interfaz, imagen y mapa
 - **Hecho:** identidad de la V3; distribuciones escritorio / computadora chica / tableta / celular
   (navegación con menú, columnas que se apilan, paneles plegables, diálogos arriba para no quedar
-  bajo el teclado, áreas seguras, escala mínima 0,8 en lugar de achicar el texto); íconos dibujados
+  bajo el teclado, áreas seguras; el tamaño del texto se elige en Configuración); íconos dibujados
   en lugar de emojis; miniaturas 3D de los autos; estados de proceso/error sin perder lo escrito.
   Garajes provisionales que muestran fábrica, almacén y salón; si no hay parcela libre se espera y
   se asigna al liberarse. Los autos son modelos provisionales, no se conducen; no hay carreras.
 - **Verificado:** todas las pantallas y diálogos se construyen en escritorio y en celular sin errores
   (prueba de interfaz). **No** verificado: cómo se ven.
+
+### Etapa 3. Fidelidad con la V3
+- **Hecho:** menú, nueva empresa, HUD de la sede, las nueve secciones, el editor completo (barra
+  superior, cámaras con tecla, estadísticas, pasos, barra de herramientas, panel de 440 px, selector de
+  color, antes/después con divisor, ocultar interfaz, puntos de piezas), todos los diálogos y la
+  distribución de celular siguen la V3. Atajos de la V3 (Esc, Enter, Tab, 0–8, [ ] H 1–7, Ctrl+Z/Y).
+  Demostraciones de la V3 desde el menú. Indicaciones del garaje con la píldora y los puntos de la V3.
+- **Correcciones respecto de la V3 que se mantienen:** textos de dificultad honestos, probabilidad de la
+  negociación calculada por el servidor y sin detalles de la tirada, una sola regla de capacidad,
+  promoción solo con «Promociones» investigada, estadísticas desde agregados diarios, pestañas
+  Exterior/Interior visibles en el editor.
+- **Verificado:** 75 escenas de escritorio y 12 de celular comparadas con la V3 en la vista previa
+  (ver `docs/COMPARACION-V3.md`); 235 pruebas de lógica y 157 de interfaz sin fallas; Selene sin avisos.
+- **No verificado:** el aspecto en Studio (fuente real, 3D, ViewportFrame, BillboardGui) y los toques.
 
 ## Lista de pruebas pendientes en Roblox Studio
 
@@ -170,6 +207,14 @@ selene src                              # análisis estático
    cuenta en dos servidores (el segundo debe esperar o informar el candado, nunca pisar datos).
 10. *Test › Clients and Servers* con 2 y con 9 jugadores: empresas independientes y el noveno espera garaje.
 11. Sonido de los avisos y la opción Configuración › Sonidos.
+12. Comparar lado a lado con la V3 abierta en el navegador (misma resolución, p. ej. 1600×900, 1280×720,
+    844×390 y 390×844): menú, nueva empresa, sede, cada sección, cada paso del editor y los diálogos.
+    Anotar diferencias de corte de línea por la fuente Builder Sans.
+13. Editor: el auto queda centrado entre las herramientas, las estadísticas y el panel; el divisor de
+    antes/después recorta bien; «Ocultar interfaz» (H) y «Mostrar interfaz»; «Captura» oculta todo 5 s.
+14. Garaje: la píldora «E Escritorio de diseño» aparece al acercarse y se puede tocar en celular; los
+    puntos aparecen solo en tu garaje y al tocarlos el personaje camina hasta el objeto.
+15. Demostraciones del menú: se juegan sin tocar las ranuras y «Salir» vuelve al menú.
 
 ## Reglas de seguridad y guardado
 
