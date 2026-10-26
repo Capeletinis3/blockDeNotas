@@ -234,8 +234,9 @@ function Screen.build(main: Frame, _side: Frame)
 					Ui.text("por " .. (l and l.name or "—") .. (l and (" · tu precio " .. Util.money(l.price)) or "") .. (u and (" · margen " .. Util.money(o.amount - Util.round(o.amount * Catalog.RULES.feeRate) - u.cost) .. " después de la comisión") or ""), { size = Ui.S.xs, color = T.mut }),
 				}, 2)),
 			}, { dir = "H", v = "C", gap = 10, wrap = true })
-			for _, a in actions do
+			for i, a in actions do
 				if a then
+					(a :: any).LayoutOrder = 1e6 + i
 					a.Parent = row
 				end
 			end

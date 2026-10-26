@@ -18,6 +18,7 @@ local DesignCalc = require(Shared.DesignCalc)
 local CarModel = require(Shared.CarModel)
 
 local Ui = require(script.Parent.Ui)
+local Icons = require(script.Parent.Icons)
 local App = require(script.Parent.App)
 local T = Ui.T
 local W = Ui.W
@@ -28,18 +29,20 @@ local STEPS = { { 1, "Vehículo base" }, { 2, "Rendimiento" }, { 3, "Diseño" },
 local RAR = { ["Común"] = "cn", ["Rara"] = "cb", ["Épica"] = "cv", ["Legendaria"] = "cy" }
 -- Cámaras predefinidas (V3: CAMS). yaw 0 = desde atrás; 180 = de frente.
 local CAMS = {
-	{ "angulo", "Ángulo", 145, 16 },
-	{ "frontal", "Frontal", 180, 6 },
-	{ "lateral", "Lateral", 90, 4 },
-	{ "trasera", "Trasera", 0, 8 },
-	{ "superior", "Superior", 150, 72 },
-	{ "interior", "Interior", 180, 0 },
+	{ "angulo", "Ángulo", 145, 16, "1" },
+	{ "frontal", "Frontal", 180, 6, "2" },
+	{ "lateral", "Lateral", 90, 4, "3" },
+	{ "trasera", "Trasera", 0, 8, "4" },
+	{ "superior", "Superior", 150, 72, "5" },
+	{ "interior", "Interior", 180, 0, "6" },
+	{ "libre", "Vista libre", nil, nil, "7" },
 }
+Screen.CAMS = CAMS
 local BODY_LABELS = {
 	{ "bumper", "Paragolpes" }, { "hood", "Capó" }, { "diffuser", "Difusor" }, { "skirts", "Faldones" },
 	{ "lights", "Faros" }, { "tint", "Cristales" }, { "vinyl", "Vinilos" }, { "number", "Número de competición" }, { "logo", "Emblema de la empresa" },
 }
-local INTERIOR_LABELS = { { "seats", "Asientos" }, { "material", "Tapizado" }, { "wheel", "Volante" }, { "dash", "Tablero" }, { "ambient", "Iluminación interior" } }
+local INTERIOR_LABELS = { { "seats", "Asientos" }, { "material", "Material del tapizado" }, { "wheel", "Volante" }, { "dash", "Tablero" }, { "ambient", "Iluminación ambiental" } }
 local UPHOLSTERY = { { "#1A1B1F", "Negro" }, { "#6B3A2A", "Coñac" }, { "#D9D3C7", "Arena" }, { "#7A1F2B", "Bordó" } }
 local ZOOM_MIN, ZOOM_MAX = 0.55, 1.7
 local PITCH_MIN, PITCH_MAX = -5, 80
@@ -55,11 +58,17 @@ view3d.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
 
 local backdrop = Instance.new("Frame")
 backdrop.Size = UDim2.fromScale(1, 1)
-backdrop.BackgroundColor3 = Color3.fromHex("#0B0E18")
+backdrop.BackgroundColor3 = Color3.new(1, 1, 1)
 backdrop.BorderSizePixel = 0
 backdrop.Parent = view3d
+-- Fondo de la V3: arriba casi negro y, desde el horizonte, luz lavanda.
 local grad = Instance.new("UIGradient")
-grad.Color = ColorSequence.new(Color3.fromHex("#1A1F2E"), Color3.fromHex("#07080C"))
+grad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromHex("#0A0D18")),
+	ColorSequenceKeypoint.new(0.2, Color3.fromHex("#0C0F1D")),
+	ColorSequenceKeypoint.new(0.42, Color3.fromHex("#4E5294")),
+	ColorSequenceKeypoint.new(1, Color3.fromHex("#5F63AE")),
+})
 grad.Rotation = 90
 grad.Parent = backdrop
 
@@ -67,8 +76,8 @@ local function makeViewport(name: string): (ViewportFrame, Camera, WorldModel)
 	local vp = Instance.new("ViewportFrame")
 	vp.Name = name
 	vp.BackgroundTransparency = 1
-	vp.Ambient = Color3.fromHex("#8C93A8")
-	vp.LightColor = Color3.fromHex("#FFF1DC")
+	vp.Ambient = Color3.fromHex("#A6A9D6")
+	vp.LightColor = Color3.fromHex("#FFFFFF")
 	vp.LightDirection = Vector3.new(-0.6, -1, -0.4)
 	vp.Parent = view3d
 	local camera = Instance.new("Camera")
@@ -80,11 +89,17 @@ local function makeViewport(name: string): (ViewportFrame, Camera, WorldModel)
 	local floor = Instance.new("Part")
 	floor.Anchored = true
 	floor.Shape = Enum.PartType.Cylinder
-	floor.Size = Vector3.new(0.2, 26, 26)
-	floor.CFrame = CFrame.new(0, -0.1, 0) * CFrame.Angles(0, 0, math.pi / 2)
-	floor.Color = Color3.fromHex("#1D2029")
+	floor.Size = Vector3.new(0.3, 30, 30)
+	floor.CFrame = CFrame.new(0, -0.15, 0) * CFrame.Angles(0, 0, math.pi / 2)
+	floor.Color = Color3.fromHex("#6266B8")
 	floor.Material = Enum.Material.SmoothPlastic
 	floor.Parent = world
+	-- Borde blanco del disco giratorio.
+	local rim = floor:Clone()
+	rim.Size = Vector3.new(0.26, 30.8, 30.8)
+	rim.CFrame = CFrame.new(0, -0.18, 0) * CFrame.Angles(0, 0, math.pi / 2)
+	rim.Color = Color3.fromHex("#F2F3FF")
+	rim.Parent = world
 	return vp, camera, world
 end
 
@@ -122,12 +137,17 @@ local function setModel(target: WorldModel, current: Model?, spec: any): Model
 end
 
 -- Distancia para que el bloque del auto entre completo en el ViewportFrame según su relación de aspecto.
-function Screen.fitDistance(size: Vector3, aspect: number, fov: number, zoom: number): number
+-- fw y fh: qué fracción del ViewportFrame ocupa el rectángulo libre (como el encuadre de la V3).
+function Screen.fitDistance(size: Vector3, aspect: number, fov: number, zoom: number, fw: number?, fh: number?): number
 	local radius = size.Magnitude / 2
-	local vfov = math.rad(fov)
-	local hfov = 2 * math.atan(math.tan(vfov / 2) * math.max(0.2, aspect))
+	local tv = math.tan(math.rad(fov) / 2)
+	local vfov = 2 * math.atan(tv * (fh or 1))
+	local hfov = 2 * math.atan(tv * math.max(0.2, aspect) * (fw or 1))
 	return radius / math.sin(math.min(vfov, hfov) / 2) * 1.04 * zoom
 end
+
+-- Rectángulo libre para el auto (en píxeles de pantalla) y fracción que ocupa en el ViewportFrame.
+local frame = { fw = 1, fh = 1, rect = { x = 0, y = 0, w = 1, h = 1 }, vpPos = Vector2.new(0, 0) }
 
 local function cameraCFrame(aspect: number): CFrame
 	local target = Vector3.new(0, dims.Y * 0.42, 0)
@@ -136,7 +156,7 @@ local function cameraCFrame(aspect: number): CFrame
 		local eye = Vector3.new(-s.W * 0.2, dims.Y - s.C * 0.45, s.cabinZ + 0.8)
 		return CFrame.lookAt(eye, eye + Vector3.new(math.sin(math.rad(view.yaw)) * -1, -0.12, math.cos(math.rad(view.yaw))))
 	end
-	local dist = Screen.fitDistance(dims, aspect, 40, view.zoom)
+	local dist = Screen.fitDistance(dims, aspect, 40, view.zoom, frame.fw, frame.fh)
 	local yaw, pitch = math.rad(view.yaw), math.rad(view.pitch)
 	local offset = Vector3.new(math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)) * dist
 	return CFrame.lookAt(target + offset, target)
@@ -174,6 +194,14 @@ RunService.RenderStepped:Connect(function(dt: number)
 	compareCam.CFrame = cf
 	for _, h in hotspotButtons do
 		local pos = project(cf, h.pos, size)
+		-- Como en la V3, solo se muestran los puntos que caen dentro del rectángulo libre.
+		local r = frame.rect
+		if pos then
+			local sx, sy = pos.X + frame.vpPos.X, pos.Y + frame.vpPos.Y
+			if sx < r.x or sx > r.x + r.w or sy < r.y or sy > r.y + r.h then
+				pos = nil
+			end
+		end
 		if pos and hotspotLayer.Visible then
 			h.button.Visible = true
 			h.button.Position = UDim2.fromOffset(pos.X, pos.Y)
@@ -213,11 +241,11 @@ UserInputService.InputEnded:Connect(function(input: InputObject)
 end)
 
 local camButtons: { [string]: TextButton } = {}
+local paintTool: (TextButton, boolean) -> () = nil :: any
 function Screen.refreshCamButtons()
 	for id, b in camButtons do
 		if b.Parent then
-			b:SetAttribute("kind", id == view.cam and "v" or "default")
-			Ui.setEnabled(b, true)
+			paintTool(b, id == view.cam)
 		end
 	end
 end
@@ -225,8 +253,19 @@ end
 function Screen.setCam(id: string)
 	for _, c in CAMS do
 		if c[1] == id then
-			view.cam, view.yaw, view.pitch, view.zoom = id, c[3], c[4], 1
+			view.cam = id
+			if c[3] then
+				view.yaw, view.pitch, view.zoom = c[3], c[4], 1
+			end
 		end
+	end
+	Screen.refreshCamButtons()
+end
+
+function Screen.zoom(factor: number)
+	view.zoom = math.clamp(view.zoom * factor, ZOOM_MIN, ZOOM_MAX)
+	if view.cam ~= "interior" then
+		view.cam = "libre"
 	end
 	Screen.refreshCamButtons()
 end
@@ -286,7 +325,8 @@ end
 local function newEditor(draft: any, sourceId: string?, saved: any?, step: number?): any
 	return {
 		draft = draft, sourceId = sourceId, saved = saved, start = Util.deepCopy(draft), step = step or 1, cat = "motor",
-		colorTarget = "primary", tab = "ext", dirty = false, undo = {}, redo = {}, compare = false, hotspots = true, sel = nil,
+		colorTarget = "primary", tab = "ext", dirty = false, undo = {}, redo = {}, compare = false, split = 0.5,
+		hideUI = false, hotspots = true, sel = nil, typeFilter = "todos",
 	}
 end
 
@@ -380,8 +420,9 @@ Screen.save = save
 function Screen.askUnsaved(proceed: () -> (), title: string?)
 	local e = ed()
 	App.openDialog("unsaved", {
-		title = title or "Cambios sin guardar",
+		title = title or "Tenés cambios sin guardar",
 		name = e and e.draft.name or "",
+		pending = e and DesignCalc.devPending(App.g, e.draft) or 0,
 		onSave = function(btn: any)
 			save(btn, function()
 				App.closeDialog()
@@ -412,6 +453,7 @@ function Screen.askReplace(params: any)
 	end, "¿Abrir otro proyecto?")
 end
 
+
 -- Componentes ---------------------------------------------------------------------------------------
 local function fmtStat(k: string, v: number): string
 	if k == "accel" or k == "consumption" then
@@ -420,6 +462,196 @@ local function fmtStat(k: string, v: number): string
 	return Util.num(v)
 end
 
+local GLASS = Color3.fromHex("#111319") -- rgba(17,19,25,.9)
+local EDGE = Color3.fromHex("#2A2E39")
+local RAR_PIPS = { ["Común"] = "◆", ["Rara"] = "◆◆", ["Épica"] = "◆◆◆", ["Legendaria"] = "◆◆◆◆" }
+local TAG_LABEL = { combustion = "Combustión", electrico = "Eléctrico", offroad = "Todoterreno" }
+
+-- Conversión HSV ↔ HEX (hsv2hex/hex2hsv de la V3).
+local function hsv2hex(h: number, s: number, v: number): string
+	local function f(n: number): number
+		local k = (n + h / 60) % 6
+		return v - v * s * math.max(0, math.min(k, 4 - k, 1))
+	end
+	return string.format("#%02X%02X%02X", Util.round(f(5) * 255), Util.round(f(3) * 255), Util.round(f(1) * 255))
+end
+local function hex2hsv(hex: string): (number, number, number)
+	local n = tonumber(string.sub(hex, 2), 16) or 0x888888
+	local r, g, b = bit32.band(bit32.rshift(n, 16), 255) / 255, bit32.band(bit32.rshift(n, 8), 255) / 255, bit32.band(n, 255) / 255
+	local mx, mn = math.max(r, g, b), math.min(r, g, b)
+	local d = mx - mn
+	local h = 0
+	if d > 0 then
+		if mx == r then
+			h = ((g - b) / d) % 6
+		elseif mx == g then
+			h = (b - r) / d + 2
+		else
+			h = (r - g) / d + 4
+		end
+		h = (h * 60 + 360) % 360
+	end
+	return h, mx > 0 and d / mx or 0, mx
+end
+Screen.hsv2hex, Screen.hex2hsv = hsv2hex, hex2hsv
+
+-- Botón de cámara (.ed-tools button.t): texto a la izquierda, tecla a la derecha.
+paintTool = function(b: TextButton, on: boolean)
+	b.BackgroundColor3 = Color3.fromHex("#F5F7FA")
+	b.BackgroundTransparency = on and 0.88 or 1
+	local t = b:FindFirstChild("Etiqueta") :: TextLabel?
+	if t then
+		t.TextColor3 = on and T.tx or Color3.fromHex("#C3C8D2")
+		t.FontFace = Ui.font(on and W.bold or W.med)
+	end
+end
+local function camTool(id: string, label: string, key: string): TextButton
+	local b = Ui.new("TextButton", {
+		Name = "Camara_" .. id, Text = "", Size = UDim2.new(1, 0, 0, 40), Corner = 9, Pad = { 0, 12 },
+		List = { dir = "H", gap = 8, v = "C" },
+	}, {
+		Ui.grow((function()
+			local t = Ui.inline(label, { size = Ui.S.base, name = "Etiqueta" })
+			return t
+		end)()),
+		Ui.kbd(key),
+	})
+	-- Ui.grow envuelve la etiqueta; se la deja con el nombre esperado por paintTool.
+	local lab = b:FindFirstChild("Etiqueta", true) :: TextLabel?
+	if lab then
+		lab.Parent = b
+		lab.LayoutOrder = 1
+		local flex = Instance.new("UIFlexItem")
+		flex.FlexMode = Enum.UIFlexMode.Fill
+		flex.Parent = lab
+		for _, c in b:GetChildren() do
+			if c:IsA("Frame") and c.Name ~= "Tecla" and #c:GetChildren() == 1 then
+				c:Destroy()
+			end
+		end
+	end
+	paintTool(b, view.cam == id)
+	b.MouseEnter:Connect(function()
+		if view.cam ~= id then
+			b.BackgroundTransparency = 0.95
+		end
+	end)
+	b.MouseLeave:Connect(function()
+		paintTool(b, view.cam == id)
+	end)
+	b.Activated:Connect(function()
+		Screen.setCam(id)
+		local e = ed()
+		if id == "interior" and e and e.step == 3 and e.tab ~= "int" then
+			e.tab = "int"
+			App.forceRender()
+		end
+	end)
+	camButtons[id] = b
+	return b
+end
+
+-- Botón de la barra de herramientas (.toolbar button).
+local function toolbarBtn(icon: string, label: string?, onClick: () -> (), opts: { [string]: any }?): TextButton
+	local o = opts or {}
+	local disabled = o.disabled == true
+	local fg = disabled and Color3.fromHex("#555B68") or (o.pressed and T.tx or Color3.fromHex("#C3C8D2"))
+	local b = Ui.new("TextButton", {
+		Name = o.name or ("Herramienta_" .. icon), Text = "", Size = UDim2.fromOffset(0, 40), AutomaticSize = Enum.AutomaticSize.X,
+		Corner = 8, Pad = { 0, 12 }, BackgroundColor3 = T.vi, BackgroundTransparency = o.pressed and 0.75 or 1,
+		List = { dir = "H", gap = 7, v = "C" },
+	}, {
+		Icons.make(icon, 17, fg),
+		label and Ui.inline(label, { size = Ui.S.base, weight = W.semi, color = fg }) or nil,
+		(o.kbd and Ui.showKeys) and Ui.kbd(o.kbd) or nil,
+	})
+	b.MouseEnter:Connect(function()
+		if not disabled and not o.pressed then
+			b.BackgroundColor3 = Color3.new(1, 1, 1)
+			b.BackgroundTransparency = 0.94
+		end
+	end)
+	b.MouseLeave:Connect(function()
+		b.BackgroundColor3 = T.vi
+		b.BackgroundTransparency = o.pressed and 0.75 or 1
+	end)
+	b.Activated:Connect(function()
+		if disabled then
+			return
+		end
+		if Ui.onClickSound then
+			Ui.onClickSound()
+		end
+		onClick()
+	end)
+	return b
+end
+
+-- Tarjeta flotante con el fondo semitransparente del editor.
+local function glass(children: { Instance? }, props: { [string]: any }): Frame
+	local p = table.clone(props)
+	p.BackgroundColor3 = p.BackgroundColor3 or Color3.fromHex("#0E1016")
+	p.BackgroundTransparency = p.BackgroundTransparency or 0.08
+	p.Stroke = p.Stroke or EDGE
+	return Ui.new("Frame", p, children)
+end
+
+-- Fila de opciones (optRow de la V3): etiqueta .fl y botones .opt con el costo en gris.
+local function optRow(label: string?, options: { any }, current: any, onPick: (any) -> (), opts: { [string]: any }?): Frame
+	local o = opts or {}
+	local items = {}
+	for _, op in options do
+		local value, text, cost, extra = op[1], op[2], op[3], op[4]
+		local full = text .. ((cost and cost > 0 and o.cost ~= false) and (" <font size=\"11\" color=\"#A3AAB8\">+" .. Util.money(cost) .. "/u</font>") or "")
+		table.insert(items, Ui.opt(full, current == value, function()
+			onPick(value)
+		end, { height = o.height or 36, disabled = extra ~= nil and extra.disabled ~= nil, why = extra and extra.disabled, name = o.name and (o.name .. "_" .. tostring(value)) or nil }))
+	end
+	local holder = o.columns and Ui.grid(items, o.columns, nil, 8) or Ui.row(items, 8, { wrap = true })
+	if not label then
+		return holder
+	end
+	return Ui.col({ Ui.fl(label), holder }, 6)
+end
+
+local function section(title: string, children: { Instance? }, gap: number?, right: Instance?): Frame
+	local list: { Instance? } = { right and Ui.row({ Ui.grow(Ui.lbl(title)), right }, 10) or Ui.lbl(title) }
+	for _, c in children do
+		table.insert(list, c)
+	end
+	return Ui.col(list, gap or 10)
+end
+
+-- Edición continua (deslizadores y selector de color): el 3D se actualiza al instante y el cambio
+-- entra en deshacer una sola vez, al soltar.
+local liveBefore: any = nil
+local function liveEdit(fn: (any) -> (), final: boolean)
+	local e = ed()
+	if not liveBefore then
+		liveBefore = Util.deepCopy(e.draft)
+	end
+	fn(e.draft)
+	Screen.sync3d()
+	if final then
+		local before = liveBefore
+		liveBefore = nil
+		if not (DesignCalc.sameSpec(before, e.draft) and before.name == e.draft.name) then
+			table.insert(e.undo, before)
+			if #e.undo > 80 then
+				table.remove(e.undo, 1)
+			end
+			table.clear(e.redo)
+		end
+		recomputeDirty()
+		App.forceRender()
+	end
+end
+
+local function labeledSlider(label: string, valueText: string, slider: Instance): Frame
+	return Ui.col({ Ui.row({ Ui.grow(Ui.inline(label, { size = Ui.S.xs, color = T.mut })), Ui.inline(valueText, { size = Ui.S.xs, weight = W.bold }) }, 6), slider }, 4)
+end
+
+-- Estadísticas (statsCard) --------------------------------------------------------------------------
 local function statsCard(g: any, d: any): Frame
 	local e = ed()
 	local cur = DesignCalc.computeDesign(g, d)
@@ -430,7 +662,7 @@ local function statsCard(g: any, d: any): Frame
 		prev = DesignCalc.computeDesign(g, t)
 	end
 	local rows: { Instance? } = {
-		Ui.row({ Ui.lbl("Estadísticas"), Ui.spacer(), Ui.inline(prev and "vista previa de la pieza elegida" or "diseño actual", { size = Ui.S.xs, color = T.mut }) }, 8),
+		Ui.row({ Ui.grow(Ui.lbl("Estadísticas")), Ui.inline(prev and "vista previa de la pieza elegida" or "diseño actual", { size = Ui.S.xs, color = T.mut }) }, 8),
 	}
 	for _, s in Catalog.STAT_DEFS do
 		local k, label, unit, dir, max = s[1], s[2], s[3], s[5], s[6]
@@ -442,40 +674,136 @@ local function statsCard(g: any, d: any): Frame
 		local u = k == "consumption" and cur.consUnit or unit
 		table.insert(rows, Ui.col({
 			Ui.row({
-				Ui.grow(Ui.text(label .. "  <font color=\"#6C7382\">" .. u .. "</font>", { size = Ui.S.sm, color = T.mut })),
-				Ui.inline(fmtStat(k, nv), { size = 14, weight = W.bold }),
+				Ui.grow(Ui.text(label .. " <font size=\"11\" color=\"#6C7382\">" .. u .. "</font>", { size = 13, color = T.mut })),
+				Ui.inline(fmtStat(k, nv), { size = 13, weight = W.bold }),
 				dlt ~= 0 and Ui.inline((good and "▲ " or "▼ ") .. (dlt > 0 and "+" or "") .. fmtStat(k, dlt), { size = Ui.S.xs, weight = W.bold, color = good and T.gr or T.re2 }) or nil,
 			}, 6),
 			(Ui.bar(pct, dlt ~= 0 and (good and T.gr or T.re) or nil)),
-		}, 4))
+		}, 4, { Pad = { 3, 0 } }))
 	end
-	table.insert(rows, Ui.text("Barras: más llena = mejor. En aceleración, frenado, consumo y peso, un número menor es mejor.", { size = Ui.S.xs, color = T.mut }))
-	return Ui.card(rows, { bg = Color3.fromHex("#0E1016"), transparency = 0.08, radius = 14, stroke = Color3.fromHex("#2A2E39"), gap = 6, pad = { 12, 14 }, name = "Estadisticas" })
+	table.insert(rows, Ui.text("Barras: más llena = mejor. En aceleración, frenado, consumo y peso, un número menor es mejor.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }))
+	return glass({ Ui.col(rows, 6) }, { Name = "Estadisticas", Size = UDim2.fromOffset(300, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 14, Pad = { 12, 14 } })
 end
 
-local function section(title: string, children: { Instance? }, gap: number?): Frame
-	local list: { Instance? } = { Ui.lbl(title) }
-	for _, c in children do
-		table.insert(list, c)
+-- Cabecera y pie del panel (edHeader / edFooter) ---------------------------------------------------------
+local function panelHeader(e: any, d: any, title: string): Frame
+	local status = e.sourceId and (e.dirty and "Cambios sin guardar" or "Guardado") or "Borrador"
+	local statusKind = status == "Guardado" and "cg" or (status == "Borrador" and "cn" or "cy")
+	local progress = {}
+	for n = 1, 4 do
+		table.insert(progress, Ui.grow(Ui.new("Frame", { Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = n < e.step and T.gr or (n == e.step and T.vi or Color3.fromHex("#292D38")), BackgroundTransparency = 0, Corner = 2 }), { Size = UDim2.new(0, 0, 0, 3) }))
 	end
-	return Ui.col(list, gap or 8)
+	return Ui.col({
+		Ui.row({
+			Ui.grow(Ui.lbl("Diseñar · Paso " .. e.step .. " de 4")),
+			Ui.button("", "default", function()
+				App.openDialog("help", { screen = "editor" })
+			end, { small = true, icon = "help", iconSize = 16, name = "AyudaEditor" }),
+			Ui.button("", "default", function()
+				App.go("juego")
+			end, { small = true, icon = "x", iconSize = 16, name = "CerrarEditor" }),
+		}, 8),
+		Ui.row({
+			Ui.grow(Ui.text(title, { size = Ui.S.h1, weight = W.bold })),
+			Ui.inline(d.name, { size = Ui.S.sm, color = T.mut }),
+			Ui.chip("● " .. status, statusKind),
+		}, 10),
+		Ui.row(progress, 4),
+	}, 10, { Name = "Cabecera", Pad = { 14, 18, 12, 18 } })
 end
 
-local function optRow(options: { any }, current: any, onPick: (any) -> (), opts: { [string]: any }?): Frame
-	local items = {}
-	for _, o in options do
-		local value, label, extra = o[1], o[2], o[3]
-		table.insert(items, Ui.opt(label, current == value, function()
-			onPick(value)
-		end, { height = 36, disabled = extra and extra.disabled ~= nil, why = extra and extra.disabled }))
+local function panelFooter(g: any, e: any, d: any, c: any, next: Instance?): Frame
+	local pend = DesignCalc.devPending(g, d)
+	local money = Ui.inline(Util.money(g.money), { size = Ui.S.sm, weight = W.bold })
+	App.live(function(gg: any)
+		money.Text = Util.money(gg.money)
+	end)
+	local back
+	if e.step > 1 then
+		back = Ui.button("Volver", "default", function()
+			Screen.goStep(e.step - 1)
+		end, { kbd = "[", flex = 1, name = "VolverPaso" })
+	else
+		back = Ui.button("Salir", "default", function()
+			App.go("juego")
+		end, { kbd = "Esc", flex = 1, name = "SalirEditor" })
 	end
-	if opts and opts.columns then
-		return Ui.grid(items, App.isPhone() and math.min(opts.columns, 3) or opts.columns, opts.height or 36)
-	end
-	return Ui.row(items, 6, { wrap = true })
+	next = next or Ui.button("Siguiente", "p", function()
+		Screen.goStep(e.step + 1)
+	end, { kbd = "]", flex = 2, name = "Siguiente" })
+	local foot = Ui.col({
+		Ui.between("Desarrollo pendiente <font size=\"11\">(se paga una vez al guardar)</font>", pend > 0 and Util.money(pend) or "$0", { color = pend > 0 and T.or_ or T.gr }),
+		Ui.between("Fabricación por unidad <font size=\"11\">(se paga al fabricar)</font>", Util.money(c.unitCost)),
+		Ui.row({ Ui.grow(Ui.text("Dinero disponible", { size = Ui.S.sm, color = T.mut })), money }, 10),
+		pend > g.money and Ui.note("y", "No alcanza el dinero para pagar el desarrollo al guardar. Elegí piezas más simples o conseguí fondos.") or nil,
+		Ui.row({ back, next }, 10),
+	}, 9, { Name = "Pie", BackgroundColor3 = Color3.fromHex("#0D0F14"), BackgroundTransparency = 0, Pad = { 12, 18, 14, 18 } })
+	return Ui.col({ Ui.new("Frame", { Name = "BordePie", Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromHex("#1F222B"), BackgroundTransparency = 0 }), foot }, 0)
 end
 
--- Paso 1: vehículo base -------------------------------------------------------------------------------
+function Screen.goStep(n: number)
+	local e = ed()
+	n = math.clamp(n, 1, 4)
+	if n > 1 and Util.charCount(Util.trim(e.draft.name)) < 2 then
+		App.toast("error", "Poné un nombre al proyecto antes de seguir.")
+		return
+	end
+	e.step = n
+	e.sel = nil
+	App.forceRender()
+end
+
+-- Paso 1: vehículo base (panelBase) ----------------------------------------------------------------------
+local function baseCard(g: any, d: any, x: any): TextButton
+	local block = DesignCalc.baseAvailable(g, x)
+	local on = d.baseId == x.id
+	local t = DesignCalc.newDraft(g, x.id)
+	local st = DesignCalc.computeDesign(g, t)
+	local paid = Util.contains(g.devPaid, "base:" .. x.id)
+	local thumb = Ui.ico("car", block and Color3.fromHex("#666666") or T.tx, block and Color3.fromHex("#22252E") or Color3.fromHex(t.paint.primary), 38, { w = 56, h = 38, radius = 8, iconSize = 22 })
+	if not block then
+		local gr = Instance.new("UIGradient")
+		gr.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromHex("#11131A"))
+		gr.Rotation = 35
+		gr.Parent = thumb
+	end
+	local tags = {}
+	for _, tg in x.tags do
+		table.insert(tags, TAG_LABEL[tg] or tg)
+	end
+	local card = Ui.new("TextButton", {
+		Name = "Base_" .. x.id, Text = "", BackgroundColor3 = on and T.vi or T.p2, BackgroundTransparency = on and 0.9 or 0,
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12, Stroke = on and { T.vi, 2 } or T.line2, Pad = 12,
+		List = { dir = "H", gap = 12, v = "T" },
+	}, {
+		thumb,
+		Ui.grow(Ui.col({
+			Ui.row({ Ui.grow(Ui.text(x.name, { size = Ui.S.base, weight = W.bold })), Ui.chip(RAR_PIPS[x.rarity] .. " " .. x.rarity, RAR[x.rarity]) }, 10),
+			Ui.text(Catalog.TYPES[x.type] .. "   Nv. " .. x.level .. "   Licencia " .. (paid and "<font color=\"#42E58D\"><b>pagada</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(x.dev) .. "</b></font>")) .. "   Base/u " .. Util.money(x.unit), { size = Ui.S.xs, color = T.mut }),
+			Ui.text(st.hp .. " hp   0–100 en " .. Util.num(st.accel, 1) .. " s   Manejo " .. st.handling .. "   " .. table.concat(tags, " · "), { size = Ui.S.xs, color = T.mut }),
+			block and Ui.why("🔒 " .. block) or nil,
+		}, 5)),
+	})
+	if block then
+		local stroke = card:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Transparency = 0.2
+		end
+	end
+	card.Activated:Connect(function()
+		if block then
+			App.toast("error", x.name .. ": " .. block)
+			return
+		end
+		if d.baseId ~= x.id then
+			change(function(dd)
+				DesignCalc.changeBase(g, dd, x.id)
+			end)
+		end
+	end)
+	return card
+end
+
 local function panelBase(g: any, d: any, body: Instance)
 	local e = ed()
 	local nameBox = Ui.input(d.name, "Nombre del proyecto", function(text: string)
@@ -485,66 +813,74 @@ local function panelBase(g: any, d: any, body: Instance)
 				dd.name = t
 			end)
 		end
-	end)
-	section("Nombre del proyecto", { nameBox, Ui.text("Entre 2 y 24 caracteres; no puede repetir el nombre de otro diseño tuyo.", { size = Ui.S.xs, color = T.mut }) }).Parent = body
+	end, { name = "NombreProyecto" })
+	Ui.col({ Ui.fl("Nombre del proyecto"), nameBox }, 6).Parent = body
 	local company = g.company.name
-	section("Marca", { optRow({ { company, company }, { company .. " Sport", company .. " Sport" }, { company .. " Lux", company .. " Lux" } }, d.brand, function(v)
-		change(function(dd)
-			dd.brand = v
-		end)
-	end) }).Parent = body
+	local brands = { { company, company }, { company .. " Sport", company .. " Sport" }, { company .. " Lux", company .. " Lux" } }
 	local gens = {}
 	for _, gen in DesignCalc.GENERATIONS do
 		table.insert(gens, { gen, gen })
 	end
-	section("Año o generación", { optRow(gens, d.generation, function(v)
-		change(function(dd)
-			dd.generation = v
-		end)
-	end) }).Parent = body
 	local b = Catalog.base(d.baseId)
+	local offroad = Util.contains(b.tags, "offroad")
 	local chassis = {}
 	for _, k in Catalog.CHASSIS_ORDER do
 		local ch = Catalog.CHASSIS[k]
-		local blocked = ch.need and not Util.contains(b.tags, ch.need)
-		table.insert(chassis, { k, k .. (ch.unit > 0 and (" (+" .. Util.money(ch.unit) .. "/u)") or ""), blocked and { disabled = "Solo para SUV y pickup" } or nil })
+		local blocked = ch.need == "offroad" and not offroad
+		table.insert(chassis, { k, k .. (ch.unit > 0 and (" (+" .. Util.money(ch.unit) .. "/u)") or "") .. (blocked and " · solo SUV/pickup" or ""), blocked })
 	end
-	section("Chasis", { optRow(chassis, d.chassis, function(v)
-		change(function(dd)
-			dd.chassis = v
-		end)
-	end) }).Parent = body
 	local segs = {}
 	for _, k in Catalog.SEGMENT_ORDER do
 		table.insert(segs, { k, k .. " · precio ×" .. Util.num(Catalog.SEGMENTS[k].price, 2) })
 	end
-	section("Segmento de mercado", { optRow(segs, d.segment, function(v)
-		change(function(dd)
-			dd.segment = v
-		end)
-	end) }).Parent = body
+	local function sel(label: string, value: any, options: { any }, field: string): Frame
+		return Ui.col({ Ui.fl(label), Ui.select(value, options, function(v: any)
+			change(function(dd)
+				dd[field] = v
+			end)
+		end, { fill = true, name = "Lista_" .. field }) }, 6)
+	end
+	Ui.grid({
+		sel("Marca", d.brand, brands, "brand"),
+		sel("Año o generación", d.generation, gens, "generation"),
+		sel("Chasis", d.chassis, chassis, "chassis"),
+		sel("Segmento de mercado", d.segment, segs, "segment"),
+	}, 2, nil, 12).Parent = body
 	local objs = {}
 	for _, k in Catalog.OBJECTIVE_ORDER do
 		table.insert(objs, { k, k })
 	end
-	section("Objetivo del vehículo (atrae a clientes con esa preferencia)", { optRow(objs, d.objective, function(v)
-		change(function(dd)
-			dd.objective = v
-		end)
-	end, { columns = 3 }) }).Parent = body
-	local q = {}
-	for i, tier in Catalog.QUALITY_TIERS do
-		table.insert(q, { i - 1, tier })
+	Ui.col({
+		Ui.text("<b>Objetivo del vehículo</b> <font size=\"11\" color=\"#A3AAB8\">(atrae a clientes con esa preferencia)</font>", { size = Ui.S.fl, color = T.tx2 }),
+		optRow(nil, objs, d.objective, function(v)
+			change(function(dd)
+				dd.objective = v
+			end)
+		end, { columns = 3, height = 40, name = "Objetivo" }),
+	}, 8).Parent = body
+	-- Marcas debajo del deslizador, repartidas como justify-content: space-between.
+	local tickRow = Ui.new("Frame", { Name = "Marcas", Size = UDim2.new(1, 0, 0, 16) })
+	local nt = #Catalog.QUALITY_TIERS
+	for i, q in Catalog.QUALITY_TIERS do
+		local t = Ui.inline(q, { size = Ui.S.xs, color = T.mut })
+		local a = (i - 1) / (nt - 1)
+		t.AnchorPoint = Vector2.new(a, 0)
+		t.Position = UDim2.fromScale(a, 0)
+		t.Parent = tickRow
 	end
-	section("Calidad de terminación · " .. Catalog.QUALITY_TIERS[d.quality + 1] .. " · +" .. Util.money(d.quality * 700) .. "/u · +" .. d.quality * 3 .. " calidad", { optRow(q, d.quality, function(v)
-		change(function(dd)
-			dd.quality = v
-		end)
-	end, { columns = 6 }) }).Parent = body
+	Ui.col({
+		Ui.row({ Ui.grow(Ui.fl("Calidad de terminación")), Ui.chip(Catalog.QUALITY_TIERS[d.quality + 1] .. " · +" .. Util.money(d.quality * 700) .. "/u · +" .. d.quality * 3 .. " calidad", "cv") }, 10),
+		Ui.slider(d.quality, 0, 5, 1, function(v: number, final: boolean)
+			liveEdit(function(dd)
+				dd.quality = math.clamp(Util.round(v), 0, 5)
+			end, final)
+		end, { name = "Calidad" }),
+		tickRow,
+	}, 6).Parent = body
 
 	local filt = e.typeFilter or "todos"
 	local typeOpts = { { "todos", "Todos" } }
-	for _, k in Util.keys(Catalog.TYPES) do
+	for _, k in Catalog.TYPE_ORDER do
 		table.insert(typeOpts, { k, Catalog.TYPES[k] })
 	end
 	local available = 0
@@ -554,50 +890,77 @@ local function panelBase(g: any, d: any, body: Instance)
 		end
 	end
 	local cards: { Instance? } = {
-		Ui.row({ Ui.lbl("Modelo base"), Ui.spacer(), Ui.inline(available .. " de " .. #Catalog.BASES .. " disponibles", { size = Ui.S.xs, color = T.mut }) }, 8),
-		optRow(typeOpts, filt, function(v)
+		Ui.row({ Ui.grow(Ui.lbl("Modelo base")), Ui.inline(available .. " de " .. #Catalog.BASES .. " disponibles", { size = Ui.S.xs, color = T.mut }) }, 8),
+		optRow(nil, typeOpts, filt, function(v)
 			e.typeFilter = v
 			App.forceRender()
-		end),
+		end, { height = 34, name = "Tipo" }),
 	}
+	local any = false
 	for _, x in Catalog.BASES do
 		if filt == "todos" or x.type == filt then
-			local block = DesignCalc.baseAvailable(g, x)
-			local on = d.baseId == x.id
-			local t = DesignCalc.newDraft(g, x.id)
-			local st = DesignCalc.computeDesign(g, t)
-			local paid = Util.contains(g.devPaid, "base:" .. x.id)
-			local card = Ui.new("TextButton", {
-				Name = "Base_" .. x.id, Text = "", BackgroundColor3 = on and Color3.fromHex("#1A1833") or T.p2, BackgroundTransparency = block and 0.25 or 0,
-				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12, Stroke = on and { T.vi, 2 } or T.line2, Pad = 12,
-				List = { dir = "H", gap = 12, v = "T" },
-			}, {
-				block and Ui.ico("lock", T.mut2, Color3.fromHex("#22252E"), 44) or Ui.carThumb(t, 76, 46),
-				Ui.grow(Ui.col({
-					Ui.row({ Ui.grow(Ui.text(x.name, { size = 15, weight = W.bold })), Ui.chip(x.rarity, RAR[x.rarity]) }, 6),
-					Ui.text(Catalog.TYPES[x.type] .. " · Nv. " .. x.level .. " · " .. st.hp .. " hp · " .. Util.money(st.unitCost) .. "/u · precio " .. Util.money(st.price), { size = Ui.S.xs, color = T.mut }),
-					block and Ui.chip(block, "cy") or Ui.chip(paid and "Licencia pagada" or ("Licencia " .. Util.money(x.dev) .. " (una vez)"), paid and "cg" or "co"),
-				}, 5)),
-			})
-			card.Activated:Connect(function()
-				if block then
-					App.toast("aviso", x.name .. ": " .. block)
-					return
-				end
-				if d.baseId ~= x.id then
-					change(function(dd)
-						DesignCalc.changeBase(g, dd, x.id)
-					end)
-				end
-			end)
-			table.insert(cards, card)
+			any = true
+			table.insert(cards, baseCard(g, d, x))
 		end
+	end
+	if not any then
+		table.insert(cards, Ui.empty(nil, "No hay modelos de ese tipo."))
 	end
 	Ui.col(cards, 8).Parent = body
 end
 
--- Paso 2: rendimiento -------------------------------------------------------------------------------------
-local function panelPerf(g: any, d: any, body: Instance): TextButton?
+-- Paso 2: rendimiento (panelPerf) ---------------------------------------------------------------------
+local function partCard(g: any, d: any, e: any, p: any, selId: string): TextButton
+	local cat = e.cat
+	local b = Catalog.base(d.baseId)
+	local bl = DesignCalc.partBlock(g, d, p)
+	local on = p.id == selId
+	local eq = p.id == d.parts[cat]
+	local paid = Util.contains(g.devPaid, cat .. ":" .. p.id)
+	local stk = nil
+	for _, x in g.parts do
+		if x.cat == cat and x.id == p.id then
+			stk = x
+		end
+	end
+	local devText
+	if b.defaults[cat] == p.id then
+		devText = "<font color=\"#42E58D\"><b>incluido en la licencia</b></font>"
+	elseif p.proto > 0 then
+		devText = paid and "<font color=\"#42E58D\"><b>pagado</b></font>" or (stk and "<font color=\"#42E58D\"><b>cubierto con tu pieza</b></font>" or ("<font color=\"#F5F7FA\"><b>" .. Util.money(p.proto) .. "</b></font>"))
+	else
+		devText = "<font color=\"#42E58D\"><b>sin costo</b></font>"
+	end
+	local chips: { Instance? } = {
+		eq and Ui.chip("✓ Equipada", "cb") or (bl and Ui.chip("🔒 Bloqueada", "cy") or Ui.chip("● Disponible", "cg")),
+		Ui.chip("Nv. " .. p.level, "cn"),
+		stk and Ui.chip(stk.qty .. " en inventario", "cv") or nil,
+	}
+	local card = Ui.new("TextButton", {
+		Name = "Pieza_" .. p.id, Text = "", BackgroundColor3 = on and T.vi or T.p2, BackgroundTransparency = on and 0.9 or 0,
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12, Stroke = on and { T.vi, 2 } or T.line2, Pad = 12,
+		List = { dir = "H", gap = 12, v = "T" },
+	}, {
+		Ui.ico(bl and "lock" or "wrench", bl and Color3.fromHex("#666666") or T.vi2, T.input, 46, { radius = 10, iconSize = 22, stroke = Color3.fromHex("#23262F") }),
+		Ui.grow(Ui.col({
+			Ui.row({ Ui.grow(Ui.text(p.name, { size = Ui.S.base, weight = W.bold })), Ui.chip(p.rarity, RAR[p.rarity]) }, 10),
+			Ui.row(chips, 5, { wrap = true }),
+			Ui.text(p.desc, { size = Ui.S.xs, color = T.mut }),
+			Ui.row({
+				Ui.grow(Ui.text("Desarrollo: " .. devText, { size = Ui.S.xs, color = T.mut })),
+				Ui.inline("Fabricación: <font color=\"#F5F7FA\"><b>+" .. Util.money(p.unit) .. "/u</b></font>", { size = Ui.S.xs, color = T.mut }),
+			}, 8),
+			bl and Ui.why(bl) or nil,
+		}, 5)),
+	})
+	card.Activated:Connect(function()
+		e.sel = p.id
+		App.forceRender()
+	end)
+	return card
+end
+
+local function panelPerf(g: any, d: any, body: Instance): Instance
 	local e = ed()
 	local cat = e.cat
 	local cats = {}
@@ -606,53 +969,28 @@ local function panelPerf(g: any, d: any, body: Instance): TextButton?
 			e.cat = c[1]
 			e.sel = nil
 			App.forceRender()
-		end, { height = 34, size = 12 }))
+		end, { height = 36, size = 12, name = "Categoria_" .. c[1] }))
 	end
-	section("Categoría", { Ui.grid(cats, App.isPhone() and 3 or 4, 34, 6) }).Parent = body
+	section("Categoría", { Ui.grid(cats, 4, nil, 8) }, 8).Parent = body
 	local list = Catalog.partsOf(cat)
 	local current = Catalog.part(cat, d.parts[cat])
 	local selId = e.sel or d.parts[cat]
 	local selP = Catalog.part(cat, selId)
-	local b = Catalog.base(d.baseId)
 	local cards: { Instance? } = {
-		Ui.row({ Ui.lbl(Catalog.catLabel(cat) .. " · " .. #list .. " opciones"), Ui.spacer(), Ui.inline("Instalada: " .. (current and current.name or "—"), { size = Ui.S.xs, color = T.mut }) }, 8),
+		Ui.row({
+			Ui.grow(Ui.lbl(Catalog.catLabel(cat) .. " · " .. #list .. " opciones")),
+			Ui.inline("Instalada: <font color=\"#F5F7FA\"><b>" .. (current and current.name or "—") .. "</b></font>", { size = Ui.S.xs, color = T.mut }),
+		}, 8),
 	}
 	for _, p in list do
-		local bl = DesignCalc.partBlock(g, d, p)
-		local on = p.id == selId
-		local eq = p.id == d.parts[cat]
-		local paid = Util.contains(g.devPaid, cat .. ":" .. p.id)
-		local stock = DesignCalc.partInStock(g, cat, p.id)
-		local isDefault = b.defaults[cat] == p.id
-		local chips: { Instance? } = {}
-		table.insert(chips, eq and Ui.chip("✓ Equipada", "cb") or (bl and Ui.chip("Bloqueada", "cy") or Ui.chip("● Disponible", "cg")))
-		if p.proto > 0 and not isDefault then
-			table.insert(chips, Ui.chip(paid and "Desarrollo pagado" or (stock and "Pieza en inventario" or ("Desarrollo " .. Util.money(p.proto))), (paid or stock) and "cg" or "co"))
-		end
-		if p.unit > 0 then
-			table.insert(chips, Ui.chip("+" .. Util.money(p.unit) .. "/u", "cn"))
-		end
-		local card = Ui.new("TextButton", {
-			Name = "Pieza_" .. p.id, Text = "", BackgroundColor3 = on and Color3.fromHex("#1A1833") or T.p2, BackgroundTransparency = bl and 0.25 or 0,
-			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12, Stroke = on and { T.vi, 2 } or T.line2, Pad = 12,
-			List = { dir = "H", gap = 12, v = "T" },
-		}, {
-			Ui.ico(bl and "lock" or "wrench", bl and T.mut2 or T.vi2, T.input, 40),
-			Ui.grow(Ui.col({
-				Ui.row({ Ui.grow(Ui.text(p.name, { size = 14, weight = W.bold })), Ui.chip(p.rarity, RAR[p.rarity]) }, 6),
-				Ui.row(chips, 5, { wrap = true }),
-				Ui.text(bl and bl or p.desc, { size = Ui.S.xs, color = bl and T.ye or T.mut }),
-			}, 5)),
-		})
-		card.Activated:Connect(function()
-			e.sel = p.id
-			App.forceRender()
-		end)
-		table.insert(cards, card)
+		table.insert(cards, partCard(g, d, e, p, selId))
 	end
 	Ui.col(cards, 8).Parent = body
 
-	if selP and selP.id ~= d.parts[cat] then
+	local installed = selP == nil or selP.id == d.parts[cat]
+	local block = selP and DesignCalc.partBlock(g, d, selP)
+	if selP and not installed then
+		local b = Catalog.base(d.baseId)
 		local t = Util.deepCopy(d)
 		t.parts[cat] = selP.id
 		local a, n = DesignCalc.computeDesign(g, d), DesignCalc.computeDesign(g, t)
@@ -662,39 +1000,143 @@ local function panelPerf(g: any, d: any, body: Instance): TextButton?
 			local dl = Util.round((n[k] - a[k]) * 10) / 10
 			if dl ~= 0 then
 				local good = (dir > 0 and dl > 0) or (dir < 0 and dl < 0)
-				table.insert(chips, Ui.chip((dl > 0 and "+" or "") .. fmtStat(k, dl) .. " " .. (k == "consumption" and "" or (string.gsub(unit, "0–100", ""))) .. " " .. string.lower(label), good and "cg" or "cr"))
+				local u = k == "consumption" and "" or (string.gsub(unit, "índice 0–100", ""))
+				table.insert(chips, Ui.chip((dl > 0 and "+" or "") .. fmtStat(k, dl) .. " " .. u .. " " .. string.lower(label), good and "cg" or "cr"))
 			end
 		end
 		local du = n.unitCost - a.unitCost
 		table.insert(chips, Ui.chip((du >= 0 and "+" or "") .. Util.money(du) .. " por unidad", du > 0 and "cy" or "cg"))
-		local block = DesignCalc.partBlock(g, d, selP)
-		local free = Util.contains(g.devPaid, cat .. ":" .. selP.id) or selP.proto == 0 or b.defaults[cat] == selP.id
-		section("Comparación con la pieza instalada", {
-			Ui.text((current and current.name or "—") .. "  →  <b>" .. selP.name .. "</b>", { size = Ui.S.sm }),
-			Ui.row(chips, 6, { wrap = true }),
-			block and Ui.note("y", block) or Ui.note("b", free and "Sin costo de desarrollo." or (DesignCalc.partInStock(g, cat, selP.id) and "Usará la pieza de tu inventario al guardar (cubre el desarrollo)." or ("El desarrollo de " .. Util.money(selP.proto) .. " se cobra una sola vez al guardar el diseño."))),
-		}).Parent = body
-		if block then
-			return Ui.button("No se puede instalar", "default", nil, { disabled = true, why = block, flex = 2, icon = "lock" })
+		local paid = Util.contains(g.devPaid, cat .. ":" .. selP.id)
+		local stock = DesignCalc.partInStock(g, cat, selP.id)
+		local noteText
+		if paid or selP.proto == 0 or b.defaults[cat] == selP.id then
+			noteText = "Su desarrollo ya está pagado o incluido: instalarla no cuesta nada extra."
+		elseif stock then
+			noteText = "Usarás una pieza de tu inventario en lugar de pagar el desarrollo."
+		else
+			noteText = "El desarrollo (" .. Util.money(selP.proto) .. ") se paga una sola vez al guardar el diseño. Cambiar de pieza antes de guardar no cobra nada."
 		end
-		return Ui.button("Instalar en el prototipo", "p", function()
-			change(function(dd)
-				dd.parts[cat] = selP.id
-			end)
-			e.sel = nil
-			App.forceRender()
-		end, { flex = 2, icon = "wrench" })
+		local compare = Ui.card({
+			Ui.grow(Ui.col({ Ui.inline("ACTUAL", { size = Ui.S.xs, color = T.mut }), Ui.text(current and current.name or "—", { size = Ui.S.sm, weight = W.bold }) }, 4, { Pad = 12 })),
+			Ui.new("Frame", { Size = UDim2.new(0, 1, 0, 52), BackgroundColor3 = Color3.fromHex("#23262F"), BackgroundTransparency = 0 }),
+			Ui.grow(Ui.col({ Ui.inline("ELEGIDA", { size = Ui.S.xs, color = Color3.fromHex("#C4BDFF") }), Ui.text(selP.name, { size = Ui.S.sm, weight = W.bold }) }, 4, { Pad = 12, BackgroundColor3 = T.vi, BackgroundTransparency = 0.92 })),
+		}, { dir = "H", gap = 0, pad = 0, name = "Comparacion" })
+		compare.ClipsDescendants = true
+		section("Comparación con la pieza instalada", {
+			compare,
+			Ui.row(chips, 6, { wrap = true }),
+			block and Ui.note("y", block) or Ui.note("b", noteText),
+		}, 8).Parent = body
 	end
-	return nil
+	if installed then
+		return Ui.button("Siguiente", "p", function()
+			Screen.goStep(3)
+		end, { kbd = "]", flex = 2, name = "Siguiente" })
+	elseif block then
+		return Ui.button("No se puede instalar", "default", nil, { disabled = true, why = block, flex = 2, icon = "lock", name = "Instalar" })
+	end
+	return Ui.button("Instalar en el prototipo", "p", function()
+		local p = selP :: any
+		change(function(dd)
+			dd.parts[cat] = p.id
+		end)
+		e.sel = nil
+		local paid = Util.contains(g.devPaid, cat .. ":" .. p.id)
+		local stock = DesignCalc.partInStock(g, cat, p.id)
+		App.toast("ok", p.name .. " instalada en el prototipo. " .. ((p.proto > 0 and not paid) and (stock and "Usará la pieza de tu inventario al guardar." or ("Desarrollo de " .. Util.money(p.proto) .. " se cobra al guardar.")) or "Sin costo de desarrollo."))
+		App.forceRender()
+	end, { flex = 2, icon = "wrench", name = "Instalar" })
 end
 
--- Paso 3: diseño exterior e interior ---------------------------------------------------------------------
-local function panelDesign(g: any, d: any, body: Instance)
-	local e = ed()
-	local tab = e.tab or "ext"
-	local tabs = {}
+-- Paso 3: diseño (panelDesign) -----------------------------------------------------------------------------
+-- Selector de saturación y brillo (#sv): fondo del tono, degradé blanco → transparente y negro desde abajo.
+local function svPicker(color: string, onPick: (string, boolean) -> ()): Frame
+	local h, s, v = hex2hsv(color)
+	local box = Ui.new("Frame", {
+		Name = "SaturacionBrillo", Size = UDim2.new(1, 0, 0, 130), BackgroundColor3 = Color3.fromHex(hsv2hex(h, 1, 1)), BackgroundTransparency = 0,
+		Corner = 10, Active = true, ClipsDescendants = true,
+	})
+	local white = Ui.new("Frame", { Name = "Blanco", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0, Parent = box })
+	local wg = Instance.new("UIGradient")
+	wg.Transparency = NumberSequence.new(0, 1)
+	wg.Parent = white
+	local black = Ui.new("Frame", { Name = "Negro", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0, Parent = box })
+	local bg = Instance.new("UIGradient")
+	bg.Transparency = NumberSequence.new(1, 0)
+	bg.Rotation = 90
+	bg.Parent = black
+	local knob = Ui.new("Frame", {
+		Name = "Puntero", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(s, 1 - v), Size = UDim2.fromOffset(18, 18),
+		BackgroundColor3 = Color3.fromHex(color), BackgroundTransparency = 0, Corner = 9, Stroke = { T.tx, 3 }, ZIndex = 3, Parent = box,
+	})
+	local dragging = false
+	local function set(pos: Vector3, final: boolean)
+		local w, hh = box.AbsoluteSize.X, box.AbsoluteSize.Y
+		if w <= 0 or hh <= 0 then
+			return
+		end
+		local ns = math.clamp((pos.X - box.AbsolutePosition.X) / w, 0, 1)
+		local nv = math.clamp(1 - (pos.Y - box.AbsolutePosition.Y) / hh, 0, 1)
+		knob.Position = UDim2.fromScale(ns, 1 - nv)
+		local hex = hsv2hex(h, ns, nv)
+		knob.BackgroundColor3 = Color3.fromHex(hex)
+		onPick(hex, final)
+	end
+	box.InputBegan:Connect(function(input: InputObject)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			Ui.dragging = true
+			set(input.Position, false)
+		end
+	end)
+	local moveConn = UserInputService.InputChanged:Connect(function(input: InputObject)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			set(input.Position, false)
+		end
+	end)
+	local endConn = UserInputService.InputEnded:Connect(function(input: InputObject)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+			dragging = false
+			Ui.dragging = false
+			set(input.Position, true)
+		end
+	end)
+	box.Destroying:Connect(function()
+		moveConn:Disconnect()
+		endConn:Disconnect()
+		if dragging then
+			Ui.dragging = false
+		end
+	end)
+	return box
+end
+
+local function swatchRow(list: { any }, current: string?, onPick: (string) -> (), name: string): Frame
+	local items = {}
+	for _, c in list do
+		local sw = Ui.swatch(c[1], current ~= nil and string.upper(current) == string.upper(c[1]), function()
+			onPick(c[1])
+		end)
+		sw.Name = name .. "_" .. c[2]
+		table.insert(items, sw)
+	end
+	return Ui.row(items, 10, { wrap = true })
+end
+
+local function designTabs(e: any): Frame
+	local row = Ui.row({}, 18)
 	for _, t in { { "ext", "Exterior" }, { "int", "Interior" } } do
-		table.insert(tabs, Ui.opt(t[2], tab == t[1], function()
+		local on = (e.tab or "ext") == t[1]
+		local b = Ui.new("TextButton", { Name = "Zona_" .. t[1], Text = "", Size = UDim2.fromOffset(0, 44), AutomaticSize = Enum.AutomaticSize.X }, {
+			Ui.inline(t[2], { size = 15, weight = W.semi, color = on and T.tx or T.mut }),
+			on and Ui.new("Frame", { Name = "Subrayado", BackgroundColor3 = T.vi, BackgroundTransparency = 0, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 2), ZIndex = 2 }) or nil,
+		})
+		local lab = b:FindFirstChildOfClass("TextLabel")
+		if lab then
+			lab.Size = UDim2.new(0, 0, 1, 0)
+			lab.AutomaticSize = Enum.AutomaticSize.X
+		end
+		b.Activated:Connect(function()
 			e.tab = t[1]
 			if t[1] == "int" then
 				Screen.setCam("interior")
@@ -702,48 +1144,58 @@ local function panelDesign(g: any, d: any, body: Instance)
 				Screen.setCam("angulo")
 			end
 			App.forceRender()
-		end, { height = 36, width = 120 }))
+		end)
+		b.Parent = row
 	end
-	Ui.row(tabs, 6).Parent = body
-	if tab == "int" then
-		Ui.note("b", "La cámara Interior muestra asientos, tapizado, volante, tablero e iluminación.").Parent = body
+	return Ui.new("Frame", { Name = "Zonas", Size = UDim2.new(1, 0, 0, 44) }, {
+		Ui.new("Frame", { Name = "Linea", BackgroundColor3 = T.line2, BackgroundTransparency = 0, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 1) }),
+		row,
+	})
+end
+
+local function panelDesign(g: any, d: any, body: Instance)
+	local e = ed()
+	designTabs(e).Parent = body
+	if (e.tab or "ext") == "int" then
+		Ui.note("b", "Usá la cámara <b>Interior</b> para ver asientos, tapizado, volante, tablero e iluminación.").Parent = body
+		Ui.button("Ver interior", "default", function()
+			Screen.setCam("interior")
+		end, { small = true, icon = "cam", name = "VerInterior" }).Parent = body
 		for _, grp in INTERIOR_LABELS do
 			local opts = {}
 			for _, o in Catalog.INTERIOR[grp[1]] do
 				local fx = {}
-				for k, v in o[4] do
-					table.insert(fx, (v > 0 and "+" or "") .. v .. " " .. ({ comfort = "comodidad", q = "calidad", grip = "manejo" })[k])
+				for _, k in { "comfort", "q", "grip" } do
+					local v = o[4][k]
+					if v then
+						table.insert(fx, (v > 0 and "+" or "") .. v .. " " .. ({ comfort = "comodidad", q = "calidad", grip = "manejo" })[k])
+					end
 				end
-				table.insert(opts, { o[1], o[2] .. (o[3] > 0 and (" +" .. Util.money(o[3]) .. "/u") or "") .. (#fx > 0 and (" (" .. table.concat(fx, ", ") .. ")") or "") })
+				table.insert(opts, { o[1], o[2] .. (#fx > 0 and (" (" .. table.concat(fx, ", ") .. ")") or ""), o[3] })
 			end
-			section(grp[2], { optRow(opts, d.interior[grp[1]], function(v)
+			optRow(grp[2], opts, d.interior[grp[1]], function(v)
 				change(function(dd)
 					dd.interior[grp[1]] = v
 				end)
-			end) }).Parent = body
+			end, { name = "Interior_" .. grp[1] }).Parent = body
 		end
-		local ups = {}
-		for _, c in UPHOLSTERY do
-			table.insert(ups, Ui.swatch(c[1], string.upper(d.interior.color) == c[1], function()
-				change(function(dd)
-					dd.interior.color = c[1]
-				end)
-			end))
-		end
-		section("Color del tapizado", { Ui.row(ups, 8) }).Parent = body
-		Ui.text("El cuero usa 1 de cuero por unidad y el tablero digital 1 de electrónica.", { size = Ui.S.xs, color = T.mut }).Parent = body
+		Ui.col({ Ui.fl("Color del tapizado"), swatchRow(UPHOLSTERY, d.interior.color, function(c)
+			change(function(dd)
+				dd.interior.color = c
+			end)
+		end, "Tapizado") }, 6).Parent = body
 		return
 	end
 
 	local target = e.colorTarget
 	local color = d.paint[target]
-	local swatches = {}
-	for _, p in Catalog.PAINTS do
-		table.insert(swatches, Ui.swatch(p[1], string.upper(color) == string.upper(p[1]), function()
-			change(function(dd)
-				dd.paint[target] = string.upper(p[1])
-			end)
-		end))
+	local h = hex2hsv(Util.isHexColor(color) and color or "#888888")
+	local targets = {}
+	for _, t in { { "primary", "Principal" }, { "secondary", "Secundario" } } do
+		table.insert(targets, Ui.opt(t[2], target == t[1], function()
+			e.colorTarget = t[1]
+			App.forceRender()
+		end, { height = 34, name = "Color_" .. t[1] }))
 	end
 	local hexBox = Ui.input(color, "#D6333F", function(text: string)
 		local v = string.upper(Util.trim(text))
@@ -757,89 +1209,87 @@ local function panelDesign(g: any, d: any, body: Instance)
 				end)
 			end
 		else
-			App.toast("error", "Código de color inválido. Usá el formato #RRGGBB.")
+			App.toast("error", "Código inválido. Usá el formato #RRGGBB.")
 			App.forceRender()
 		end
-	end, { width = 140 })
-	section("Pintura", {
-		optRow({ { "primary", "Principal" }, { "secondary", "Secundario" } }, target, function(v)
-			e.colorTarget = v
-			App.forceRender()
-		end),
-		target == "secondary" and Ui.text("El color secundario pinta techo, pilares, alerón, faldones y vinilos.", { size = Ui.S.xs, color = T.mut }) or nil,
-		Ui.row(swatches, 8, { wrap = true }),
-		Ui.row({
-			Ui.new("Frame", { Size = UDim2.fromOffset(44, 44), BackgroundColor3 = Color3.fromHex(color), BackgroundTransparency = 0, Corner = 10, Stroke = T.btnLine }),
-			Ui.inline("HEX", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-			hexBox,
-		}, 10),
-		Ui.text("Intensidad del color", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		optRow({ { 70, "70 %" }, { 85, "85 %" }, { 100, "100 %" }, { 115, "115 %" }, { 130, "130 %" } }, d.paint.intensity, function(v)
-			change(function(dd)
-				dd.paint.intensity = v
-			end)
-		end),
-		Ui.text("Brillo del barniz", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		optRow({ { 0, "0 %" }, { 30, "30 %" }, { 60, "60 %" }, { 80, "80 %" }, { 100, "100 %" } }, d.paint.gloss, function(v)
-			change(function(dd)
-				dd.paint.gloss = v
-			end)
-		end),
-	}, 10).Parent = body
-
+	end, { name = "Hex", font = "mono" })
+	hexBox.FontFace = Font.fromEnum(Enum.Font.RobotoMono)
+	local hueSlider = Ui.slider(Util.round(h), 0, 359, 1, function(v: number, final: boolean)
+		liveEdit(function(dd)
+			local _, cs, cv = hex2hsv(dd.paint[target])
+			dd.paint[target] = hsv2hex(v, math.max(cs, 0.05), math.max(cv, 0.05))
+		end, final)
+	end, { color = Color3.fromHex(hsv2hex(h, 0.9, 1)), name = "Tono" })
 	local finishes = {}
 	for _, k in Catalog.FINISH_ORDER do
 		local f = Catalog.FINISHES[k]
 		local locked = f.research and not DesignCalc.has(g, f.research)
-		table.insert(finishes, { k, k .. (f.unit > 0 and (" +" .. Util.money(f.unit) .. "/u") or ""), locked and { disabled = "Requiere investigar «" .. DesignCalc.researchName(f.research) .. "»" } or nil })
+		table.insert(finishes, { k, k, f.unit, locked and { disabled = "Requiere investigar «" .. DesignCalc.researchName(f.research) .. "»" } or nil })
 	end
-	section("Acabado", { optRow(finishes, d.paint.finish, function(v)
-		change(function(dd)
-			dd.paint.finish = v
-		end)
-	end, { columns = 2 }) }).Parent = body
+	section("Pintura", {
+		target == "secondary" and Ui.text("El color secundario pinta el techo, los pilares, los faldones y los vinilos.", { size = Ui.S.xs, color = T.mut }) or nil,
+		svPicker(color, function(hex: string, final: boolean)
+			liveEdit(function(dd)
+				dd.paint[target] = hex
+			end, final)
+		end),
+		Ui.col({ Ui.inline("Tono", { size = Ui.S.xs, color = T.mut }), hueSlider }, 4),
+		Ui.row({
+			Ui.new("Frame", { Size = UDim2.fromOffset(44, 44), BackgroundColor3 = Color3.fromHex(color), BackgroundTransparency = 0, Corner = 10, Stroke = Color3.fromHex("#333847") }),
+			Ui.fl("HEX"),
+			Ui.grow(hexBox),
+		}, 10),
+		Ui.text("Escribí un código como #D6333F y presioná Enter.", { size = Ui.S.xs, color = T.mut }),
+		swatchRow(Catalog.PAINTS, color, function(c)
+			change(function(dd)
+				dd.paint[target] = string.upper(c)
+			end)
+		end, "Pintura"),
+		Ui.grid({
+			labeledSlider("Intensidad", d.paint.intensity .. "%", Ui.slider(d.paint.intensity, 50, 130, 1, function(v: number, final: boolean)
+				liveEdit(function(dd)
+					dd.paint.intensity = math.clamp(Util.round(v), 50, 130)
+				end, final)
+			end, { name = "Intensidad" })),
+			labeledSlider("Brillo del barniz", d.paint.gloss .. "%", Ui.slider(d.paint.gloss, 0, 100, 1, function(v: number, final: boolean)
+				liveEdit(function(dd)
+					dd.paint.gloss = math.clamp(Util.round(v), 0, 100)
+				end, final)
+			end, { name = "Barniz" })),
+		}, 2, nil, 12),
+		optRow("Acabado", finishes, d.paint.finish, function(v)
+			change(function(dd)
+				dd.paint.finish = v
+			end)
+		end, { name = "Acabado" }),
+	}, 10, Ui.row(targets, 8, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY })).Parent = body
 
-	local sizes = {}
-	for s = 16, 22 do
-		table.insert(sizes, { s, s .. "″" })
-	end
 	local styles = {}
-	for _, s in Catalog.WHEEL_STYLES do
-		table.insert(styles, { s[1], s[2] })
-	end
-	local rims, calipers = {}, {}
-	for _, r in Catalog.RIM_COLORS do
-		table.insert(rims, Ui.swatch(r[1], d.wheels.rim == r[1], function()
-			change(function(dd)
-				dd.wheels.rim = r[1]
-			end)
-		end))
-	end
-	for _, cc in Catalog.CALIPER_COLORS do
-		table.insert(calipers, Ui.swatch(cc[1], d.caliper == cc[1], function()
-			change(function(dd)
-				dd.caliper = cc[1]
-			end)
-		end))
+	for _, st in Catalog.WHEEL_STYLES do
+		table.insert(styles, { st[1], st[2], 0 })
 	end
 	section("Ruedas y frenos", {
-		Ui.text("Llantas", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		optRow(styles, d.wheels.style, function(v)
+		optRow("Llantas", styles, d.wheels.style, function(v)
 			change(function(dd)
 				dd.wheels.style = v
 			end)
-		end),
-		Ui.text("Tamaño · " .. d.wheels.size .. "″ · +" .. Util.money(math.max(0, d.wheels.size - 17) * 150) .. "/u", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		optRow(sizes, d.wheels.size, function(v)
+		end, { name = "Llantas" }),
+		Ui.col({ Ui.fl("Color de llantas"), swatchRow(Catalog.RIM_COLORS, d.wheels.rim, function(c)
 			change(function(dd)
-				dd.wheels.size = v
+				dd.wheels.rim = c
 			end)
-		end, { columns = 7 }),
-		Ui.text("Color de llantas", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		Ui.row(rims, 8),
-		Ui.text("Pinzas de freno", { size = Ui.S.sm, color = T.tx2, weight = W.semi }),
-		Ui.row(calipers, 8),
-	}, 8).Parent = body
+		end, "Llanta") }, 6),
+		labeledSlider("Tamaño de las ruedas", d.wheels.size .. "″ · +" .. Util.money(math.max(0, d.wheels.size - 17) * 150) .. "/u", Ui.slider(d.wheels.size, 16, 22, 1, function(v: number, final: boolean)
+			liveEdit(function(dd)
+				dd.wheels.size = math.clamp(Util.round(v), 16, 22)
+			end, final)
+		end, { name = "Rodado" })),
+		Ui.col({ Ui.fl("Pinzas de freno"), swatchRow(Catalog.CALIPER_COLORS, d.caliper, function(c)
+			change(function(dd)
+				dd.caliper = c
+			end)
+		end, "Pinzas") }, 6),
+	}, 10).Parent = body
 
 	local bodyRows: { Instance? } = {
 		Ui.card({
@@ -849,45 +1299,52 @@ local function panelDesign(g: any, d: any, body: Instance)
 					dd.spoiler = not dd.spoiler
 				end)
 			end),
-		}, { dir = "H", v = "C", gap = 10 }),
+		}, { dir = "H", v = "C", gap = 10, name = "Aleron" }),
 	}
 	for _, grp in BODY_LABELS do
 		local opts = {}
 		for _, o in Catalog.BODY_OPTS[grp[1]] do
-			table.insert(opts, { o[1], o[2] .. (o[3] > 0 and (" +" .. Util.money(o[3]) .. "/u") or "") })
+			table.insert(opts, { o[1], o[2], o[3] })
 		end
-		table.insert(bodyRows, Ui.text(grp[2], { size = Ui.S.sm, color = T.tx2, weight = W.semi }))
-		table.insert(bodyRows, optRow(opts, d.body[grp[1]], function(v)
+		table.insert(bodyRows, optRow(grp[2], opts, d.body[grp[1]], function(v)
 			change(function(dd)
 				dd.body[grp[1]] = v
 			end)
-		end))
+		end, { name = "Carroceria_" .. grp[1] }))
 	end
 	local plateBox = Ui.input(d.body.plate or "", "CET 001", function(text: string)
-		local v = string.sub(string.upper(text):gsub("[^A-Z0-9 %-]", ""), 1, 9)
+		local v = string.sub((string.gsub(string.upper(text), "[^A-Z0-9 %-]", "")), 1, 9)
 		if v ~= d.body.plate then
 			change(function(dd)
 				dd.body.plate = v
 			end)
 		end
-	end, { width = 160 })
-	table.insert(bodyRows, Ui.row({ Ui.text("Matrícula", { size = Ui.S.sm, color = T.tx2, weight = W.semi, width = 90 }), plateBox }, 10))
-	section("Carrocería y detalles", bodyRows, 8).Parent = body
+	end, { name = "Matricula" })
+	table.insert(bodyRows, Ui.col({ Ui.fl("Matrícula"), plateBox }, 6))
+	section("Carrocería y detalles", bodyRows, 10).Parent = body
 end
 
--- Paso 4: revisión -----------------------------------------------------------------------------------------
-local function panelReview(g: any, d: any, c: any, body: Instance)
+-- Paso 4: revisión (panelReview) -----------------------------------------------------------------------------
+local function panelReview(g: any, d: any, c: any, body: Instance): Instance
 	local e = ed()
 	local b = Catalog.base(d.baseId)
 	local items = DesignCalc.devItems(g, d)
 	local pend = DesignCalc.devPending(g, d)
+	local saved = e.sourceId ~= nil and not e.dirty
+	local unit = nil
+	for _, u in g.units do
+		if u.designId == e.sourceId and u.status == "almacen" then
+			unit = u
+			break
+		end
+	end
 	local margin = c.price - c.unitCost
 	local paintName = Catalog.colorName(Catalog.PAINTS, d.paint.primary) or d.paint.primary
 	Ui.card({
 		Ui.text(d.name, { size = 17, weight = W.bold }),
 		Ui.text(d.brand .. " · " .. b.name .. " (" .. Catalog.TYPES[b.type] .. ") · " .. d.generation .. " · " .. d.chassis .. " · " .. d.segment .. " · objetivo " .. string.lower(d.objective), { size = Ui.S.sm, color = T.mut }),
-		Ui.text("Pintura " .. paintName .. " " .. string.lower(d.paint.finish) .. " · secundario " .. d.paint.secondary .. " · llantas " .. d.wheels.size .. "″ " .. string.lower(d.wheels.style) .. " · " .. (d.spoiler and "con alerón" or "sin alerón") .. " · calidad " .. Catalog.QUALITY_TIERS[d.quality + 1] .. " · matrícula " .. tostring(d.body.plate), { size = Ui.S.sm, color = T.mut }),
-	}, { gap = 4 }).Parent = body
+		Ui.text("Pintura " .. paintName .. " " .. string.lower(d.paint.finish) .. " · secundario " .. d.paint.secondary .. " · llantas " .. d.wheels.size .. "″ · " .. (d.spoiler and "con alerón" or "sin alerón") .. " · calidad " .. Catalog.QUALITY_TIERS[d.quality + 1], { size = Ui.S.sm, color = T.mut }),
+	}, { gap = 4, name = "Resumen" }).Parent = body
 	local mats = {}
 	for _, k in Util.keys(c.mats) do
 		table.insert(mats, c.mats[k] .. " " .. string.lower(Catalog.matLabel(k)))
@@ -897,32 +1354,29 @@ local function panelReview(g: any, d: any, c: any, body: Instance)
 			(Ui.kv("Fabricación por unidad", Util.money(c.unitCost))),
 			(Ui.kv("Precio recomendado", Util.money(c.price))),
 			(Ui.kv("Margen por unidad", (margin >= 0 and "▲ " or "▼ ") .. Util.money(margin), { color = margin >= 0 and T.gr or T.re2 })),
-			(Ui.kv("Producción", Util.gameDuration(c.build), { sub = "de juego por unidad (velocidad base)" })),
-		}, 2, 78),
-		(Ui.kv("Materiales por unidad", table.concat(mats, ", "), { valueSize = 13 })),
-	}).Parent = body
+			(Ui.kv("Producción", Util.gameDuration(c.build), { sub = "de juego por unidad a velocidad base" })),
+			(Ui.kv("Materiales por unidad", table.concat(mats, ", "), { valueSize = Ui.S.sm })),
+			(Ui.kv("Calidad", c.quality .. " / 100")),
+		}, 2, nil, 10),
+	}, 8).Parent = body
 	local devRows: { Instance? } = {}
 	for _, it in items do
-		table.insert(devRows, Ui.line(it.label, it.paid and "Pagado" or (it.stock and "Pieza en inventario" or Util.money(it.cost)), { color = (it.paid or it.stock) and T.gr or T.tx }))
+		table.insert(devRows, Ui.line(it.label, it.paid and "Pagado" or (it.stock and "Pieza en inventario" or Util.money(it.cost)), { size = Ui.S.sm, color = (it.paid or it.stock) and T.gr or T.tx }))
 	end
-	table.insert(devRows, Ui.hr())
-	table.insert(devRows, Ui.line("Pendiente", Util.money(pend), { color = pend > 0 and T.or_ or T.gr, leftWeight = W.bold }))
-	if DesignCalc.designDiscount(g) > 0 then
-		table.insert(devRows, Ui.text("Incluye −" .. Util.round(DesignCalc.designDiscount(g) * 100) .. " % del estudio de diseño.", { size = Ui.S.xs, color = T.mut }))
-	end
-	section("Desarrollo (pago único al guardar)", { Ui.card(devRows, { gap = 0, pad = { 4, 12 } }) }).Parent = body
+	table.insert(devRows, Ui.line("<b>Pendiente</b>", Util.money(pend), { border = false, color = pend > 0 and T.or_ or T.gr }))
+	section("Desarrollo (pago único al guardar)", { Ui.card(devRows, { gap = 0, pad = { 4, 12 } }) }, 8).Parent = body
 	local statRows = {}
 	for _, s in Catalog.STAT_DEFS do
 		local k = s[1]
-		table.insert(statRows, Ui.line(s[2], fmtStat(k, c[k]) .. " " .. (k == "consumption" and c.consUnit or s[3]), { leftColor = T.mut, size = 12 }))
+		table.insert(statRows, Ui.between(s[2], fmtStat(k, c[k]) .. " <font size=\"11\" color=\"#A3AAB8\">" .. (k == "consumption" and c.consUnit or (string.gsub(s[3], "índice 0–100", "/100"))) .. "</font>"))
 	end
-	section("Estadísticas finales", { Ui.card({ Ui.grid(statRows, App.isPhone() and 1 or 2, 26, 4) }, { pad = { 6, 12 } }) }).Parent = body
+	section("Estadísticas finales", { Ui.card({ Ui.grid(statRows, 2, nil, 8) }, { pad = 12 }) }, 8).Parent = body
 	local partRows = {}
 	for _, cat in Catalog.CATS do
 		local p = Catalog.part(cat[1], d.parts[cat[1]])
-		table.insert(partRows, Ui.line(cat[2], p and p.name or "—", { leftColor = T.mut, weight = W.med }))
+		table.insert(partRows, Ui.line(cat[2], p and p.name or "—", { size = Ui.S.sm, leftColor = T.mut, weight = W.med }))
 	end
-	section("Piezas instaladas", { Ui.card(partRows, { gap = 0, pad = { 4, 12 } }) }).Parent = body
+	section("Piezas instaladas", { Ui.card(partRows, { gap = 0, pad = { 4, 12 } }) }, 8).Parent = body
 	local warns = {}
 	if c.comfort < 50 and (d.objective == "Familiar" or d.objective == "Lujo") then
 		table.insert(warns, "La comodidad (" .. c.comfort .. ") es baja para un objetivo " .. string.lower(d.objective) .. ".")
@@ -948,23 +1402,43 @@ local function panelReview(g: any, d: any, c: any, body: Instance)
 		for _, w in warns do
 			table.insert(nodes, Ui.note("y", w))
 		end
-		section("Advertencias", nodes).Parent = body
+		section("Advertencias", nodes, 8).Parent = body
 	end
-	local saved = e.sourceId ~= nil and not e.dirty
 	local tpl
 	tpl = Ui.button("Guardar como plantilla", "default", function()
 		App.request("saveDesign", { draft = e.draft, template = true }, { button = tpl })
-	end, { small = true, icon = "copy" })
+	end, { small = true, name = "GuardarPlantilla" })
+	local one
+	one = Ui.button("Crear una unidad", "default", function()
+		-- Como la V3: una unidad con prioridad alta en la línea con menos órdenes.
+		local best, bn = 1, math.huge
+		for l = 1, g.derived.caps.lines do
+			local n = 0
+			for _, o in g.production.orders do
+				if o.line == l then
+					n += 1
+				end
+			end
+			if n < bn then
+				best, bn = l, n
+			end
+		end
+		App.request("createOrder", { designId = e.sourceId, qty = 1, line = best, priority = "alta" }, { button = one })
+	end, { small = true, disabled = not saved, why = "Guardá el diseño primero", name = "CrearUnidad" })
 	section("Acciones", {
-		Ui.row({
-			Ui.button("Enviar a producción", "default", function()
-				App.openDialog("order", { designId = e.sourceId })
-			end, { small = true, disabled = not saved, why = "Guardá el diseño primero", icon = "factory" }),
+		Ui.grid({
+			tpl,
 			Ui.button("Probar el vehículo", "default", function()
 				App.openDialog("testDrive", {})
-			end, { small = true, icon = "play" }),
-			tpl,
-			Ui.button("Descartar cambios", "d", function()
+			end, { small = true, name = "ProbarVehiculo" }),
+			one,
+			Ui.button("Enviar a producción", "default", function()
+				App.openDialog("order", { designId = e.sourceId, wide = true })
+			end, { small = true, disabled = not saved, why = "Guardá el diseño primero", name = "EnviarProduccion" }),
+			Ui.button("Publicar en el mercado", "default", function()
+				App.openDialog("publish", { unitId = unit and unit.id })
+			end, { small = true, disabled = unit == nil, why = "Necesitás una unidad terminada de este diseño en el almacén", name = "PublicarMercado" }),
+			Ui.button("Cancelar cambios", "d", function()
 				App.openDialog("confirm", {
 					title = "¿Descartar los cambios?",
 					body = e.saved and "El proyecto vuelve al último guardado." or "El proyecto vuelve a cómo estaba al empezar.",
@@ -978,77 +1452,155 @@ local function panelReview(g: any, d: any, c: any, body: Instance)
 						App.forceRender()
 					end,
 				})
-			end, { small = true, disabled = not e.dirty, why = "No hay cambios para descartar" }),
-			Ui.button("Nuevo proyecto", "q", function()
-				App.go("editor", { new = true })
-			end, { small = true, icon = "plus" }),
-		}, 8, { wrap = true }),
-		not saved and Ui.text("Enviar a producción requiere el diseño guardado.", { size = Ui.S.xs, color = T.mut }) or nil,
-	}).Parent = body
+			end, { small = true, disabled = not e.dirty and e.sourceId ~= nil, why = "No hay cambios", name = "CancelarCambios" }),
+		}, 2, nil, 8),
+		not saved and Ui.text("Crear una unidad, producir y publicar requieren el diseño guardado.", { size = Ui.S.xs, color = T.mut }) or nil,
+		(saved and not unit) and Ui.text("Para publicar, primero fabricá una unidad.", { size = Ui.S.xs, color = T.mut }) or nil,
+	}, 8).Parent = body
+	local sb
+	sb = Ui.button((e.sourceId and "Guardar cambios" or "Guardar diseño") .. (pend > 0 and (" · " .. Util.money(pend)) or ""), "p", function()
+		save(sb)
+	end, { flex = 2, icon = "check", name = "GuardarDiseno", disabled = saved or pend > g.money, why = saved and "No hay cambios para guardar" or "Fondos insuficientes" })
+	return sb
 end
 
--- Construcción ---------------------------------------------------------------------------------------------
-function Screen.build(parent: Instance)
-	local g = App.g
-	if not ed() then
-		Screen.enter({})
-	end
+-- Vista 3D --------------------------------------------------------------------------------------------------
+-- Reconstruye el modelo si cambió algo visible (también durante un arrastre, sin reconstruir la interfaz).
+function Screen.sync3d()
 	local e = ed()
-	view3d.Enabled = true
+	if not e then
+		return
+	end
 	local d = e.draft
-	local c = DesignCalc.computeDesign(g, d)
 	local sig = visualSig(d)
 	if sig ~= modelSig or not currentModel then
 		modelSig = sig
 		currentModel = setModel(world, currentModel, d)
 		dims = CarModel.dims(d)
 	end
-	-- Comparación antes/después: el último guardado (o el inicio del proyecto) a la izquierda.
-	local before = e.saved or e.start
-	compareVp.Visible = e.compare
 	if e.compare then
+		local before = e.saved or e.start
 		local bsig = visualSig(before)
 		if bsig ~= compareSig or not compareModel then
 			compareSig = bsig
 			compareModel = setModel(compareWorld, compareModel, before)
 		end
 	end
+end
 
+-- Geometría de la pantalla (editorLayout de la V3): barra superior, panel, controles inferiores y el
+-- rectángulo libre donde se encuadra el auto.
+local function geometry(e: any): any
+	local Wd, Hd = App.vw, App.vh
 	local phone = App.isPhone()
-	local k = App.scale()
-	local topH = phone and 56 or 64
-	local panelW = phone and math.min(App.vw * 0.48, 420) or math.min(440, App.vw * 0.36)
-	local statsW = (App.layout == "desktop" or App.layout == "compact") and 300 or 0
-	local vpLeft = statsW > 0 and (14 + statsW + 10) or 0
-	local vpRight = panelW + 28
-	local vpBottom = phone and 70 or 150
-	local areaW = App.vw - vpLeft - vpRight
-	if e.compare then
-		compareVp.Position = UDim2.fromOffset(vpLeft * k, topH * k)
-		compareVp.Size = UDim2.new(0, areaW / 2 * k, 1, -(topH + vpBottom) * k)
-		viewport.Position = UDim2.fromOffset((vpLeft + areaW / 2) * k, topH * k)
-		viewport.Size = UDim2.new(0, areaW / 2 * k, 1, -(topH + vpBottom) * k)
+	local landscape = Wd > Hd
+	local G = { phone = phone, landscape = landscape, topH = phone and 56 or 64 }
+	if phone then
+		if landscape then
+			local pw = math.min(Wd * 0.46, 420)
+			G.panel = { x = Wd - pw, y = 56, w = pw, h = Hd - 56 }
+			G.bottom = { l = 8, r = pw + 8, b = 8 }
+		else
+			G.panel = { x = 0, y = Hd * 0.5, w = Wd, h = Hd * 0.5 }
+			G.bottom = { l = 8, r = 8, b = Hd * 0.5 + 8 }
+		end
 	else
-		viewport.Position = UDim2.fromOffset(vpLeft * k, topH * k)
-		viewport.Size = UDim2.new(1, -(vpLeft + vpRight) * k, 1, -(topH + vpBottom) * k)
+		local pw = Wd <= 1100 and 380 or 440
+		G.panel = { x = Wd - 14 - pw, y = 78, w = pw, h = Hd - 92 }
+		G.bottom = { l = 218, r = pw + 28, b = 16 }
 	end
+	G.statsShown = not phone and (e.step == 2 or e.step == 3)
+	-- Rectángulo libre
+	local l, t, r, b = 0, 0, Wd, Hd
+	if not e.hideUI then
+		t = G.topH
+		if phone and not landscape then
+			b = math.min(b, G.panel.y)
+		else
+			r = math.min(r, G.panel.x)
+		end
+		local controls = 44 + 10 + 48 + (e.compare and 42 or 0)
+		b = math.min(b, Hd - G.bottom.b - controls)
+		if not phone then
+			l = G.statsShown and 518 or 204
+		end
+	end
+	local m = 10
+	l, t, r, b = l + m, t + m, r - m, b - m
+	if r - l < 160 then
+		l = math.max(0, r - 160)
+	end
+	if b - t < 140 then
+		t = math.max(0, b - 140)
+	end
+	G.rect = { x = l, y = t, w = r - l, h = b - t }
+	return G
+end
 
-	-- Puntos de piezas sobre la vista.
+local function placeViewports(e: any, G: any)
+	local k = App.scale()
+	local r = G.rect
+	local cx, cy = r.x + r.w / 2, r.y + r.h / 2
+	-- El ViewportFrame se centra en el rectángulo libre y cubre toda la pantalla: así el piso y el fondo
+	-- siguen detrás de los paneles, como el lienzo 3D de la V3, y el auto queda en el centro del hueco.
+	local halfW = math.max(cx, App.vw - cx)
+	local halfH = math.max(cy, App.vh - cy)
+	local pos = Vector2.new(cx - halfW, cy - halfH)
+	local size = Vector2.new(halfW * 2, halfH * 2)
+	frame.fw, frame.fh = r.w / size.X, r.h / size.Y
+	frame.rect = { x = r.x * k, y = r.y * k, w = r.w * k, h = r.h * k }
+	frame.vpPos = pos * k
+	viewport.Position = UDim2.fromOffset(pos.X * k, pos.Y * k)
+	viewport.Size = UDim2.fromOffset(size.X * k, size.Y * k)
+	-- Antes / después: la vista anterior se recorta a la izquierda del divisor (el mismo encuadre).
+	local clip = view3d:FindFirstChild("RecorteAntes") :: Frame?
+	if not clip then
+		local c = Instance.new("Frame")
+		c.Name = "RecorteAntes"
+		c.BackgroundTransparency = 1
+		c.ClipsDescendants = true
+		c.Parent = view3d
+		clip = c
+	end
+	local cl = clip :: Frame
+	cl.Visible = e.compare == true
+	cl.Position = UDim2.fromOffset(0, 0)
+	cl.Size = UDim2.fromOffset(App.vw * (e.split or 0.5) * k, App.vh * k)
+	compareVp.Parent = cl
+	compareVp.Visible = e.compare == true
+	compareVp.Position = viewport.Position
+	compareVp.Size = viewport.Size
+	compareVp.ZIndex = 2
+end
+
+local function hotspots(e: any, d: any)
+	local k = App.scale()
 	hotspotLayer:ClearAllChildren()
 	table.clear(hotspotButtons)
-	hotspotLayer.Visible = e.hotspots and not e.compare and view.cam ~= "interior"
+	hotspotLayer.Visible = e.hotspots and not e.hideUI and view.cam ~= "interior"
 	for _, h in CarModel.hotspots(d) do
+		local tip = Ui.new("TextLabel", {
+			Name = "Rotulo", Text = h.label, TextSize = 12, Weight = W.bold, Position = UDim2.fromOffset(40, 6), Size = UDim2.fromOffset(0, 22),
+			AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Color3.fromHex("#080A0F"), BackgroundTransparency = 0.15, Corner = 6, Pad = { 0, 8 }, Visible = false,
+		})
 		local b = Ui.new("TextButton", {
-			Name = "Punto_" .. h.label, Text = "", Size = UDim2.fromOffset(30, 30), AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Color3.fromHex("#111319"), BackgroundTransparency = 0.15, Corner = 15, Stroke = { T.tx, 2, 0.15 },
+			Name = "Punto_" .. h.label, Text = "", Size = UDim2.fromOffset(34, 34), AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = GLASS, BackgroundTransparency = 0.15, Corner = 17, Stroke = { T.tx, 2, 0.15 },
 		}, {
 			Ui.new("Frame", { Size = UDim2.fromOffset(9, 9), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = T.tx, BackgroundTransparency = 0, Corner = 5 }),
-			Ui.new("TextLabel", { Text = h.label, TextSize = 12, Weight = W.bold, Position = UDim2.fromOffset(36, 4), Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Color3.fromHex("#080A0F"), BackgroundTransparency = 0.15, Corner = 6, Pad = { 0, 8 } }),
+			tip,
 		})
 		b.Parent = hotspotLayer
 		local scale = Instance.new("UIScale")
 		scale.Scale = k
 		scale.Parent = b
+		-- Como el .tip de la V3: el nombre aparece al pasar el puntero.
+		b.MouseEnter:Connect(function()
+			tip.Visible = true
+		end)
+		b.MouseLeave:Connect(function()
+			tip.Visible = false
+		end)
 		b.Activated:Connect(function()
 			e.step = h.step
 			if h.cat then
@@ -1062,208 +1614,307 @@ function Screen.build(parent: Instance)
 		end)
 		table.insert(hotspotButtons, { button = b, pos = h.pos })
 	end
+end
 
-	-- Barra superior (.ed-top)
-	local status = e.sourceId and (e.dirty and "Cambios sin guardar" or "Guardado") or "Borrador"
-	local statusKind = status == "Guardado" and "cg" or (status == "Borrador" and "cn" or "cy")
-	local moneyLabel = Ui.inline(Util.money(g.money), { size = 15, weight = W.bold })
-	App.live(function(gg: any)
-		moneyLabel.Text = Util.money(gg.money)
-	end)
-	Ui.row({
-		Ui.ico("pen", T.vi2, Color3.fromHex("#211D45"), 32),
-		(not phone) and Ui.inline("Diseño", { size = Ui.S.h2, weight = W.bold }) or nil,
-		Ui.inline(d.name .. (e.sourceId and (" · v" .. tostring(d.version or 1)) or ""), { size = Ui.S.sm, color = T.mut }),
-		Ui.chip("● " .. status, statusKind),
-		Ui.button("", "default", Screen.undo, { small = true, width = 36, icon = "undo", disabled = #e.undo == 0, why = "Nada para deshacer", name = "Deshacer" }),
-		Ui.button("", "default", Screen.redo, { small = true, width = 36, icon = "redo", disabled = #e.redo == 0, why = "Nada para rehacer", name = "Rehacer" }),
-		Ui.spacer(),
-		(not phone) and Ui.inline("Dinero", { size = Ui.S.xs, color = T.mut, weight = W.bold }) or nil,
-		moneyLabel,
-		(statsW == 0) and Ui.button("Estadísticas", "default", function()
-			e.statsOpen = not e.statsOpen
-			App.forceRender()
-		end, { small = true, icon = "chart" }) or nil,
-		Ui.button("Salir", "default", function()
-			App.go("juego")
-		end, { small = true, name = "SalirEditor" }),
-	}, phone and 6 or 12, {
-		Name = "BarraEditor", Size = UDim2.new(1, 0, 0, topH), AutomaticSize = Enum.AutomaticSize.None, BackgroundColor3 = T.bg,
-		BackgroundTransparency = 0.25, Pad = { 0, 12, 0, phone and 96 or 150 }, Parent = parent,
-	})
-
-	if statsW > 0 or e.statsOpen then
-		local card = statsCard(g, d)
-		if statsW > 0 then
-			card.Position = UDim2.fromOffset(14, topH + 14)
-			card.Size = UDim2.fromOffset(300, 0)
-			card.Parent = parent
-		else
-			local holder = Ui.scroll({ card }, { name = "EstadisticasMovil", pad = 0 })
-			holder.Position = UDim2.fromOffset(8, topH + 8)
-			holder.Size = UDim2.new(1, -(panelW + 24), 1, -(topH + 16))
-			holder.ZIndex = 5
-			holder.Parent = parent
-		end
+-- Acciones de la barra --------------------------------------------------------------------------------------
+function Screen.toggleHide()
+	local e = ed()
+	if e then
+		e.hideUI = not e.hideUI
+		App.forceRender()
 	end
+end
 
-	-- Controles de cámara y comparación (sobre la vista).
-	table.clear(camButtons)
-	local camRow: { Instance? } = {}
-	for _, cam in CAMS do
-		local b = Ui.button(cam[2], view.cam == cam[1] and "v" or "default", function()
-			Screen.setCam(cam[1])
-			if cam[1] == "interior" and e.step == 3 and e.tab ~= "int" then
-				e.tab = "int"
+function Screen.toggleCompare()
+	local e = ed()
+	e.compare = not e.compare
+	if e.compare then
+		App.toast("info", "Izquierda: " .. (e.saved and "último guardado" or "inicio del proyecto") .. " · derecha: actual. Mové el divisor.")
+	end
+	App.forceRender()
+end
+
+-- Captura: Roblox no deja guardar imágenes desde un script. Se ocultan la interfaz y los avisos unos
+-- segundos para sacar la captura con la herramienta de Roblox o del dispositivo.
+function Screen.capture()
+	local e = ed()
+	App.toast("info", "Modo foto: la interfaz se oculta 5 segundos. Usá la captura de pantalla de Roblox o de tu dispositivo.")
+	task.delay(1.2, function()
+		if App.ui.route ~= "editor" then
+			return
+		end
+		e.photo = true
+		App.toastLayer.Visible = false
+		App.forceRender()
+		task.delay(5, function()
+			e.photo = false
+			App.toastLayer.Visible = true
+			if App.ui.route == "editor" then
 				App.forceRender()
 			end
-		end, { small = true, height = 30, name = "Camara_" .. cam[1] })
-		camButtons[cam[1]] = b
-		table.insert(camRow, b)
+		end)
+	end)
+end
+
+-- Nuevo proyecto (newProject de la V3): si hay cambios sin guardar, se confirma antes.
+function Screen.newProject()
+	local function doIt()
+		App.closeAllDialogs()
+		local b = DesignCalc.firstBase(App.g)
+		App.ui.editor = newEditor(DesignCalc.newDraft(App.g, b.id), nil, nil, 1)
+		if App.ui.route == "editor" then
+			App.forceRender()
+		else
+			App.go("editor")
+		end
+	end
+	local e = ed()
+	if e and e.dirty then
+		App.openDialog("confirm", {
+			title = "¿Descartar el proyecto actual?",
+			body = "«" .. e.draft.name .. "» tiene cambios sin guardar.",
+			okLabel = "Descartar y empezar",
+			danger = true,
+			onOk = doIt,
+		})
+	else
+		doIt()
+	end
+end
+
+-- Construcción ---------------------------------------------------------------------------------------------
+function Screen.build(parent: Instance)
+	local g = App.g
+	if not ed() then
+		Screen.enter({})
+	end
+	local e = ed()
+	view3d.Enabled = true
+	local d = e.draft
+	local c = DesignCalc.computeDesign(g, d)
+	Screen.sync3d()
+	local G = geometry(e)
+	placeViewports(e, G)
+	hotspots(e, d)
+	local phone = G.phone
+	if e.photo then
+		hotspotLayer.Visible = false
+		return
+	end
+
+	-- Comparación: rótulos y barra divisoria
+	if e.compare then
+		Ui.new("Frame", { Name = "Divisor", Position = UDim2.fromOffset(App.vw * e.split - 1, G.topH), Size = UDim2.new(0, 3, 1, -G.topH), BackgroundColor3 = T.tx, BackgroundTransparency = 0, Parent = parent })
+		local function tag(text: string, color: Color3): TextLabel
+			return Ui.new("TextLabel", {
+				Text = text, TextSize = 12, Weight = W.heavy, TextColor3 = color, Size = UDim2.fromOffset(0, 26), AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = T.p1, BackgroundTransparency = 0, Corner = 7, Stroke = T.line, Pad = { 0, 10 },
+			})
+		end
+		local before = tag("ANTES · " .. (e.saved and "último guardado" or "inicio del proyecto"), T.tx)
+		before.Name = "RotuloAntes"
+		before.Position = UDim2.fromOffset(24, 90)
+		before.Parent = parent
+		local after = tag("DESPUÉS · actual", T.gr)
+		after.Name = "RotuloDespues"
+		after.AnchorPoint = Vector2.new(1, 0)
+		after.Position = UDim2.new(1, -(phone and 8 or 480), 0, 90)
+		after.Parent = parent
+	end
+
+	if not e.hideUI then
+		-- Barra superior (.ed-top)
+		local status = e.sourceId and ("Diseño guardado v" .. tostring(d.version or 1) .. (e.dirty and " · cambios sin guardar" or "")) or "Proyecto nuevo sin guardar"
+		local money = Ui.inline(Util.money(g.money), { size = Ui.S.sm, weight = W.bold })
+		App.live(function(gg: any)
+			money.Text = Util.money(gg.money)
+		end)
+		local top = Ui.row({
+			Ui.grow(phone and Ui.new("Frame", { Size = UDim2.new(0, 0, 0, 1) }) or Ui.col({
+				Ui.text("Diseñar un auto", { size = Ui.S.h1, weight = W.bold }),
+				Ui.text(d.name .. " · " .. Catalog.TYPES[Catalog.base(d.baseId).type] .. " · " .. status, { size = Ui.S.xs, color = T.mut }),
+			}, 2)),
+			(not phone) and Ui.row({ Ui.new("Frame", { Size = UDim2.fromOffset(10, 10), BackgroundColor3 = T.gr, BackgroundTransparency = 0, Corner = 5 }), money }, 6, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }) or nil,
+			(not phone) and Ui.button("Deshacer", "q", Screen.undo, { small = true, icon = "undo", iconSize = 16, kbd = "Ctrl Z", disabled = #e.undo == 0, why = "Nada para deshacer", name = "Deshacer" }) or nil,
+			(not phone) and Ui.button("Rehacer", "q", Screen.redo, { small = true, icon = "redo", iconSize = 16, kbd = "Ctrl Y", disabled = #e.redo == 0, why = "Nada para rehacer", name = "Rehacer" }) or nil,
+			Ui.button(phone and "" or "Modelos anteriores", "default", function()
+				App.openDialog("prevModels", { wide = true })
+			end, { small = true, icon = "copy", name = "ModelosAnteriores" }),
+			Ui.button("Volver a la empresa", "default", function()
+				App.go("juego")
+			end, { small = true, icon = "left", kbd = "Esc", name = "VolverEmpresa" }),
+		}, 12, {
+			Name = "BarraEditor", Size = UDim2.new(1, 0, 0, G.topH), AutomaticSize = Enum.AutomaticSize.None, BackgroundColor3 = Color3.fromHex("#080A0F"),
+			BackgroundTransparency = 0.05, Pad = { 0, 16, 0, phone and (G.landscape and 96 or 118) or 150 }, Parent = parent,
+		})
+		local tg = Instance.new("UIGradient")
+		tg.Transparency = NumberSequence.new(0, 0.4)
+		tg.Rotation = 90
+		tg.Parent = top
+
+		-- Herramientas de cámara (.ed-tools); en celular se abren desde la barra.
+		if not phone or e.toolsOpen then
+			table.clear(camButtons)
+			local cams: { Instance? } = { Ui.new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Pad = { 0, 12, 6, 12 } }, { Ui.lbl("Cámara") }) }
+			for _, cam in CAMS do
+				table.insert(cams, camTool(cam[1], cam[2], cam[5]))
+			end
+			table.insert(cams, Ui.row({
+				Ui.button("", "default", function()
+					Screen.zoom(1.18)
+				end, { small = true, icon = "minus", iconSize = 16, name = "Alejar" }),
+				Ui.button("", "default", function()
+					Screen.zoom(0.85)
+				end, { small = true, icon = "plus", iconSize = 16, name = "Acercar" }),
+				Ui.button("", "default", function()
+					Screen.setCam("angulo")
+				end, { small = true, icon = "reset", iconSize = 16, name = "RestablecerCamara" }),
+			}, 10, { Pad = { 6, 6, 0, 6 } }))
+			local pend = DesignCalc.devPending(g, d)
+			local toolsCol = Ui.col({
+				Ui.col(cams, 2),
+				glass({
+					Ui.inline("Fabricación por unidad", { size = Ui.S.xs, color = T.mut }),
+					Ui.inline(Util.money(c.unitCost), { size = 17, weight = W.bold }),
+					Ui.text("Desarrollo pendiente (una vez)", { size = Ui.S.xs, color = T.mut }),
+					Ui.inline(pend > 0 and Util.money(pend) or "Nada pendiente", { size = Ui.S.base, weight = W.bold, color = pend > 0 and T.or_ or T.gr }),
+					Ui.text("Producción: " .. Util.gameDuration(c.build) .. " de juego", { size = Ui.S.xs, color = T.mut }),
+				}, { Name = "CostosEditor", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = GLASS, BackgroundTransparency = 0.1, Corner = 12, Pad = 14, List = { dir = "V", gap = 4 } }),
+				Ui.text("Arrastrá sobre el auto para girarlo y usá la rueda o el pellizco para acercar.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }),
+			}, 14, { Name = "HerramientasEditor", Position = UDim2.fromOffset(phone and 8 or 14, phone and 64 or 78), Size = UDim2.fromOffset(190, 0) })
+			if phone then
+				toolsCol.BackgroundColor3 = Color3.fromHex("#0E1016")
+				toolsCol.BackgroundTransparency = 0.04
+				Ui.new("UICorner", { CornerRadius = UDim.new(0, 14), Parent = toolsCol })
+				Ui.new("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), Parent = toolsCol })
+				toolsCol.ZIndex = 8
+			end
+			toolsCol.Parent = parent
+		end
+
+		-- Estadísticas (.ed-stats): pasos 2 y 3; en celular, desde la barra.
+		if G.statsShown or (phone and e.statsOpen) then
+			local card = statsCard(g, d)
+			local holder = Ui.scroll({ card }, { name = "EstadisticasEditor", pad = 0 })
+			holder.Position = UDim2.fromOffset(phone and 8 or 218, phone and 64 or 78)
+			holder.Size = phone and UDim2.new(1, -16, 0, math.min(App.vh - 140, 520)) or UDim2.new(0, 300, 1, -230 - 78)
+			holder.AutomaticSize = Enum.AutomaticSize.None
+			holder.ZIndex = phone and 8 or 1
+			card.Size = UDim2.new(1, 0, 0, 0)
+			holder.Parent = parent
+		end
+
+		-- Panel derecho (.ed-panel)
+		local panel = Ui.new("Frame", {
+			Name = "PanelEditor", Position = UDim2.fromOffset(G.panel.x, G.panel.y), Size = UDim2.fromOffset(G.panel.w, G.panel.h),
+			BackgroundColor3 = Color3.fromHex("#0E1016"), BackgroundTransparency = 0.04, Corner = phone and 0 or 16, Stroke = EDGE, ClipsDescendants = true,
+			List = { dir = "V", gap = 0 }, Parent = parent,
+		})
+		if phone then
+			-- Bordes redondeados solo arriba (como la hoja inferior de la V3).
+			local cr = panel:FindFirstChildOfClass("UICorner")
+			if cr then
+				cr.CornerRadius = UDim.new(0, 16)
+			end
+		end
+		local titles = { "Vehículo base", "Rendimiento", "Diseño", "Revisión" }
+		panelHeader(e, d, titles[e.step]).Parent = panel
+		Ui.new("Frame", { Name = "BordeCabecera", Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromHex("#1F222B"), BackgroundTransparency = 0, Parent = panel })
+		local body = Ui.scroll({}, { name = "CuerpoPaso", gap = 18, pad = { 16, 18, 16, 18 } })
+		body.Size = UDim2.new(1, 0, 0, 0)
+		local flex = Instance.new("UIFlexItem")
+		flex.FlexMode = Enum.UIFlexMode.Fill
+		flex.Parent = body
+		body.Parent = panel
+		local nextBtn: Instance? = nil
+		if e.step == 1 then
+			panelBase(g, d, body)
+		elseif e.step == 2 then
+			nextBtn = panelPerf(g, d, body)
+		elseif e.step == 3 then
+			panelDesign(g, d, body)
+		else
+			nextBtn = panelReview(g, d, c, body)
+		end
+		panelFooter(g, e, d, c, nextBtn).Parent = panel
+		App.keepScroll(body, "editor:" .. e.step .. ":" .. tostring(e.cat) .. ":" .. tostring(e.tab))
+	end
+
+	-- Controles inferiores (.ed-bottom): pasos, barra de herramientas y divisor.
+	local bottomItems: { Instance? } = {}
+	if not e.hideUI then
+		local stepButtons = {}
+		for _, st in STEPS do
+			local n = st[1]
+			local current = e.step == n
+			local done = n < e.step
+			local btn = Ui.new("TextButton", {
+				Name = "Paso_" .. n, Text = "", BackgroundColor3 = current and T.vi or GLASS, BackgroundTransparency = current and 0.8 or 0.1,
+				Size = UDim2.fromOffset(0, 44), AutomaticSize = Enum.AutomaticSize.X, Corner = 22, Stroke = current and T.vi or EDGE,
+				Pad = { 0, phone and 6 or 14, 0, 6 }, List = { dir = "H", gap = 8, v = "C" },
+			}, {
+				Ui.new("TextLabel", { Name = "Numero", Text = done and "✓" or tostring(n), TextSize = 13, Weight = W.heavy, TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = done and Color3.fromHex("#05230F") or T.tx, BackgroundColor3 = current and T.vi or (done and T.gr or T.p3), BackgroundTransparency = 0, Size = UDim2.fromOffset(30, 30), Corner = 15 }),
+				(not phone) and Ui.inline(st[2], { size = Ui.S.base, weight = W.semi, color = current and T.tx or Color3.fromHex("#B4BAC6") }) or nil,
+			})
+			btn.Activated:Connect(function()
+				Screen.goStep(n)
+			end)
+			table.insert(stepButtons, btn)
+		end
+		table.insert(bottomItems, Ui.row(stepButtons, 6, { Name = "Pasos", h = "C", Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, wrap = true }))
 	end
 	local tools: { Instance? } = {
-		Ui.button("", "default", function()
-			view.zoom = math.clamp(view.zoom * 0.85, ZOOM_MIN, ZOOM_MAX)
-		end, { small = true, width = 34, height = 30, icon = "zoomin", name = "Acercar" }),
-		Ui.button("", "default", function()
-			view.zoom = math.clamp(view.zoom * 1.18, ZOOM_MIN, ZOOM_MAX)
-		end, { small = true, width = 34, height = 30, icon = "zoomout", name = "Alejar" }),
-		Ui.button("", "default", function()
-			view.yaw = (view.yaw + 30) % 360
-			view.cam = "libre"
-			Screen.refreshCamButtons()
-		end, { small = true, width = 34, height = 30, icon = "rotate", name = "Girar" }),
-		Ui.button("", "default", function()
+		toolbarBtn("undo", nil, Screen.undo, { disabled = #e.undo == 0, name = "DeshacerBarra" }),
+		toolbarBtn("redo", nil, Screen.redo, { disabled = #e.redo == 0, name = "RehacerBarra" }),
+		toolbarBtn("reset", (not phone) and "Restablecer cámara" or nil, function()
 			Screen.setCam("angulo")
-		end, { small = true, width = 34, height = 30, icon = "reset", name = "RestablecerCamara" }),
-		Ui.button(view.auto and "Giro: sí" or "Giro: no", view.auto and "v" or "default", function()
-			view.auto = not view.auto
+		end, { name = "RestablecerBarra" }),
+		toolbarBtn("cam", (not phone) and "Captura" or nil, Screen.capture, { name = "Captura" }),
+		toolbarBtn("compare", (not phone) and "Antes / después" or nil, Screen.toggleCompare, { pressed = e.compare, name = "AntesDespues" }),
+		toolbarBtn("eyeoff", (not phone) and "Ocultar interfaz" or nil, Screen.toggleHide, { pressed = e.hideUI, kbd = (not phone) and "H" or nil, name = "OcultarInterfaz" }),
+		phone and toolbarBtn("cam", nil, function()
+			e.toolsOpen = not e.toolsOpen
+			e.statsOpen = false
 			App.forceRender()
-		end, { small = true, height = 30 }),
-		Ui.button("Comparar", e.compare and "v" or "default", function()
-			e.compare = not e.compare
+		end, { pressed = e.toolsOpen, name = "AbrirCamaras" }) or nil,
+		phone and toolbarBtn("chart", nil, function()
+			e.statsOpen = not e.statsOpen
+			e.toolsOpen = false
 			App.forceRender()
-		end, { small = true, height = 30, icon = "compare", name = "Comparar" }),
-		Ui.button("Puntos", e.hotspots and "v" or "default", function()
-			e.hotspots = not e.hotspots
-			App.forceRender()
-		end, { small = true, height = 30, name = "Puntos" }),
+		end, { pressed = e.statsOpen, name = "AbrirEstadisticas" }) or nil,
 	}
-	Ui.col({
-		Ui.row(camRow, 4, { wrap = true }),
-		Ui.row(tools, 4, { wrap = true }),
-		e.compare and Ui.row({ Ui.chip("ANTES · " .. (e.saved and "último guardado" or "inicio del proyecto"), "cn"), Ui.spacer(), Ui.chip("AHORA", "cv") }, 6) or nil,
-	}, 6, { Name = "Camaras", Position = UDim2.fromOffset(vpLeft + 8, topH + 8), Size = UDim2.fromOffset(areaW - 16, 0), Parent = parent })
+	table.insert(bottomItems, glass({ Ui.row(tools, 4, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }) }, {
+		Name = "BarraHerramientas", Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = GLASS, BackgroundTransparency = 0.1, Corner = 12, Pad = 4,
+	}))
+	if e.compare then
+		table.insert(bottomItems, Ui.row({
+			Ui.inline("Divisor", { size = Ui.S.xs }),
+			Ui.slider(e.split, 0.1, 0.9, 0.01, function(v: number, _final: boolean)
+				e.split = math.clamp(v, 0.1, 0.9)
+				local bar = (parent :: any):FindFirstChild("Divisor")
+				if bar then
+					bar.Position = UDim2.fromOffset(App.vw * e.split - 1, G.topH)
+				end
+				local clip = view3d:FindFirstChild("RecorteAntes") :: Frame?
+				if clip then
+					clip.Size = UDim2.fromOffset(App.vw * e.split * App.scale(), App.vh * App.scale())
+				end
+			end, { width = 180, name = "Divisor" }),
+		}, 8, { Name = "FilaDivisor", Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, BackgroundColor3 = GLASS, BackgroundTransparency = 0.1, Corner = 8, Pad = { 4, 10 } }))
+	end
+	local bw = App.vw - G.bottom.l - G.bottom.r
+	Ui.col(bottomItems, 10, {
+		Name = "ControlesEditor", h = "C", AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, G.bottom.l, 1, -G.bottom.b),
+		Size = UDim2.fromOffset(bw, 0),
+	}).Parent = parent
 
-	-- Panel derecho (.ed-panel)
-	local panel = Ui.new("Frame", {
-		Name = "PanelEditor", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, phone and 0 or -14, 0, topH + (phone and 0 or 14)),
-		Size = UDim2.new(0, panelW, 1, -(topH + (phone and 0 or 28))), BackgroundColor3 = Color3.fromHex("#0E1016"), BackgroundTransparency = 0.04,
-		Corner = phone and 0 or 16, Stroke = Color3.fromHex("#2A2E39"), ClipsDescendants = true, Parent = parent,
-	})
-	local progress = {}
-	for n = 1, 4 do
-		table.insert(progress, Ui.grow(Ui.new("Frame", { Size = UDim2.new(1, 0, 0, 3), BackgroundColor3 = n <= e.step and T.vi or T.p3, BackgroundTransparency = 0, Corner = 2 }), { Size = UDim2.new(0, 0, 0, 3) }))
+	if e.hideUI then
+		local show = Ui.button("Mostrar interfaz", "p", Screen.toggleHide, { kbd = "H", name = "MostrarInterfaz" })
+		show.AnchorPoint = Vector2.new(0.5, 1)
+		show.Position = UDim2.new(0.5, 0, 1, -20)
+		show.ZIndex = 9
+		show.Parent = parent
 	end
-	local head = Ui.col({
-		Ui.row({ Ui.lbl("Diseñar · Paso " .. e.step .. " de 4"), Ui.spacer(), Ui.button("", "default", function()
-			App.openDialog("help", { screen = "editor" })
-		end, { small = true, width = 36, icon = "help" }) }, 8),
-		Ui.row({ Ui.grow(Ui.text(STEPS[e.step][2], { size = Ui.S.h2, weight = W.bold })), Ui.chip("● " .. status, statusKind) }, 8),
-		Ui.row(progress, 4),
-	}, 10, { Name = "Cabecera", Pad = { 12, 16, 10, 16 }, Size = UDim2.new(1, 0, 0, 0) })
-	head.Parent = panel
-	local pend = DesignCalc.devPending(g, d)
-	local footMoney = Ui.inline(Util.money(g.money), { size = Ui.S.sm, weight = W.bold })
-	App.live(function(gg: any)
-		footMoney.Text = Util.money(gg.money)
-	end)
-	local nextBtn: Instance? = nil
-	local body = Ui.scroll({}, { name = "CuerpoPaso", gap = 18, pad = { 14, 16, 16, 16 } })
-	if e.step == 1 then
-		panelBase(g, d, body)
-	elseif e.step == 2 then
-		nextBtn = panelPerf(g, d, body)
-	elseif e.step == 3 then
-		panelDesign(g, d, body)
-	else
-		panelReview(g, d, c, body)
-		local saved = e.sourceId ~= nil and not e.dirty
-		local sb
-		sb = Ui.button((e.sourceId and "Guardar cambios" or "Guardar diseño") .. (pend > 0 and (" · " .. Util.money(pend)) or ""), "p", function()
-			save(sb)
-		end, { flex = 2, icon = "check", name = "GuardarDiseno", disabled = saved or pend > g.money, why = saved and "No hay cambios para guardar" or ("Fondos insuficientes: el desarrollo cuesta " .. Util.money(pend)) })
-		nextBtn = sb
-	end
-	if not nextBtn then
-		nextBtn = Ui.button("Siguiente", "p", function()
-			if Util.charCount(Util.trim(e.draft.name)) < 2 then
-				App.toast("error", "Poné un nombre al proyecto antes de seguir.")
-				return
-			end
-			e.step = math.min(4, e.step + 1)
-			e.sel = nil
-			App.forceRender()
-		end, { flex = 2, name = "Siguiente" })
-	end
-	local back = e.step > 1 and Ui.button("Volver", "default", function()
-		e.step -= 1
-		e.sel = nil
-		App.forceRender()
-	end, { flex = 1 }) or Ui.button("Salir", "default", function()
-		App.go("juego")
-	end, { flex = 1 })
-	local foot = Ui.col({
-		Ui.line("Desarrollo pendiente <font color=\"#7D8493\">(una vez al guardar)</font>", pend > 0 and Util.money(pend) or "$0", { leftColor = T.mut, color = pend > 0 and T.or_ or T.gr }),
-		(not phone) and Ui.line("Fabricación por unidad <font color=\"#7D8493\">(al fabricar)</font>", Util.money(c.unitCost), { leftColor = T.mut }) or nil,
-		Ui.row({ Ui.grow(Ui.text("Dinero disponible", { size = Ui.S.sm, color = T.mut })), footMoney }, 8),
-		pend > g.money and Ui.note("y", "No alcanza el dinero para el desarrollo. Elegí piezas más simples o conseguí fondos.") or nil,
-		Ui.row({ back, nextBtn }, 8),
-	}, 6, { Name = "Pie", BackgroundColor3 = Color3.fromHex("#0D0F14"), BackgroundTransparency = 0, Pad = { 10, 16, 12, 16 }, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1) })
-	foot.Parent = panel
-	body.Parent = panel
-	App.keepScroll(body, "editor:" .. e.step .. ":" .. tostring(e.cat) .. ":" .. tostring(e.tab))
-	-- El cuerpo ocupa el espacio entre la cabecera y el pie; el pie siempre queda visible.
-	local function fit()
-		local kk = App.scale()
-		local top = head.AbsoluteSize.Y / kk
-		local bottom = foot.AbsoluteSize.Y / kk
-		body.Position = UDim2.fromOffset(0, top)
-		body.Size = UDim2.new(1, 0, 1, -(top + bottom))
-	end
-	head:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
-	foot:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
-	task.defer(fit)
-
-	-- Pasos (.steps)
-	local stepButtons = {}
-	for _, st in STEPS do
-		local n = st[1]
-		local current = e.step == n
-		local done = n < e.step
-		local btn = Ui.new("TextButton", {
-			Name = "Paso_" .. n, Text = "", BackgroundColor3 = current and Color3.fromHex("#1E1B3D") or Color3.fromHex("#111319"), BackgroundTransparency = 0.05,
-			Size = UDim2.fromOffset(0, phone and 38 or 44), AutomaticSize = Enum.AutomaticSize.X, Corner = 22, Stroke = current and T.vi or Color3.fromHex("#2A2E39"),
-			Pad = { 0, phone and 6 or 14, 0, 6 }, List = { dir = "H", gap = 8, v = "C" },
-		}, {
-			Ui.new("TextLabel", { Text = done and "✓" or tostring(n), TextSize = 13, Weight = W.heavy, TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = done and Color3.fromHex("#05230F") or T.tx, BackgroundColor3 = current and T.vi or (done and T.gr or T.p3), BackgroundTransparency = 0, Size = UDim2.fromOffset(28, 28), Corner = 14 }),
-			(App.layout == "desktop") and Ui.inline(st[2], { size = 14, weight = W.semi, color = current and T.tx or Color3.fromHex("#B4BAC6") }) or nil,
-		})
-		btn.Activated:Connect(function()
-			if n > 1 and Util.charCount(Util.trim(e.draft.name)) < 2 then
-				App.toast("error", "Poné un nombre al proyecto antes de seguir.")
-				return
-			end
-			e.step = n
-			e.sel = nil
-			App.forceRender()
-		end)
-		table.insert(stepButtons, btn)
-	end
-	Ui.row(stepButtons, 6, {
-		Name = "Pasos", h = "C", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0, vpLeft + areaW / 2, 1, -12),
-		Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, Parent = parent,
-	})
 end
 
 return Screen

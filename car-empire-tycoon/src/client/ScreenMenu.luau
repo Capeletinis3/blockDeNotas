@@ -35,6 +35,9 @@ function Screen.cancelRename()
 	rename.slot = nil
 	App.forceRender()
 end
+function Screen.isRenaming(): boolean
+	return rename.slot ~= nil
+end
 
 local function firstSlot(): string?
 	local slots = App.profile and App.profile.slots or {}

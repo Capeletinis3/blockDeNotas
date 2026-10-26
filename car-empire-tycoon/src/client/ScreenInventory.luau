@@ -202,8 +202,10 @@ function Screen.designRow(g: any, d: any): Frame
 			Ui.text(b.name .. " · " .. Catalog.TYPES[b.type] .. " · " .. c.hp .. " hp · " .. Util.money(c.unitCost) .. "/u · precio sugerido " .. Util.money(c.price) .. " · " .. made .. " fabricadas", { size = Ui.S.xs, color = T.mut }),
 		}, 2)),
 	}, { dir = "H", v = "C", gap = 10, wrap = true, name = "Diseno_" .. tostring(d.id) })
-	for _, a in actions do
+	-- Los botones se crearon antes que la tarjeta: van al final de la fila (después del nombre).
+	for i, a in actions do
 		if a then
+			(a :: any).LayoutOrder = 1e6 + i
 			a.Parent = row
 		end
 	end

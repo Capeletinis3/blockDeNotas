@@ -93,12 +93,12 @@ test("Carga: pantalla de inicio con ranuras vacías", function()
 		return App.payload ~= nil and App.payload.status == "ready"
 	end), "el servidor entrega el estado listo")
 	eq(App.ui.route, "menu", "arranca en el menú de empresas")
-	check(button("Crear empresa") ~= nil, "hay un botón para crear empresa")
+	check(named("Crear_1") ~= nil, "la ranura 1 libre ofrece crear una empresa")
 	noErrors("Menú")
 end)
 
 test("Crear empresa escribiendo solo el nombre (el botón se habilita en vivo)", function()
-	click("Crear empresa")
+	clickN("Crear_1")
 	eq(App.ui.route, "nueva", "abre el formulario")
 	local start = named("Comenzar")
 	check(start ~= nil, "existe el botón Comenzar")
@@ -283,7 +283,7 @@ test("Negociación: probabilidad del servidor, monto redondeado y diálogo que s
 	end), "el servidor devuelve la probabilidad")
 	local q = App.ui.counterDraft.quote
 	eq(q.amount % 100, 0, "el monto mostrado está redondeado a $100")
-	check(find(tostring(q.chance) .. " %") ~= nil, "se muestra la probabilidad exacta")
+	check(find(tostring(q.chance) .. "%") ~= nil, "se muestra la probabilidad exacta")
 	check(find("tirada") == nil, "no se muestran detalles de la tirada")
 	-- El cliente se va: el diálogo deja de ofrecer contraofertar.
 	App.request("rejectCustomer", { customerId = offer.id })
@@ -334,15 +334,54 @@ test("Editor: cambios sin guardar al salir y al abrir otro proyecto", function()
 	noErrors("Editor")
 end)
 
+test("Editor V3: cámaras, pasos, ocultar interfaz, antes/después y modelos anteriores", function()
+	App.go("editor", { new = true, force = true })
+	M.task.wait()
+	if dialogOpen() then
+		clickN("Descartar")
+		M.task.wait()
+	end
+	eq(App.ui.route, "editor", "abre el editor")
+	check(named("Camara_frontal") ~= nil and named("Camara_libre") ~= nil, "siete cámaras con su tecla")
+	clickN("Camara_frontal")
+	App.screens.editor.goStep(2)
+	M.task.wait()
+	eq(App.ui.editor.step, 2, "paso 2")
+	check(named("Estadisticas") ~= nil, "las estadísticas aparecen en el paso 2")
+	clickN("AntesDespues")
+	M.task.wait()
+	check(App.ui.editor.compare == true and named("RotuloAntes") ~= nil and named("Divisor") ~= nil, "antes/después con rótulos y divisor")
+	clickN("AntesDespues")
+	clickN("OcultarInterfaz")
+	M.task.wait()
+	check(named("PanelEditor") == nil and named("MostrarInterfaz") ~= nil, "ocultar interfaz deja solo la vista y la barra")
+	clickN("MostrarInterfaz")
+	M.task.wait()
+	check(named("PanelEditor") ~= nil, "la interfaz vuelve")
+	clickN("ModelosAnteriores")
+	M.task.wait()
+	eq(topKind(), "prevModels", "abre modelos anteriores")
+	click("Empezar un proyecto nuevo")
+	M.task.wait()
+	check(not dialogOpen() and App.ui.editor.step == 1, "empieza un proyecto nuevo en el paso 1")
+	App.go("juego")
+	M.task.wait()
+	if dialogOpen() then
+		clickN("Descartar")
+	end
+	noErrors("Editor V3")
+end)
+
 test("Todos los diálogos se construyen", function()
 	local u = App.g.units[1]
 	local l = App.g.market.listings[1]
 	local sale = App.g.sales[1]
 	local kinds = {
 		{ "order", {} }, { "confirm", { title = "x", body = "y" } }, { "unitDetail", { unitId = u and u.id, wide = true } },
-		{ "saleDetail", { saleId = sale and sale.id } }, { "wholesale", { unitId = u and u.id } }, { "publish", {} },
+		{ "saleDetail", { saleId = sale and sale.id } }, { "publish", {} },
 		{ "listing", { listingId = l and l.id } }, { "notifications", {} }, { "daily", {} }, { "settings", {} },
-		{ "help", { screen = "fabrica" } }, { "future", { what = "amigos" } }, { "navMenu", { full = true } }, { "navMenu", {} },
+		{ "help", { screen = "fabrica" } }, { "future", { what = "amigos" } }, { "future", { what = "eventos" } }, { "future", { what = "tienda" } },
+		{ "news", {} }, { "prevModels", {} }, { "testDrive", {} },
 		{ "deleteCompany", { slot = "1", expected = "Ruta Norte", name = "Ruta Norte" } },
 	}
 	for _, k in kinds do
@@ -358,10 +397,10 @@ end)
 test("Configuración: se guarda en el servidor y se aplica", function()
 	App.openDialog("settings", {})
 	M.task.wait()
-	click("115 %")
+	click("Grande")
 	check(waitFor(function()
-		return App.settings.textScale == 1.15
-	end), "el tamaño de la interfaz se guarda")
+		return App.settings.textScale == 1.12
+	end), "el tamaño del texto se guarda")
 	App.request("setSetting", { key = "textScale", value = 1 })
 	App.request("setSetting", { key = "textScale", value = 99 })
 	M.task.wait()
@@ -373,13 +412,13 @@ end)
 test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", function()
 	local money1 = App.g.money
 	local name1 = App.g.company.name
-	App.openDialog("navMenu", { full = true })
+	App.go("compania")
 	M.task.wait()
-	clickN("Menu_menu")
+	clickN("VolverMenu")
 	check(waitFor(function()
 		return App.g == nil and App.ui.route == "menu"
 	end), "vuelve al menú de empresas")
-	click("Crear empresa")
+	clickN("Crear_2")
 	eq(App.ui.newCompany.slot ~= "1", true, "elige una ranura libre")
 	clickN("Dificultad_dificil")
 	for _, d in root:GetDescendants() do
@@ -442,10 +481,13 @@ test("Celular: todas las pantallas y diálogos se construyen con la distribució
 		check(App.renderError == nil, route .. " (celular)" .. (App.renderError and (": " .. tostring(App.renderError)) or ""))
 	end
 	App.go("juego")
-	App.openDialog("navMenu", { full = true })
 	M.task.wait()
-	check(named("Menu_estadisticas") ~= nil, "el menú de celular llega a todas las secciones")
-	App.closeAllDialogs()
+	App.ui.pop = "mob"
+	App.screens.hud.renderPop()
+	local menu = named("MenuCelular")
+	check(menu ~= nil and M.find(App.popLayer, "Estad") ~= nil, "el menú de celular llega a todas las secciones")
+	App.ui.pop = nil
+	App.forceRender()
 	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
 	M.task.wait()
 	noErrors("Celular")
