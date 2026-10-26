@@ -1489,7 +1489,7 @@ test("Demostraciones de la V3: se juegan en memoria y no tocan las ranuras", fun
 	mgr:add(p)
 	playThrough(mgr, p)
 	check(mgr:request(p, "leaveCompany", {}).ok, "volver al menú")
-	for _, kind in { "tutorial", "operacion", "avanzada" } do
+	for _, kind in { "tutorial", "operacion", "avanzada", "imperio" } do
 		local r = mgr:request(p, "playDemo", { kind = kind })
 		check(r.ok, "demo " .. kind .. ": " .. tostring(r.msg))
 		local v = pushed[p]
@@ -1500,6 +1500,12 @@ test("Demostraciones de la V3: se juegan en memoria y no tocan las ranuras", fun
 		if kind ~= "tutorial" then
 			check(#v.game.designs >= 3 and #v.game.lots >= 3 and #v.game.lotHistory >= 2, "demo con diseños, lotes activos e historial")
 			check(Rules.finance(v.game, 12).units > 0, "historial de ventas de demostración en las estadísticas")
+		end
+		if kind == "imperio" then
+			local g = mgr.list[p].game
+			check(Rules.extraYears(g) >= 1 and Rules.year(g) == 2030, "Imperio: año comercial extra con 2030 visible")
+			check(Rules.nextExpansion(g) ~= nil and g.counters.unitsSold >= Rules.nextExpansion(g).sold, "Imperio: la primera región se puede abrir")
+			check(mgr:request(p, "expandGlobal", { requestId = rid() }).ok, "Imperio: abre la primera región")
 		end
 	end
 	local r = mgr:request(p, "createLot", { designId = mgr.list[p].game.designs[1].id, qty = 100, requestId = rid() })

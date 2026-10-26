@@ -17,7 +17,7 @@ local Simulation = require(script.Parent.Simulation)
 
 local Demo = {}
 
-Demo.KINDS = { tutorial = "Tutorial", operacion = "Empresa en funcionamiento", avanzada = "Fábrica avanzada" }
+Demo.KINDS = { tutorial = "Tutorial", operacion = "Empresa en funcionamiento", avanzada = "Fábrica avanzada", imperio = "Imperio (después de 2030)" }
 
 local round = Util.round
 
@@ -31,22 +31,33 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	if kind == "tutorial" then
 		return g
 	end
-	local avanz = kind == "avanzada"
-	g.time.day = avanz and (22 * 12 + 3) or (4 * 12 + 2)
-	g.sede = avanz and 4 or 2
+	-- «imperio»: la fábrica avanzada llevada al fin de partida (sede máxima, año comercial extra, todas las
+	-- tecnologías y la expansión global disponible) para probar lo que pasa después de 2030.
+	local imperio = kind == "imperio"
+	local avanz = kind == "avanzada" or imperio
+	g.time.day = imperio and ((Catalog.CALENDAR.endYear - 1970 + 1) * 12 + 2) or (avanz and (22 * 12 + 3) or (4 * 12 + 2))
+	g.sede = imperio and 5 or (avanz and 4 or 2)
 	g.counters.sedeLevel = g.sede
-	g.level = avanz and 12 or 4
-	g.reputation = avanz and 4.2 or 3.4
-	g.money = avanz and 12500000 or 240000
+	g.level = imperio and 30 or (avanz and 12 or 4)
+	g.reputation = imperio and 4.6 or (avanz and 4.2 or 3.4)
+	g.money = imperio and 250000000 or (avanz and 12500000 or 240000)
 	g.research.done = avanz
 			and { "mo1", "mo2", "mo3", "mo4", "mo5", "ca1", "ca2", "ca3", "ca4", "tr1", "tr2", "tr3", "se1", "se2", "se3", "se4", "co1", "co2", "co3", "co4", "pr1", "pr2", "pr3", "pr4", "el1", "el2", "ma1", "ma2", "ma3", "mk1", "mk2", "mk3" }
 		or { "mo1", "ca1", "se1", "pr1", "pr2", "mk1", "co1" }
+	if imperio then
+		g.research.done = {}
+		for _, key in Catalog.RESEARCH_ORDER do
+			for _, n in Catalog.RESEARCH[key].nodes do
+				table.insert(g.research.done, n.id)
+			end
+		end
+	end
 	g.counters.researchDone = #g.research.done
 	g.rp = avanz and 300 or 12
 	for _, s in g.stations do
-		s.level = avanz and 4 or 2
+		s.level = imperio and 10 or (avanz and 4 or 2)
 	end
-	g.counters.stationUpgrades = avanz and 18 or 6
+	g.counters.stationUpgrades = imperio and 54 or (avanz and 18 or 6)
 	for _, t in { "t1", "t2", "t3", "t4", "t5", "t6", "s1", "s2" } do
 		g.claimed[t] = true
 	end
@@ -106,7 +117,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 		l.createdDay = g.time.day - 6
 		return l
 	end
-	local scale = avanz and 40 or 1
+	local scale = imperio and 160 or (avanz and 40 or 1)
 	g.lots = {
 		lot(ds[1], 600 * scale, 420 * scale, 300 * scale, "produciendo"),
 		lot(ds[2], 300 * scale, 300 * scale, 180 * scale, "completado"),

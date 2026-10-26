@@ -211,7 +211,8 @@ local function recordsCard(g: any, gens: { any }): Frame?
 		rec.bestLot and Ui.between("Lote más vendido", rec.bestLot.name .. " " .. rec.bestLot.gen .. ".ª gen. · " .. Util.num(rec.bestLot.value)) or nil,
 		rec.bestLotProfit and Ui.between("Lote más rentable", rec.bestLotProfit.name .. " · " .. Util.money(rec.bestLotProfit.value), { color = T.gr }) or nil,
 		rec.firstModel and Ui.between("Primer modelo", rec.firstModel.name .. " · " .. Util.gameDate(rec.firstModel.day)) or nil,
-		Ui.between("Total de la empresa", Util.num(g.counters.unitsSold) .. " vendidos · " .. Util.num(g.counters.lotsLaunched or 0) .. " lotes · margen " .. Util.money(g.counters.marginTotal or 0)),
+		Ui.between("Vendidos en total", Util.num(g.counters.unitsSold) .. " en " .. Util.num(g.counters.lotsLaunched or 0) .. " lotes"),
+		Ui.between("Margen total", Util.money(g.counters.marginTotal or 0), { color = T.gr }),
 		(rec.others and rec.others.models > 0) and Ui.between("Otros " .. Util.num(rec.others.models) .. " modelos (resumidos)", Util.num(rec.others.sold) .. " vendidos · beneficio " .. Util.money(rec.others.revenue - rec.others.cost), { color = T.mut }) or nil,
 	}, { gap = 6, name = "Records" })
 end

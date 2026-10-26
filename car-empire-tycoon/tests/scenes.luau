@@ -349,6 +349,37 @@ function Scenes.list(_ctx: any): { any }
 			c.M.click(b)
 		end
 	end)
+	-- Fin de partida: Imperio con dos regiones abiertas, la tercera disponible y años comerciales extra.
+	local function lateGame(c: any)
+		demo(c, "avanzada")
+		local inst = c.Sessions.instance
+		local s = inst and inst.list[c.player]
+		if s and s.game then
+			s.game.sede = 5
+			s.game.counters.sedeLevel = 5
+			s.game.expansion = 2
+			s.game.counters.unitsSold = 260000
+			s.game.money = 9e8
+			s.game.time.day = (2032 - 1970) * 12 + 2
+			inst:push(s)
+			c.waitFor(function()
+				return c.App.g.money == 9e8
+			end)
+		end
+	end
+	add("compania-global", "Compañía (expansión global)", function(c)
+		lateGame(c)
+		go(c, "compania")
+	end)
+	add("autos-global-historia", "Historia de modelos (fin de partida)", function(c)
+		lateGame(c)
+		c.App.ui.tabs.autos = "historia"
+		go(c, "autos")
+	end)
+	add("juego-global", "Sede (año comercial extra)", function(c)
+		lateGame(c)
+		go(c, "juego")
+	end)
 	return list
 end
 

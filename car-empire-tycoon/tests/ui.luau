@@ -522,6 +522,51 @@ test("[P15] PC y celular: todas las pantallas en 1600×900, 1280×720, 844×390 
 	noErrors("Resoluciones")
 end)
 
+test("Fin de partida: expansión global, récords y años extra en las cuatro resoluciones", function()
+	local function lateGame()
+		local g = App.g
+		g.sede = 5
+		g.expansion = 2
+		g.money = 900000000
+		g.counters.unitsSold = 250000
+		g.time.day = (2033 - 1970) * 12 + 4
+		g.records = {
+			firstModel = { name = "Primero de todos", key = "x#1", gen = 1, value = 0, day = 0 },
+			bestLot = { name = "Récord con un nombre bastante largo", key = "y#2", gen = 2, value = 123456, day = 300 },
+			bestLotProfit = { name = "Rentable", key = "y#2", gen = 2, value = 987654321, day = 300 },
+			others = { models = 312, lots = 900, produced = 80000, sold = 70000, discarded = 10000, revenue = 5e8, cost = 3e8 },
+		}
+		for i = 1, 30 do
+			table.insert(g.modelHistory, { key = "m" .. i .. "#1", lineage = "m" .. i, gen = 1, name = "Modelo histórico " .. i, modelYear = 1990, type = "sedan", compact = i % 2 == 0, spec = { baseId = "brisa", paint = { primary = "#AA3344" } }, stats = {}, lots = 3, produced = 1000 + i, sold = 900 + i, discarded = 0, revenue = 1e7, cost = 5e6, bestLotSold = 400, bestLotProfit = 1e6, bestMonth = 120, firstDay = 0, lastDay = 10 })
+		end
+	end
+	for _, res in { { 1600, 900 }, { 1280, 720 }, { 844, 390 }, { 390, 844 } } do
+		M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(res[1], res[2])
+		M.task.wait()
+		for _, route in { "compania", "autos", "juego", "mercado" } do
+			lateGame()
+			App.ui.tabs.autos = "historia"
+			App.renderError = nil
+			App.go(route)
+			check(App.renderError == nil, route .. " (fin de partida) en " .. res[1] .. "×" .. res[2] .. (App.renderError and (": " .. tostring(App.renderError)) or ""))
+			local bad = overflow()
+			check(#bad == 0, route .. " (fin de partida) en " .. res[1] .. "×" .. res[2] .. " no se sale" .. (#bad > 0 and (": " .. bad[1]) or ""))
+			if route == "compania" then
+				check(named("Expansion") ~= nil and named("ExpansionGlobal") ~= nil, "tarjeta y botón de expansión global")
+			elseif route == "autos" then
+				check(named("Records") ~= nil and M.find(App.content, "Otros 312 modelos") ~= nil, "récords permanentes y «Otros modelos»")
+				check(named("MostrarMas") ~= nil, "la historia se muestra de a 20 modelos")
+			elseif route == "juego" and App.layout ~= "phone" then
+				check(M.find(root, "AÑO EXTRA") ~= nil, "el HUD indica el año comercial extra")
+			end
+		end
+	end
+	App.ui.tabs.autos = nil
+	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
+	M.task.wait()
+	noErrors("Fin de partida")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()

@@ -80,7 +80,7 @@ function Screen.build(main: Frame, side: Frame)
 			App.request("setIdentity", { color = c[1] })
 		end))
 	end
-	Ui.card({
+	local marca = Ui.card({
 		Ui.lbl("Marca"),
 		Ui.row({
 			Ui.logo(g.company, 72),
@@ -92,7 +92,12 @@ function Screen.build(main: Frame, side: Frame)
 		}, 16, { wrap = phone }),
 		Ui.col({ Ui.fl("Logotipo"), Ui.row(logos, 10, { wrap = true }) }, 6),
 		Ui.col({ Ui.fl("Color de marca"), Ui.row(colors, 10, { wrap = true }) }, 6),
-	}, { gap = 14, pad = 18, name = "Marca" }).Parent = main
+	}, { gap = 14, pad = 18, name = "Marca" })
+	marca.Parent = main
+	if not Rules.nextSede(g) then
+		-- Con la sede máxima, la expansión global queda arriba y la identidad de la marca al final.
+		marca.LayoutOrder = 1e7
+	end
 
 	local caps = g.derived.caps
 	local next = Rules.nextSede(g)
@@ -183,7 +188,7 @@ function Screen.build(main: Frame, side: Frame)
 	local summary: { Instance? } = { Ui.lbl("Resumen de la empresa") }
 	for _, r in {
 		{ "Dificultad", dif.label },
-		{ "Fecha", Util.gameDate(g.time.day) },
+		{ "Fecha", Util.gameDate(g.time.day) .. (Rules.extraYears(g) > 0 and (" · año comercial extra " .. Rules.extraYears(g)) or "") },
 		{ "Nivel", g.level .. " (" .. g.xp .. "/" .. g.derived.xpNext .. " XP)" },
 		{ "Reputación", Util.num(g.reputation, 2) .. " / 5" },
 		{ "Diseños", tostring(#g.designs) },

@@ -386,7 +386,7 @@ local function hud1(g: any): Frame
 		table.insert(items, f)
 	end
 	if g.demo then
-		local KIND = { tutorial = "Tutorial", operacion = "Empresa en funcionamiento", avanzada = "Fábrica avanzada" }
+		local KIND = { tutorial = "Tutorial", operacion = "Empresa en funcionamiento", avanzada = "Fábrica avanzada", imperio = "Imperio (después de 2030)" }
 		local chip = Ui.new("TextButton", {
 			Name = "Demo",
 			Text = "<b>DEMO</b>" .. (deskWide and "  · no se guarda · Salir" or ""),

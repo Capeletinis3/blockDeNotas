@@ -278,6 +278,10 @@ function Screen.build(parent: Instance)
 				App.request("playDemo", { kind = "avanzada" })
 				App.ui.enteringGame = true
 			end, { small = true, name = "Demo_avanzada" }),
+			Ui.button("Imperio (después de 2030)", "default", function()
+				App.request("playDemo", { kind = "imperio" })
+				App.ui.enteringGame = true
+			end, { small = true, name = "Demo_imperio" }),
 		}, 10, { wrap = true }),
 	}, 8)
 	local leftW = phone and (vw - 28) or 0

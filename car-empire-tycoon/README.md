@@ -1,9 +1,15 @@
-# Car Empire Tycoon · Roblox (etapa 5: segunda auditoría)
+# Car Empire Tycoon · Roblox (etapa 6: correcciones finales)
 
 Juego tycoon de autos en Roblox (Rojo + Luau). Empezás un taller en **1970**, diseñás autos, elegís
 cuántas unidades fabricar en cada **lote**, se **venden solos** según la demanda, el precio y la
 competencia, y con lo ganado ampliás la empresa e investigás tecnologías de cada época hasta 2030.
 El prototipo `reference/Car-Empire-Tycoon-V3.html` sigue siendo la referencia visual.
+
+**Etapa 6 (correcciones finales):** después de 2030 el año visible queda fijo y la empresa sigue en
+años comerciales extra; expansión global en 10 regiones y misiones de fin de partida; margen distinto por
+tipo de vehículo; banco de PI como acelerador y difusión tecnológica; historial de modelos que no borra
+nada (resumen + récords permanentes); demostración «Imperio (después de 2030)»:
+[`docs/CORRECCIONES-FINALES.md`](docs/CORRECCIONES-FINALES.md).
 
 **Etapa 5 (segunda auditoría):** envío liviano al cliente, PI sin farmeo y banco de 20 minutos,
 historial permanente por modelo y generación, rivales con estrategia y precios que cuentan, seguridad y
@@ -69,6 +75,7 @@ car-empire-tycoon/
 ├─ tests/verify_place.luau     Verifica que un .rbxl contenga exactamente los scripts de src/
 ├─ tests/preview, scenes, dump Vista previa: lleva la partida a escenas y vuelca la interfaz
 ├─ tools/preview/              Dibuja la interfaz de Roblox y la compara con capturas de la V3
+├─ docs/CORRECCIONES-FINALES.md Calendario después de 2030, fin de partida, historial, pruebas y Studio (etapa 6)
 ├─ docs/SEGUNDA-AUDITORIA.md  Errores corregidos, mejoras, equilibrio, pruebas y guía de Studio (etapa 5)
 ├─ docs/FASE-3D.md            Qué modelos provisionales reemplazar y cómo, sin tocar las mecánicas
 ├─ docs/CAMBIOS-AUDITORIA.md   Cambios, estado de cada parte, equilibrio y pruebas en Studio (etapa 4)
