@@ -514,6 +514,27 @@ function Ui.button(label: string, kind: string?, onClick: (() -> ())?, opts: { [
 		List = { dir = "H", gap = small and 7 or 8, v = "C", h = o.align == "L" and "L" or "C" },
 		ClipsDescendants = o.clip,
 	})
+	-- Respuesta al toque: el botón se achica un poco mientras se mantiene presionado.
+	if not o.disabled then
+		local press = Instance.new("UIScale")
+		press.Name = "Presion"
+		press.Parent = b
+		local function to(v: number)
+			if Ui.reduceMotion then
+				return
+			end
+			TweenService:Create(press, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = v }):Play()
+		end
+		b.MouseButton1Down:Connect(function()
+			to(0.96)
+		end)
+		b.MouseButton1Up:Connect(function()
+			to(1)
+		end)
+		b.MouseLeave:Connect(function()
+			to(1)
+		end)
+	end
 	b:SetAttribute("kind", kind or "default")
 	b:SetAttribute("label", label)
 	b:SetAttribute("disabled", o.disabled == true)
@@ -767,8 +788,14 @@ function Ui.bar(pct: number, color: Color3?, height: number?): (Frame, Frame)
 	return bar, fill
 end
 
+-- Las barras avanzan con una transición corta (sin animación con «Reducir movimiento»).
 function Ui.setBar(fill: Frame, pct: number)
-	fill.Size = UDim2.new(math.clamp(pct, 0, 100) / 100, 0, 1, 0)
+	local target = UDim2.new(math.clamp(pct, 0, 100) / 100, 0, 1, 0)
+	if Ui.reduceMotion or not fill.Parent or fill.Size == target then
+		fill.Size = target
+		return
+	end
+	TweenService:Create(fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = target }):Play()
 end
 
 -- Notas .note (y, r, b, g)

@@ -989,6 +989,22 @@ local function panelBase(g: any, d: any, body: Instance)
 end
 
 -- Paso 2: rendimiento (panelPerf) ---------------------------------------------------------------------
+-- Efectos de una pieza en palabras (lo que cambia en las estadísticas aunque no se vea en el modelo 3D).
+local FX_LABEL = {
+	{ "hp", "potencia", " hp" }, { "eff", "eficiencia", "" }, { "safety", "seguridad", "" }, { "comfort", "comodidad", "" },
+	{ "dur", "fiabilidad", "" }, { "grip", "manejo", "" }, { "brake", "frenado", "" }, { "q", "calidad", "" }, { "kg", "peso", " kg" },
+}
+function Screen.effectsText(fx: any): string
+	local out = {}
+	for _, f in FX_LABEL do
+		local v = fx and fx[f[1]]
+		if v and v ~= 0 then
+			table.insert(out, (v > 0 and "+" or "−") .. tostring(math.abs(v)) .. f[3] .. " " .. f[2])
+		end
+	end
+	return #out > 0 and table.concat(out, " · ") or "Sin cambios en las estadísticas"
+end
+
 local function partCard(g: any, d: any, e: any, p: any, selId: string): TextButton
 	local cat = e.cat
 	local b = Catalog.base(d.baseId)
@@ -1018,6 +1034,7 @@ local function partCard(g: any, d: any, e: any, p: any, selId: string): TextButt
 			Ui.row({ Ui.grow(Ui.text(p.name, { size = Ui.S.base, weight = W.bold })), Ui.chip(p.rarity, RAR[p.rarity]) }, 10),
 			Ui.row(chips, 5, { wrap = true }),
 			Ui.text(p.desc, { size = Ui.S.xs, color = T.mut }),
+			Ui.text("Efectos: " .. Screen.effectsText(p.fx), { size = Ui.S.xs, color = T.vi2, name = "Efectos" }),
 			Ui.row({
 				Ui.grow(Ui.text("Desarrollo: " .. devText, { size = Ui.S.xs, color = T.mut })),
 				Ui.inline("Fabricación: <font color=\"#F5F7FA\"><b>+" .. Util.money(p.unit) .. "/u</b></font>", { size = Ui.S.xs, color = T.mut }),

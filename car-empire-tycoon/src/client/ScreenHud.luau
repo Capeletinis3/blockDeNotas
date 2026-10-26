@@ -107,6 +107,24 @@ function Screen.nextAction(g: any): any
 	if ed and ed.dirty then
 		return { label = "Continuar diseño", sub = ed.draft.name .. " tiene cambios sin guardar", go = "editor", key = "1" }
 	end
+	-- Tutorial: el botón principal lleva al paso actual (en el orden diseñar → lote → ventas → mejora →
+	-- investigación → segundo modelo).
+	local tut = Rules.currentTutorial(g)
+	if tut and not g.tutorial.skipped then
+		if Rules.missionState(g, tut) == "lista" then
+			return { label = "Reclamar recompensa", sub = tut.title, go = "misiones", key = "↵" }
+		end
+		local STEP = {
+			t2 = { label = "Lanzar un lote", sub = "Elegí cuántas unidades fabricar", dialog = "lot", key = "3" },
+			t3 = { label = "Mirar las ventas", sub = "Los autos terminados se venden solos", go = "ventas", key = "4" },
+			t4 = { label = "Mejorar la fábrica", sub = "Subí de nivel una estación", go = "fabrica", key = "3" },
+			t5 = { label = "Investigar", sub = "Elegí tu primera tecnología", go = "investigacion", key = "6" },
+			t6 = { label = "Diseñar otro modelo", sub = "Otro tipo de auto vende en otro segmento", go = "editor", params = { fresh = true }, key = "1" },
+		}
+		if STEP[tut.id] then
+			return STEP[tut.id]
+		end
+	end
 	if #g.lots == 0 then
 		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3" }
 	end
@@ -141,7 +159,7 @@ function Screen.runNext(g: any)
 	if cta.dialog then
 		App.openDialog(cta.dialog, { wide = true })
 	else
-		App.go(cta.go)
+		App.go(cta.go, cta.params)
 	end
 end
 
@@ -326,7 +344,20 @@ local function hud1(g: any): Frame
 		end)
 		table.insert(items, f)
 		if deskWide then
-			local f2 = res("users", T.pink, hex("#FF78AA"), 0.14, "PERSONAL", #g.employees .. "/" .. g.derived.caps.staff, { name = "Personal" })
+			local function salesText(gg: any): string
+				local total = 0
+				local markets = {}
+				for _, l in gg.lots do
+					local t = l.design.type
+					markets[t] = markets[t] or Rules.market(gg, t)
+					total += Rules.lotSalesRate(gg, l, markets[t])
+				end
+				return Util.num(total, total < 10 and 1 or 0) .. " autos/min"
+			end
+			local f2, v2 = res("tag", T.gr, T.gr, 0.14, "VENTAS", salesText(g), { name = "Ventas" })
+			App.live(function(gg: any)
+				v2.Text = salesText(gg)
+			end)
 			table.insert(items, f2)
 		end
 	end
@@ -396,9 +427,26 @@ local function hud1(g: any): Frame
 	}, items)
 end
 
+-- Borde violeta que late (resaltado del tutorial). Sin animación si «Reducir movimiento» está activo.
+function Screen.pulse(target: GuiObject)
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "Resaltado"
+	stroke.Color = T.vi
+	stroke.Thickness = 2
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Parent = target
+	if not Ui.reduceMotion then
+		local tw = TweenService:Create(stroke, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Transparency = 0.75 })
+		tw:Play()
+		target.Destroying:Connect(function()
+			tw:Cancel()
+		end)
+	end
+end
+
 -- Fila 2: navegación
 local function hud2(g: any): Frame
-	local compact = App.layout ~= "desktop"
+	local compact = App.layout ~= "desktop" or App.vw < 1720
 	local counts = Screen.counts(g)
 	local route = App.ui.route
 	local items: { Instance? } = {}
@@ -428,6 +476,11 @@ local function hud2(g: any): Frame
 		end
 		if not compact and Ui.showKeys then
 			Ui.kbd(key, false).Parent = b
+		end
+		-- Tutorial: el botón de la sección del paso actual se resalta con un borde violeta que late.
+		local tut = Rules.currentTutorial(g)
+		if tut and not g.tutorial.skipped and tut.go == id and not on then
+			Screen.pulse(b)
 		end
 		if not on then
 			b.MouseEnter:Connect(function()

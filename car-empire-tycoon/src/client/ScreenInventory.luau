@@ -35,33 +35,53 @@ function Screen.head(g: any): { Instance }
 	return { Ui.chip(n .. (n == 1 and " diseño" or " diseños"), "cb"), Ui.chip(Util.num(g.counters.unitsSold) .. " vendidos en total", "cg") }
 end
 
--- Totales de todos los lotes (activos e historial) de un diseño o de una familia.
-function Screen.totals(g: any, match: (any) -> boolean): any
-	local t = { lots = 0, produced = 0, sold = 0, revenue = 0, cost = 0, discarded = 0, active = 0 }
-	for _, list in { g.lots, g.lotHistory } do
-		for _, l in list do
-			if match(l) then
-				t.lots += 1
-				t.produced += l.produced
-				t.sold += l.sold
-				t.revenue += l.revenue
-				t.cost += l.costSpent
-				t.discarded += l.discarded or 0
-				if l.saleState == "en venta" then
-					t.active += 1
-				end
-			end
+--[[ Historia de cada modelo y generación: el resumen permanente (lotes terminados, g.modelHistory) más los
+	lotes que siguen activos. Devuelve una lista de { key, lineage, gen, name, modelYear, type, spec, stats,
+	lots, produced, sold, discarded, revenue, cost, bestLotSold, bestLotProfit, bestMonth, active }. ]]
+function Screen.generations(g: any): { any }
+	local out, byKey = {}, {}
+	for _, e in g.modelHistory or {} do
+		local x = table.clone(e)
+		x.active = 0
+		byKey[e.key] = x
+		table.insert(out, x)
+	end
+	for _, l in g.lots do
+		local key = tostring(l.design.lineage or l.designId) .. "#" .. tostring(l.design.gen or 1)
+		local x = byKey[key]
+		if not x then
+			x = { key = key, lineage = l.design.lineage or l.designId, gen = l.design.gen or 1, name = l.design.name, modelYear = l.design.modelYear, type = l.design.type, spec = l.design.spec, stats = l.design.calc, lots = 0, produced = 0, sold = 0, discarded = 0, revenue = 0, cost = 0, bestLotSold = 0, bestLotProfit = 0, bestMonth = 0, active = 0 }
+			byKey[key] = x
+			table.insert(out, x)
+		end
+		x.lots += 1
+		x.active += 1
+		x.produced += l.produced
+		x.sold += l.sold
+		x.discarded += l.discarded
+		x.revenue += l.revenue
+		x.cost += l.costSpent
+		x.bestLotSold = math.max(x.bestLotSold, l.sold)
+		x.bestMonth = math.max(x.bestMonth, l.bestMonth or 0, l.monthSold or 0)
+	end
+	return out
+end
+
+-- Totales de un diseño (todas las generaciones de su familia que comparten id o la suya propia).
+function Screen.totals(g: any, design: any): any
+	local key = tostring(design.lineage or design.id) .. "#" .. tostring(design.gen or 1)
+	for _, x in Screen.generations(g) do
+		if x.key == key then
+			return x
 		end
 	end
-	return t
+	return { lots = 0, produced = 0, sold = 0, revenue = 0, cost = 0, discarded = 0, active = 0 }
 end
 
 function Screen.designRow(g: any, d: any): Frame
 	local c = DesignCalc.computeDesign(g, d)
 	local b = Catalog.base(d.baseId)
-	local tot = Screen.totals(g, function(l: any): boolean
-		return l.designId == d.id
-	end)
+	local tot = Screen.totals(g, d)
 	local actions: { Instance? } = {}
 	if d.template then
 		table.insert(actions, Ui.button("Usar plantilla", "p", function()
@@ -116,36 +136,78 @@ function Screen.designRow(g: any, d: any): Frame
 	return row
 end
 
--- Historia de un modelo: todas las generaciones (familia) con sus lotes.
-local function familyCard(g: any, lineage: string, entries: { any }): Frame
+-- Historia de un modelo: todas sus generaciones con configuración, estadísticas, totales y récords.
+local function familyCard(entries: { any }): Frame
 	table.sort(entries, function(a: any, b: any): boolean
-		if a.design.gen ~= b.design.gen then
-			return (a.design.gen or 1) < (b.design.gen or 1)
+		return (a.gen or 1) < (b.gen or 1)
+	end)
+	local tot = { sold = 0, revenue = 0, cost = 0, discarded = 0, produced = 0 }
+	for _, x in entries do
+		for k in tot do
+			tot[k] += x[k] or 0
 		end
-		return (a.createdDay or 0) < (b.createdDay or 0)
-	end)
-	local tot = Screen.totals(g, function(l: any): boolean
-		return (l.design.lineage or l.designId) == lineage
-	end)
+	end
+	local last = entries[#entries]
 	local profit = tot.revenue - tot.cost
 	local rows: { Instance? } = {
 		Ui.row({
-			Ui.paintChip(entries[#entries].design.spec, 34, 22),
-			Ui.grow(Ui.text(entries[#entries].design.name, { size = 15, weight = W.bold })),
-			Ui.chip(tot.lots .. (tot.lots == 1 and " lote" or " lotes"), "cn"),
-		}, 10),
-		Ui.row({
-			Ui.inline(Util.num(tot.sold) .. " vendidos", { size = Ui.S.xs, color = T.mut }),
-			Ui.inline("ingresos " .. Util.money(tot.revenue), { size = Ui.S.xs, color = T.gr }),
-			Ui.inline("resultado " .. Util.money(profit), { size = Ui.S.xs, color = profit >= 0 and T.gr or T.re2 }),
-			tot.discarded > 0 and Ui.inline(Util.num(tot.discarded) .. " descartados", { size = Ui.S.xs, color = T.re2 }) or nil,
-		}, 12, { wrap = true }),
+			Ui.paintChip(last.spec or { paint = { primary = "#888888" } }, 34, 22),
+			Ui.grow(Ui.col({
+				Ui.text(last.name, { size = 16, weight = W.bold }),
+				Ui.text((Catalog.TYPES[last.type] or "") .. " · " .. #entries .. (#entries == 1 and " generación" or " generaciones"), { size = Ui.S.xs, color = T.mut }),
+			}, 2)),
+			Ui.col({
+				Ui.inline(Util.num(tot.sold) .. " vendidos", { size = Ui.S.sm, weight = W.bold }),
+				Ui.inline("beneficio " .. Util.money(profit), { size = Ui.S.xs, color = profit >= 0 and T.gr or T.re2 }),
+			}, 2, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, h = "R" }),
+		}, 10, { wrap = App.isPhone() }),
 	}
-	for _, l in entries do
-		local st = l.saleState == "en venta" and "En venta" or (l.saleState == "agotado" and "Agotado" or "Retirado")
-		table.insert(rows, Ui.between((l.design.spec.generation or "") .. " · " .. Util.gameDate(l.createdDay) .. " · " .. Util.num(l.sold) .. "/" .. Util.num(l.produced), st .. " · " .. Util.money(l.revenue - l.costSpent), { size = Ui.S.xs, color = l.revenue - l.costSpent >= 0 and T.gr or T.re2 }))
+	for _, x in entries do
+		local sp = x.spec or {}
+		local parts = sp.parts or {}
+		local function pn(cat: string): string
+			local p = Catalog.part(cat, parts[cat])
+			return p and p.name or "—"
+		end
+		local st = x.stats or {}
+		local res = x.revenue - x.cost
+		table.insert(rows, Ui.card({
+			Ui.row({
+				Ui.chip(x.gen .. ".ª gen. · " .. tostring(x.modelYear or ""), "cb"),
+				x.active > 0 and Ui.chip("En venta", "cg") or Ui.chip("Fuera de venta", "cn"),
+				Ui.grow(Ui.text(pn("motor") .. " · " .. pn("transmision") .. " · " .. pn("seguridad"), { size = Ui.S.xs, color = T.tx2 })),
+			}, 8, { wrap = true }),
+			st.hp and Ui.text(string.format("%d hp · 0–100 en %s s · consumo %s · seguridad %d · fiabilidad %d · calidad %d · costo %s/u", st.hp or 0, Util.num(st.accel or 0, 1), Util.num(st.consumption or 0, 1), st.safety or 0, st.durability or 0, st.quality or 0, Util.money(st.unitCost or 0)), { size = Ui.S.xs, color = T.mut }) or nil,
+			Ui.text(string.format("%s lotes · %s fabricados · %s vendidos · %s descartados · ingresos %s · gastos %s · beneficio %s", Util.num(x.lots), Util.num(x.produced), Util.num(x.sold), Util.num(x.discarded), Util.money(x.revenue), Util.money(x.cost), Util.money(res)), { size = Ui.S.xs, color = res >= 0 and T.gr or T.re2 }),
+			Ui.text("Récords: mejor lote " .. Util.num(x.bestLotSold) .. " vendidos" .. ((x.bestLotProfit or 0) > 0 and (" · lote más rentable " .. Util.money(x.bestLotProfit)) or "") .. " · mejor mes " .. Util.num(x.bestMonth or 0) .. " ventas", { size = Ui.S.xs, color = T.ye }),
+		}, { gap = 4, pad = { 8, 10 }, bg = T.p2, name = "Generacion_" .. x.key }))
 	end
-	return Ui.card(rows, { gap = 6, name = "Familia_" .. lineage })
+	return Ui.card(rows, { gap = 8, name = "Familia_" .. tostring(last.lineage) })
+end
+
+-- Récords de la empresa (de todo el historial permanente y los lotes activos).
+local function recordsCard(gens: { any }): Frame?
+	if #gens == 0 then
+		return nil
+	end
+	local best, profit, month = gens[1], gens[1], gens[1]
+	for _, x in gens do
+		if x.sold > best.sold then
+			best = x
+		end
+		if x.revenue - x.cost > profit.revenue - profit.cost then
+			profit = x
+		end
+		if (x.bestMonth or 0) > (month.bestMonth or 0) then
+			month = x
+		end
+	end
+	return Ui.card({
+		Ui.lbl("Récords de la empresa"),
+		Ui.between("Más vendido", best.name .. " " .. best.gen .. ".ª gen. · " .. Util.num(best.sold)),
+		Ui.between("Más rentable", profit.name .. " " .. profit.gen .. ".ª gen. · " .. Util.money(profit.revenue - profit.cost), { color = T.gr }),
+		Ui.between("Mejor mes de un modelo", month.name .. " · " .. Util.num(month.bestMonth or 0) .. " ventas"),
+	}, { gap = 6, name = "Records" })
 end
 
 function Screen.build(main: Frame, side: Frame)
@@ -174,24 +236,28 @@ function Screen.build(main: Frame, side: Frame)
 			Ui.empty("search", "Ningún diseño coincide con la búsqueda.").Parent = main
 		end
 	else
+		local gens = Screen.generations(g)
 		local fam: { [string]: { any } } = {}
 		local order = {}
-		for _, list in { g.lots, g.lotHistory } do
-			for _, l in list do
-				local key = l.design.lineage or l.designId
-				if not fam[key] then
-					fam[key] = {}
-					table.insert(order, key)
-				end
-				table.insert(fam[key], l)
+		for _, x in gens do
+			local key = tostring(x.lineage)
+			if not fam[key] then
+				fam[key] = {}
+				table.insert(order, key)
 			end
+			table.insert(fam[key], x)
 		end
 		if #order == 0 then
-			Ui.empty("car", "Todavía no fabricaste ningún modelo. La historia muestra cada generación con sus lotes y resultados.").Parent = main
+			Ui.empty("car", "Todavía no fabricaste ningún modelo. La historia guarda cada generación con su configuración, sus ventas y sus récords.").Parent = main
+		end
+		local rec = recordsCard(gens)
+		if rec then
+			rec.Parent = main
 		end
 		for _, key in order do
-			familyCard(g, key, fam[key]).Parent = main
+			familyCard(fam[key]).Parent = main
 		end
+		Ui.text("La historia de cada modelo se conserva siempre (aunque elimines el diseño). El detalle lote por lote queda para los últimos " .. Catalog.RULES.maxLotHistory .. " lotes en Ventas.", { size = Ui.S.xs, color = T.mut }).Parent = main
 	end
 
 	-- Columna lateral

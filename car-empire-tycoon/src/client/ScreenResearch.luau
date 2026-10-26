@@ -43,7 +43,23 @@ function Screen.etaMinutes(g: any, n: any): number
 	return left / math.max(0.01, g.derived.piPerMinute)
 end
 
-local function nodeCard(g: any, n: any): Frame
+-- Investigación sugerida: la disponible que antes se termina (más PI ahorrados primero); a igual
+-- costo, la más antigua. Es una ayuda para quien no sabe qué elegir, no una obligación.
+function Screen.suggested(g: any): any
+	local best = nil
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if Rules.researchState(g, n) == "disponible" and g.money >= n.cost then
+				if not best or n.rp < best.rp or (n.rp == best.rp and n.year < best.year) then
+					best = n
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function nodeCard(g: any, n: any, suggested: boolean?): Frame
 	local st = Rules.researchState(g, n)
 	local miss = Rules.researchMissing(g, n)
 	local why = nil
@@ -87,7 +103,7 @@ local function nodeCard(g: any, n: any): Frame
 	local tier = Catalog.RESEARCH_TIERS[n.tier]
 	local eta = st == "disponible" and (" · ≈ " .. Util.realTime(Screen.etaMinutes(g, n) * 60) .. " con " .. piText(g)) or ""
 	return Ui.card({
-		Ui.row({ Ui.chip(tostring(n.year), "cn"), Ui.grow(Ui.text(n.name, { size = Ui.S.sm, weight = W.bold })), Ui.chip(chip[1], chip[2]) }, 8),
+		Ui.row({ Ui.chip(tostring(n.year), "cn"), Ui.grow(Ui.text(n.name, { size = Ui.S.sm, weight = W.bold })), suggested and Ui.chip("★ Sugerida", "cv") or nil, Ui.chip(chip[1], chip[2]) }, 8, { wrap = App.isPhone() }),
 		Ui.text(n.gain, { size = Ui.S.xs, color = T.tx2 }),
 		Ui.text((tier and tier.label or "") .. " · " .. Util.money(n.cost) .. " · " .. Util.num(n.rp) .. " PI" .. eta, { size = Ui.S.xs, color = T.mut }),
 		#reqs > 0 and Ui.col(reqs, 2) or nil,
@@ -119,6 +135,7 @@ function Screen.build(main: Frame, side: Frame)
 		end
 		return a.id < b.id
 	end)
+	local sug = Screen.suggested(g)
 	local decade = nil
 	local cards: { Instance } = {}
 	local function flush()
@@ -134,7 +151,7 @@ function Screen.build(main: Frame, side: Frame)
 			decade = d
 			Ui.lbl("Años " .. d .. (d <= Rules.year(g) and "" or " · todavía no llegaron")).Parent = main
 		end
-		table.insert(cards, nodeCard(g, n))
+		table.insert(cards, nodeCard(g, n, sug ~= nil and sug.id == n.id))
 	end
 	flush()
 
@@ -174,21 +191,31 @@ function Screen.build(main: Frame, side: Frame)
 	else
 		table.insert(current, Ui.text("No hay investigación en curso. Elegí una disponible: los PI ahorrados se aplican enseguida.", { size = Ui.S.sm, color = T.mut }))
 	end
+	if not a and sug then
+		table.insert(current, Ui.note("v", "Sugerida: <b>" .. sug.name .. "</b> (" .. sug.year .. ") · " .. sug.gain .. " · ≈ " .. Util.realTime(Screen.etaMinutes(g, sug) * 60) .. ".", Ui.button("Investigar", "p", function()
+			App.request("startResearch", { id = sug.id })
+		end, { small = true, name = "InvestigarSugerida" })))
+	end
 	Ui.card(current, { gap = 8, name = "EnCurso" }).Parent = side
 	local sede = Rules.sede(g)
 	local nx = Rules.nextSede(g)
 	local rpLabel = Ui.inline(math.floor(g.rp) .. " / " .. math.floor(Rules.piCap(g)) .. " PI", { size = Ui.S.sm, weight = W.bold })
+	local bankBar, bankFill = Ui.bar(math.min(100, g.rp / math.max(1, Rules.piCap(g)) * 100), T.vi)
 	App.live(function(gg: any)
 		rpLabel.Text = math.floor(gg.rp) .. " / " .. math.floor(gg.derived.piCap) .. " PI"
+		Ui.setBar(bankFill, math.min(100, gg.rp / math.max(1, gg.derived.piCap) * 100))
 	end)
+	local full = not g.research.active and g.rp >= Rules.piCap(g) - 0.5
 	Ui.card({
 		Ui.lbl("Puntos de investigación (PI)"),
-		Ui.row({ Ui.grow(Ui.text("Ahorrados", { size = Ui.S.sm })), rpLabel }, 10),
+		Ui.row({ Ui.grow(Ui.text("Banco (capacidad " .. Catalog.RULES.piBankMinutes .. " min de generación)", { size = Ui.S.sm })), rpLabel }, 10),
+		bankBar,
+		full and Ui.note("y", "El banco está lleno: la sede no acumula más PI hasta que elijas una investigación.") or nil,
 		Ui.between("Generación total", piText(g), { color = T.vi2 }),
 		Ui.between("· de la sede (" .. sede.name .. ")", sede.pi .. " PI/min"),
 		Ui.between("· del personal del laboratorio", "+" .. Util.num(g.derived.piPerMinute - sede.pi, 1) .. " PI/min (máx. +30 %)"),
 		nx and Ui.text("Con «" .. nx.name .. "» la sede genera " .. nx.pi .. " PI/min.", { size = Ui.S.xs, color = T.mut }) or nil,
-		Ui.text("Sin investigación activa se ahorran hasta " .. Catalog.RULES.piBankMinutes .. " minutos de generación. También dan PI las ventas (1 cada " .. Catalog.ECON.salesPiPer .. " autos, con tope mensual), agotar un lote con ganancia y las misiones.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+		Ui.text("Sin investigación activa se ahorran hasta " .. Catalog.RULES.piBankMinutes .. " minutos de generación. También dan PI las ventas (1 cada " .. Catalog.ECON.salesPiPer .. " autos), los lanzamientos exitosos (" .. Catalog.ECON.launchSold .. " ventas de un diseño nuevo) y los lotes de " .. Catalog.ECON.soldOutMinQty .. "+ unidades agotados con ganancia, con un tope mensual; y las misiones. Esas recompensas se suman aunque el banco esté lleno.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 	}, { gap = 6, name = "PI" }).Parent = side
 	Ui.card({
 		Ui.lbl("Progreso"),

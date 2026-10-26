@@ -572,7 +572,7 @@ function App.renderDialog()
 		Parent = App.dialogLayer,
 	})
 	-- Alto máximo: pantalla − 32 px (− 16 en celular); el cuerpo se desplaza.
-	App.dialogMaxBody = math.max(160, (phone and App.vh - 16 or App.vh - 32) - 150)
+	App.dialogMaxBody = math.max(160, (phone and App.vh - 16 or App.vh - 32) - (phone and 175 or 150))
 	local ok, err = pcall(builder, box, d.params, d)
 	if not ok then
 		warn("[CarEmpire] Error al construir el diálogo " .. d.kind .. ": " .. tostring(err))

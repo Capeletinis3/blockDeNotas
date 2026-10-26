@@ -432,18 +432,29 @@ Dialogs.lot = function(box: Frame, params: any)
 	local totalCost = qty * c.unitCost
 	local margin = price - c.unitCost
 	local afford = c.unitCost > 0 and math.floor(g.money / c.unitCost) or qty
+	local caps = g.derived.caps
 	Ui.grid({
 		(Ui.kv("Costo por unidad", Util.money(c.unitCost), { sub = "Se paga al terminar cada unidad" })),
-		(Ui.kv("Costo del lote", Util.money(totalCost), { sub = "Tenés " .. Util.money(g.money) })),
+		(Ui.kv("Costo total previsto", Util.money(totalCost), { color = T.or_, sub = "Tenés " .. Util.money(g.money) })),
+		(Ui.kv("Precio de venta", Util.money(price), { sub = "Ganancia por unidad " .. Util.money(margin) })),
+		(Ui.kv("Ingresos potenciales (estimado)", Util.money(price * qty), { color = T.gr, sub = "Si se vende todo el lote" })),
+		(Ui.kv("Ganancia potencial (estimada)", Util.money(margin * qty), { color = margin >= 0 and T.gr or T.re2, sub = "Ingresos − costo total" })),
 		(Ui.kv("Ventas estimadas", Util.num(est.rate, 1) .. " por minuto", { color = T.gr, sub = "Cuota del " .. Util.num(est.share * 100, 1) .. " % de " .. Util.num(est.demand, 0) .. " autos/min" })),
-		(Ui.kv("Fabricación", "≈ " .. Util.realTime(prodMin * 60), { sub = Util.num(lineRate, 1) .. " autos/min en una línea" })),
-		(Ui.kv("Venta completa", "≈ " .. Util.realTime(sellMin * 60), { sub = est.rate < lineRate and "limitada por la demanda" or "limitada por la fábrica" })),
-		(Ui.kv("Ganancia por unidad", Util.money(margin), { color = margin >= 0 and T.gr or T.re2, sub = "Si se vende todo: " .. Util.money(margin * qty) })),
+		(Ui.kv("Tiempo de producción (estimado)", "≈ " .. Util.realTime(prodMin * 60), { sub = "A la velocidad actual, en una línea" })),
+		(Ui.kv("Capacidad de fabricación", Util.num(lineRate, 1) .. " autos/min por línea", { sub = caps.lines .. (caps.lines == 1 and " línea" or " líneas") .. " · " .. Util.num(caps.capacity, 1) .. "/min en total" })),
+		(Ui.kv("Venta completa (estimada)", "≈ " .. Util.realTime(sellMin * 60), { sub = est.rate < lineRate and "limitada por la demanda" or "limitada por la fábrica" })),
 	}, App.isPhone() and 2 or 3, nil, 10).Parent = b
+	Ui.text("Los ingresos, la ganancia y los tiempos son estimaciones con la demanda y los rivales de hoy: cambian con el precio, la competencia y los años.", { size = Ui.S.xs, color = T.mut }).Parent = b
 	if price < c.unitCost then
 		Ui.note("r", "El precio está por debajo del costo: cada venta pierde " .. Util.money(c.unitCost - price) .. ".").Parent = b
 	elseif price > c.price * 1.3 then
 		Ui.note("y", "Un precio muy alto vende mucho más lento.").Parent = b
+	end
+	if sellMin > 45 then
+		Ui.note("y", "Riesgo: a este ritmo el lote tardaría " .. Util.realTime(sellMin * 60) .. " en venderse. Si después lo cerrás, las unidades sin vender se pierden.").Parent = b
+	end
+	if totalCost > g.money * 3 then
+		Ui.note("y", "Riesgo: el lote cuesta más de tres veces tu dinero actual (" .. Util.money(totalCost) .. "). Dependés de las ventas para terminarlo.").Parent = b
 	end
 	if afford < qty then
 		Ui.note("b", "Hoy alcanza para fabricar " .. Util.num(afford) .. " unidades. El resto se fabrica con lo que entra por las ventas; si el dinero no alcanza, la línea espera sin generar deuda.").Parent = b

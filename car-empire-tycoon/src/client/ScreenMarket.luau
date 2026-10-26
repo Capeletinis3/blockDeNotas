@@ -118,24 +118,53 @@ function Screen.build(main: Frame, side: Frame)
 			Ui.note("b", "Todavía no hay demanda de: " .. table.concat(soon, ", ") .. ". Aparecen con los años.").Parent = main
 		end
 	else
+		-- Clasificación: todas las empresas por ventas por minuto en todos los tipos (incluida la tuya).
+		local rows = { { name = g.company.name .. " (vos)", rate = 0, color = T.vi, me = true, models = {} } }
+		local byRival = {}
+		for _, r in Catalog.RIVALS do
+			byRival[r.id] = { name = r.name, rate = 0, color = hex(r.color), r = r, models = {} }
+			table.insert(rows, byRival[r.id])
+		end
+		local totalDemand = 0
+		for _, typeId in Catalog.TYPE_ORDER do
+			local b = Screen.breakdown(g, typeId)
+			totalDemand += b.demand
+			rows[1].rate += b.myRate
+			for _, rv in b.rivals do
+				local row = byRival[rv.r.rival.id]
+				row.rate += rv.rate
+				table.insert(row.models, { o = rv.r, typeId = typeId, rate = rv.rate, share = rv.share })
+			end
+		end
+		table.sort(rows, function(a: any, b: any): boolean
+			return a.rate > b.rate
+		end)
+		local ranking: { Instance? } = { Ui.lbl("Clasificación de " .. Rules.year(g) .. " (ventas por minuto)") }
+		for i, row in rows do
+			local share = totalDemand > 0 and row.rate / totalDemand * 100 or 0
+			local bar = Ui.bar(math.min(100, share * 2), row.color)
+			table.insert(ranking, Ui.row({
+				Ui.inline(i .. ".", { size = Ui.S.sm, weight = W.bold, width = 22 }),
+				Ui.inline(row.name, { size = Ui.S.sm, weight = row.me and W.bold or W.med, color = row.me and T.vi2 or T.tx, width = App.isPhone() and 120 or 190, truncate = true }),
+				Ui.grow(bar),
+				Ui.inline(Util.num(row.rate, 1) .. "/min · " .. Util.num(share, 1) .. " %", { size = Ui.S.xs, color = T.mut, width = 120, align = "R" }),
+			}, 8, { Name = row.me and "PosicionPropia" or ("Posicion_" .. row.name) }))
+		end
+		Ui.card(ranking, { gap = 8, name = "Clasificacion" }).Parent = main
+		if g.rivalNews and #g.rivalNews.items > 0 then
+			Ui.note("b", "<b>Novedades de " .. g.rivalNews.year .. ":</b> " .. table.concat(g.rivalNews.items, " · ") .. ".").Parent = main
+		end
 		local yf = Rules.yearFrac(g)
 		for _, r in Catalog.RIVALS do
+			local row = byRival[r.id]
 			local models: { Instance? } = {}
-			local total = 0
-			for _, typeId in Catalog.TYPE_ORDER do
-				for _, o in Rules.rivalOffers(typeId, yf) do
-					if o.rival.id == r.id then
-						local b = Screen.breakdown(g, typeId)
-						local rate = 0
-						for _, rv in b.rivals do
-							if rv.r.rival.id == r.id then
-								rate = rv.rate
-							end
-						end
-						total += rate
-						table.insert(models, Ui.between(o.name .. " · " .. Catalog.TYPES[typeId] .. " · " .. o.segment .. " · " .. Util.money(o.price), Util.num(rate, 1) .. "/min", { size = Ui.S.xs }))
-					end
-				end
+			for _, x in row.models do
+				local o = x.o
+				table.insert(models, Ui.between(
+					o.name .. " · " .. Catalog.TYPES[x.typeId] .. " · " .. o.gen .. ".ª gen. (" .. o.launched .. ") · " .. Util.money(o.price) .. (o.cut > 0.01 and (" (−" .. Util.round(o.cut * 100) .. " %)") or "") .. " · atractivo " .. Util.round(o.appeal),
+					Util.num(x.rate, 1) .. "/min · " .. Util.num(x.share * 100, 1) .. " %",
+					{ size = Ui.S.xs }
+				))
 			end
 			local coming = {}
 			for typeId, since in r.types do
@@ -146,37 +175,29 @@ function Screen.build(main: Frame, side: Frame)
 			Ui.card({
 				Ui.row({
 					Ui.new("Frame", { Name = "Color", BackgroundColor3 = hex(r.color), BackgroundTransparency = 0, Size = UDim2.fromOffset(14, 14), Corner = 7 }),
-					Ui.grow(Ui.text(r.name, { size = 16, weight = W.bold })),
-					Ui.chip(Util.num(total, 1) .. " ventas/min", total > 0 and "cg" or "cn"),
-				}, 10),
+					Ui.grow(Ui.col({
+						Ui.text(r.name, { size = 16, weight = W.bold }),
+						Ui.text("Estrategia: " .. r.strategy .. " · alcance ×" .. Util.num(Catalog.interp(r.reach, yf), 1) .. " · nueva generación cada " .. r.cycle .. " años", { size = Ui.S.xs, color = T.mut }),
+					}, 2)),
+					Ui.chip(Util.num(row.rate, 1) .. " ventas/min", row.rate > 0 and "cg" or "cn"),
+				}, 10, { wrap = App.isPhone() }),
 				#models > 0 and Ui.col(models, 4) or Ui.text("Sin modelos a la venta este año.", { size = Ui.S.xs, color = T.mut }),
 				#coming > 0 and Ui.text("Próximamente: " .. table.concat(coming, ", "), { size = Ui.S.xs, color = T.mut }) or nil,
 			}, { gap = 8, name = "Rival_" .. r.id }).Parent = main
 		end
-		local mine = 0
-		for _, typeId in Catalog.TYPE_ORDER do
-			mine += Screen.breakdown(g, typeId).myRate
-		end
-		Ui.card({
-			Ui.row({
-				Ui.logo(g.company, 22),
-				Ui.grow(Ui.text(g.company.name .. " (vos)", { size = 16, weight = W.bold })),
-				Ui.chip(Util.num(mine, 1) .. " ventas/min", "cv"),
-			}, 10),
-		}, { gap = 8, name = "MiEmpresa" }).Parent = main
 	end
 
 	-- Columna lateral
 	Ui.card({
 		Ui.lbl("Cómo se reparte la demanda"),
-		Ui.text("Cada tipo tiene una demanda total por minuto que cambia con los años. Se reparte entre tus modelos, las marcas rivales y el resto del mercado según el <b>atractivo</b> de cada auto frente al que se espera en la época (cada 12 puntos más, casi el triple de peso), el <b>precio</b> respecto del de referencia, tu <b>reputación</b> y el <b>alcance</b> de tu sede.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
+		Ui.text("Cada tipo tiene una demanda total por minuto que cambia con los años. Se reparte entre tus modelos, las marcas rivales y el resto del mercado con las mismas reglas para todos: <b>atractivo</b> frente al que se espera en la época (cada 12 puntos más, casi el triple de peso), <b>precio</b> respecto del precio justo, <b>alcance</b> comercial y, en tu caso, <b>reputación</b> y campaña. Si les quitás mercado, los rivales más agresivos bajan sus precios.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
 	}, { gap = 4, name = "Reparto" }).Parent = side
 	Ui.card({
 		Ui.lbl("Tu empresa"),
 		Ui.between("Alcance de la sede", "×" .. Util.num(Rules.sede(g).reach, 1)),
 		Ui.between("Reputación", Util.num(g.reputation, 1) .. " / 5"),
 		Ui.between("Multiplicador comercial", "×" .. Util.num(Rules.playerMult(g), 2)),
-		g.promo and Ui.between("Campaña", "+" .. Util.round(Catalog.ECON.campaignBoost * 100) .. " %", { color = T.gr }) or nil,
+		Rules.campaign(g) and Ui.between("Campaña «" .. Rules.campaign(g).name .. "»", "+" .. Util.round(Rules.campaign(g).boost * 100) .. " %", { color = T.gr }) or nil,
 	}, { gap = 6, name = "TuEmpresa" }).Parent = side
 end
 

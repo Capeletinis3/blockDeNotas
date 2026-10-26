@@ -51,8 +51,9 @@ function Screen.head(g: any): { Instance }
 		end
 	end
 	local out = { Ui.chip(n .. (n == 1 and " modelo en venta" or " modelos en venta"), "cg") }
-	if g.promo then
-		table.insert(out, Ui.chip("Campaña activa", "cy"))
+	local camp = Rules.campaign(g)
+	if camp then
+		table.insert(out, Ui.chip("Campaña: " .. camp.name, "cy"))
 	end
 	return out
 end
@@ -107,17 +108,22 @@ local function lotCard(g: any, l: any): Frame
 	local st = Screen.SALE[l.saleState] or Screen.SALE["en venta"]
 	local ps = Factory.PROD[l.prodState] or Factory.PROD.cola
 	local profit = l.revenue - l.costSpent
+	local cQty = stat("Encargadas", Util.num(l.qty), nil, "Encargadas")
+	local cProd, vProd = stat("Fabricadas", Util.num(l.produced), nil, "Fabricadas")
+	local cPend, vPend = stat("Por fabricar", Util.num(Rules.lotPending(l)), nil, "Pendientes")
 	local cAvail, vAvail = stat("Disponibles", Util.num(Rules.lotAvailable(l)), nil, "Disponibles")
-	local cProd, vProd = stat("Fabricadas", Util.num(l.produced) .. "/" .. Util.num(l.qty), nil, "Fabricadas")
 	local cSold, vSold = stat("Vendidas", Util.num(l.sold), nil, "Vendidas")
 	local cRate, vRate = stat("Ventas por minuto", "—", T.gr, "Ritmo")
 	local cRev, vRev = stat("Ingresos", Util.money(l.revenue), T.gr, "Ingresos")
-	local cRes, vRes = stat("Resultado", Util.money(profit), profit >= 0 and T.gr or T.re2, "Resultado")
+	local cCost, vCost = stat("Gastos de fabricación", Util.money(l.costSpent), T.or_, "Gastos")
+	local cRes, vRes = stat("Beneficio", Util.money(profit), profit >= 0 and T.gr or T.re2, "Resultado")
 	local bar, fill = Ui.bar(l.sold / math.max(1, l.qty) * 100, T.gr)
 	local barText = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "Avance" })
 	local function refresh(gg: any, x: any)
 		vAvail.Text = Util.num(Rules.lotAvailable(x))
-		vProd.Text = Util.num(x.produced) .. "/" .. Util.num(x.qty)
+		vProd.Text = Util.num(x.produced)
+		vPend.Text = Util.num(Rules.lotPending(x))
+		vCost.Text = Util.money(x.costSpent)
 		vSold.Text = Util.num(x.sold)
 		local rate = Rules.lotSalesRate(gg, x)
 		local avail = Rules.lotAvailable(x)
@@ -157,7 +163,7 @@ local function lotCard(g: any, l: any): Frame
 				Ui.inline("costo " .. Util.money(l.unitCost) .. " · ref. " .. Util.money(l.refPrice), { size = Ui.S.xs, color = T.mut }),
 			}, 1, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, h = App.isPhone() and "L" or "R" }),
 		}, 12, { wrap = App.isPhone() }),
-		Ui.grid({ cAvail, cProd, cSold, cRate, cRev, cRes }, App.isPhone() and 3 or 6, nil, 10),
+		Ui.grid({ cQty, cProd, cPend, cAvail, cSold, cRate, cRev, cCost, cRes }, App.isPhone() and 3 or (App.layout == "desktop" and 9 or 5), nil, 10),
 		Ui.row({ Ui.grow(bar), barText }, 10),
 		l.price < l.unitCost and Ui.note("r", "El precio está por debajo del costo: cada venta pierde " .. Util.money(l.unitCost - l.price) .. ".") or nil,
 		Ui.row({
@@ -237,18 +243,22 @@ function Screen.build(main: Frame, side: Frame)
 		Ui.between("Ingresos (últimos 3 meses)", Util.money(f.revenue), { color = T.gr }),
 		Ui.between("Margen de lo vendido", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
 	}, { gap = 6, name = "Ritmo" }).Parent = side
-	local hasCampaign = Rules.tech(g, "campaign") > 0
-	local node = Catalog.researchNode("mk1")
+	-- Campaña publicitaria por niveles: cada uno requiere su investigación; el primer mes se paga al activarla.
+	local cur = tonumber(g.promo) or 0
+	local opts: { Instance? } = {}
+	table.insert(opts, Ui.opt("Sin campaña", cur == 0, function()
+		App.request("setCampaign", { level = 0 })
+	end, { height = 34, fill = true, name = "Campana_0" }))
+	for _, c in Catalog.CAMPAIGNS do
+		local why = Rules.campaignBlock(g, c.level)
+		table.insert(opts, Ui.opt(c.name .. " · +" .. Util.round(c.boost * 100) .. " % · " .. Util.money(Rules.campaignCost(g, c.level)) .. "/mes", cur == c.level, function()
+			App.request("setCampaign", { level = c.level })
+		end, { height = 34, fill = true, autoY = true, name = "Campana_" .. c.level, disabled = why ~= nil, why = why }))
+	end
 	Ui.card({
-		Ui.row({
-			Ui.grow(Ui.col({
-				Ui.text("Campaña publicitaria", { size = Ui.S.sm, weight = W.bold }),
-				Ui.text(hasCampaign and ("+" .. Util.round(Catalog.ECON.campaignBoost * 100) .. " % de atractivo para todos tus autos. Cuesta " .. Util.money(Rules.sede(g).campaign) .. " al empezar cada mes.") or ("Requiere investigar «" .. (node and node.name or "Publicidad") .. "»."), { size = Ui.S.xs, color = T.mut }),
-			}, 2)),
-			Ui.toggle(g.promo == true, function()
-				App.request("toggleCampaign")
-			end, not hasCampaign and not g.promo, "Requiere investigar «" .. (node and node.name or "Publicidad") .. "»."),
-		}, 10),
+		Ui.lbl("Campaña publicitaria"),
+		Ui.text("Suma atractivo a todos tus autos en venta. Se paga cada mes; al activarla o subir de nivel se cobra el primer mes enseguida.", { size = Ui.S.xs, color = T.mut }),
+		Ui.col(opts, 6),
 	}, { gap = 8, name = "Campana" }).Parent = side
 	Ui.card({
 		Ui.lbl("Qué hace vender un auto"),

@@ -168,9 +168,15 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	local money0 = g0.money
 	eq(Util.gameDate(g0.time.day), "Ene 1970", "la empresa empieza en enero de 1970")
 	check(find("Ene 1970") ~= nil, "el HUD muestra la fecha")
+	check(named("Nav_editor") and named("Nav_editor"):FindFirstChild("Resaltado") ~= nil, "el tutorial resalta Diseño")
 	App.go("editor", { new = true })
 	M.task.wait()
 	eq(App.ui.route, "editor", "abre el editor")
+	App.screens.editor.goStep(2)
+	M.task.wait()
+	check(find("Efectos:") ~= nil, "las piezas muestran sus efectos")
+	App.screens.editor.goStep(1)
+	M.task.wait()
 	for step = 1, 3 do
 		local nb = named("Siguiente")
 		check(nb ~= nil, "paso " .. step .. ": botón Siguiente")
@@ -231,7 +237,7 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	App.go("ventas")
 	M.task.wait()
 	check(named("Modelo_" .. l.id) ~= nil, "tarjeta del modelo en venta")
-	for _, n in { "Disponibles", "Fabricadas", "Vendidas", "Ritmo", "Ingresos", "Resultado", "ModificarPrecio", "CerrarVenta" } do
+	for _, n in { "Encargadas", "Fabricadas", "Pendientes", "Disponibles", "Vendidas", "Ritmo", "Ingresos", "Gastos", "Resultado", "ModificarPrecio", "CerrarVenta", "Campana_0", "Campana_1" } do
 		check(named(n) ~= nil, "la tarjeta muestra " .. n)
 	end
 	check(find("En venta") ~= nil, "estado comercial En venta")
@@ -261,6 +267,23 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	M.task.wait()
 	check(named("Historial_" .. h.id) ~= nil, "aparece en Agotados y retirados")
 	App.ui.tabs.ventas = nil
+	-- Historia permanente del modelo en el Catálogo, con récords.
+	App.go("autos")
+	App.ui.tabs.autos = "historia"
+	App.forceRender()
+	M.task.wait()
+	check(named("Records") ~= nil, "récords de la empresa")
+	check(named("Generacion_" .. tostring(h.design.lineage) .. "#1") ~= nil, "la generación del modelo retirado está en la historia")
+	App.ui.tabs.autos = nil
+	-- Competidores: clasificación con la posición de la empresa.
+	App.go("mercado")
+	App.ui.tabs.mercado = "rivales"
+	App.forceRender()
+	M.task.wait()
+	check(named("Clasificacion") ~= nil and named("PosicionPropia") ~= nil, "clasificación con tu posición")
+	App.ui.tabs.mercado = nil
+	App.go("juego")
+	M.task.wait()
 	noErrors("Ventas")
 end)
 
@@ -443,17 +466,17 @@ local function overflow(): { string }
 	local out = {}
 	local vw = App.vw
 	for _, d in App.content:GetDescendants() do
-		if (d.Name == "Hud1" or string.sub(d.Name, 1, 6) == "Panel_" or d.Name == "PanelEditor" or d.Name == "Principal") and M.visible(d) then
+		if (d.Name == "Hud1" or d.Name == "Hud2" or string.sub(d.Name, 1, 6) == "Panel_" or d.Name == "PanelEditor" or d.Name == "Principal") and M.visible(d) then
 			local x = d.AbsolutePosition.X
 			local w = d.AbsoluteSize.X
 			if x < -1 or x + w > vw + 1 then
 				table.insert(out, d.Name .. string.format(" (%d..%d de %d)", x, x + w, vw))
 			end
 			-- Los elementos del HUD tampoco pueden quedar cortados por el borde derecho.
-			if d.Name == "Hud1" then
+			if d.Name == "Hud1" or d.Name == "Hud2" then
 				for _, c in d:GetChildren() do
 					if c:IsA("GuiObject") and c.Visible and c.AbsolutePosition.X + c.AbsoluteSize.X > vw + 1 then
-						table.insert(out, "Hud1/" .. c.Name .. string.format(" (termina en %d de %d)", c.AbsolutePosition.X + c.AbsoluteSize.X, vw))
+						table.insert(out, d.Name .. "/" .. c.Name .. string.format(" (termina en %d de %d)", c.AbsolutePosition.X + c.AbsoluteSize.X, vw))
 					end
 				end
 			end

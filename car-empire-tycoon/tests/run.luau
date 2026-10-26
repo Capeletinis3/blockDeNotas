@@ -792,6 +792,387 @@ test("Dos empresas: dinero, diseños y lotes independientes", function()
 	eq(#A.designs, 1, "A intacto")
 end)
 
+-- Segunda auditoría: casos obligatorios restantes y riesgos nuevos -----------------------------------
+
+test("[C4] Cambiar el motor cambia las estadísticas y el costo (cliente y servidor con la misma función)", function()
+	local g = newCompany("Motores SA")
+	local d = DesignCalc.newDraft(g, "brisa")
+	local base = DesignCalc.computeDesign(g, d)
+	d.parts.motor = "v6"
+	local v6 = DesignCalc.computeDesign(g, d)
+	check(v6.hp > base.hp and v6.unitCost > base.unitCost, "V6: más potencia y más costo")
+	check(v6.consumption > base.consumption and v6.accel < base.accel, "V6: gasta más y acelera mejor")
+	d.parts.motor = "i4e"
+	local eco = DesignCalc.computeDesign(g, d)
+	check(eco.consumption < base.consumption and eco.unitCost < base.unitCost, "1.3: gasta menos y es más barato")
+	d.parts.motor = "i4"
+	d.parts.seguridad = "cint3"
+	table.insert(g.research.done, "se1")
+	local safe = DesignCalc.computeDesign(g, d)
+	check(safe.safety > base.safety and safe.unitCost > base.unitCost, "paquete de seguridad: más seguridad y más costo")
+	-- Cada estadística pesa en el atractivo de algún objetivo (nada decorativo).
+	local idx = Rules.indices(safe)
+	for _, k in { "power", "eco", "comfort", "safety", "dur", "hand", "quality" } do
+		check(type(idx[k]) == "number", "índice " .. k)
+	end
+	local fast = table.clone(safe)
+	fast.top += 40
+	check(Rules.indices(fast).power > idx.power, "la velocidad máxima cuenta en las prestaciones")
+	local brakes = table.clone(safe)
+	brakes.stop -= 8
+	check(Rules.indices(brakes).safety > idx.safety, "el frenado cuenta en la seguridad")
+end)
+
+test("[C5] Componentes no investigados o de otra época bloqueados en el editor y en el servidor", function()
+	local g = newCompany("Bloqueo SA")
+	local d = DesignCalc.newDraft(g, "aurora")
+	check(DesignCalc.baseAvailable(g, Catalog.base("aurora")) ~= nil, "Aurora GT no existe en 1970")
+	d = DesignCalc.newDraft(g, "duna")
+	local v8 = Catalog.part("motor", "v8")
+	check(DesignCalc.partBlock(g, d, v8) ~= nil, "V8 sin investigar")
+	local raw = draftFor(g, "duna")
+	raw.parts.motor = "v8"
+	check(DesignCalc.sanitize(g, raw) == nil, "el servidor rechaza el V8 sin la investigación")
+	table.insert(g.research.done, "mo2")
+	check(DesignCalc.partBlock(g, d, v8) == nil, "con la investigación, disponible")
+	raw.parts.seguridad = "airbag"
+	check(DesignCalc.sanitize(g, raw) == nil, "bolsas de aire en 1970: rechazadas")
+end)
+
+test("[C6][C7][C8][C9] Lotes de 100, 1.000 y 50.000: se fabrica exactamente esa cantidad", function()
+	for _, q in { 100, 1000, 50000 } do
+		local g = bigCompany("Exacta " .. q)
+		for _, st in g.stations do
+			st.level = 10
+		end
+		local ctx = makeCtx(40 + q % 7)
+		local id = saveNew(g, ctx, "brisa")
+		local calc = DesignCalc.computeDesign(g, g.designs[1])
+		local hi = select(2, Rules.priceRange(calc.unitCost, calc.price))
+		local lotId = Actions.createLot(g, ctx, { designId = id, qty = q, price = hi }).lotId
+		local lot = findLot(g, lotId)
+		check(runUntil(g, ctx, function()
+			lotInvariants(g)
+			return (findLot(g, lotId) or findHist(g, lotId) or lot).prodState == "completado"
+		end, 400), q .. ": terminó")
+		eq(lot.produced, q, q .. ": exactamente " .. q .. " fabricadas")
+		eq(g.counters.unitsProduced, q, q .. ": nada de más")
+		eq(lot.costSpent, q * lot.unitCost, q .. ": cada unidad cobrada una vez")
+		runReal(g, ctx, 3, lotInvariants)
+		eq(g.counters.unitsProduced, q, q .. ": se detuvo")
+		local bytes = #serde.encode("json", g)
+		check(bytes < 40000, q .. ": la partida no crece con la cantidad (" .. bytes .. " bytes)")
+	end
+end)
+
+test("[C13] Cambiar el precio cambia el ritmo de ventas desde ese momento", function()
+	local g = newCompany("Precio SA")
+	local ctx = makeCtx(41)
+	g.money = 1000000
+	local id = saveNew(g, ctx, "brisa")
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 500 }).lotId
+	runReal(g, ctx, 1)
+	local lot = findLot(g, lotId)
+	local r0 = Rules.lotPotentialRate(g, lot)
+	check(Actions.setLotPrice(g, ctx, { lotId = lotId, price = lot.price * 1.3 }).ok, "precio más alto")
+	local r1 = Rules.lotPotentialRate(g, lot)
+	check(r1 < r0, "vende más lento")
+	check(not Actions.setLotPrice(g, ctx, { lotId = lotId, price = 1 }).ok, "fuera de rango")
+	check(not Actions.setLotPrice(g, ctx, { lotId = lotId, price = 0 / 0 }).ok, "un número inválido se rechaza")
+	-- Ninguna estrategia de precio domina siempre: el más caro deja más margen pero vende menos.
+	local c = DesignCalc.computeDesign(g, g.designs[1])
+	local cheap = Rules.designSalesEstimate(g, c, g.designs[1], c.price * 0.8)
+	local dear = Rules.designSalesEstimate(g, c, g.designs[1], c.price * 1.4)
+	check(cheap.rate > dear.rate and (c.price * 1.4 - c.unitCost) > (c.price * 0.8 - c.unitCost), "volumen contra margen")
+end)
+
+test("[C19] Banco de PI: acumula 20 minutos, avisa al llenarse y las recompensas no se pierden", function()
+	local g = newCompany("Banco SA")
+	local ctx = makeCtx(42)
+	eq(Catalog.RULES.piBankMinutes, 20, "capacidad configurable: 20 minutos")
+	eq(Rules.piCap(g), 60, "garaje: 3 PI/min × 20")
+	runReal(g, ctx, 25)
+	eq(g.rp, 60, "se llena y se detiene en el tope")
+	check(g.bankFull == true, "marca de banco lleno")
+	local warned = false
+	for _, n in g.notifications do
+		warned = warned or string.find(n.text, "banco de investigación está lleno", 1, true) ~= nil
+	end
+	check(warned, "avisa una vez")
+	-- Una misión cobrada con el banco lleno suma igual.
+	saveNew(g, ctx, "pixel")
+	local before = g.rp
+	check(Actions.claimMission(g, ctx, { id = "t1" }).ok, "misión")
+	check(g.rp > before, "el PI de la misión se suma aunque el banco esté lleno")
+	-- Con un proyecto activo, la generación va al proyecto.
+	check(Actions.startResearch(g, ctx, { id = "mo1" }).ok, "investigar")
+	runReal(g, ctx, 3)
+	check(Util.contains(g.research.done, "mo1"), "se completa con el banco")
+end)
+
+test("Anti-farmeo: lotes chicos o repetidos no generan PI sin límite", function()
+	local g = bigCompany("Farmeo SA")
+	g.sede = 1
+	local ctx = makeCtx(43)
+	local id = saveNew(g, ctx, "pixel")
+	local cap = Rules.piPerMinute(g) * Catalog.ECON.bonusPiCapMinutes
+	g.rp = 0
+	g.research.active = { id = "mo1", progress = 0, paid = 0 } -- todo lo generado va a un proyecto: el banco solo junta bonificaciones
+	local nodeRp = Catalog.researchNode("mo1").rp
+	Catalog.researchNode("mo1").rp = 1e9
+	local bonus = 0
+	for _ = 1, 30 do
+		local r = Actions.createLot(g, ctx, { designId = id, qty = 1 })
+		if r.ok then
+			runReal(g, ctx, 0.2)
+		end
+	end
+	bonus = g.rp
+	Catalog.researchNode("mo1").rp = nodeRp
+	check(bonus <= cap * 2 + 0.01, "30 lotes de una unidad dan como mucho el tope mensual (" .. Util.num(bonus, 2) .. " PI)")
+	eq(g.counters.lotsSoldOut >= 1 and true or false, true, "los lotes se agotan")
+end)
+
+test("[C21] Desbloquear una tecnología de otra década (cuando llega su año y sus requisitos)", function()
+	local g = newCompany("Década SA", nil, "facil")
+	local ctx = makeCtx(44)
+	g.money = 5000000
+	g.time.day = (1983 - 1970) * 12
+	local n = Catalog.researchNode("mo4") -- 1983, requiere mo1
+	check(Rules.researchState(g, n) == "bloqueada", "sin requisito")
+	table.insert(g.research.done, "mo1")
+	check(Rules.researchState(g, n) == "disponible", "con requisito y año")
+	check(Actions.startResearch(g, ctx, { id = "mo4" }).ok, "empieza")
+	g.rp = n.rp
+	Simulation.simulate(g, ctx, 10)
+	check(Util.contains(g.research.done, "mo4"), "terminada")
+	g.time.day = (1984 - 1970) * 12 -- el motor llega al mercado un año después de la tecnología
+	local d = DesignCalc.newDraft(g, "brisa")
+	check(DesignCalc.partBlock(g, d, Catalog.part("motor", "i4v")) == nil, "habilita el motor 2.0 16V de los 80")
+	-- El paso de los años no regala investigaciones.
+	local before = #g.research.done
+	runReal(g, ctx, 30)
+	eq(#g.research.done, before, "el calendario no investiga solo")
+end)
+
+test("[C23] Historial permanente: los modelos se conservan después de muchos lotes", function()
+	local g = bigCompany("Historia SA")
+	local ctx = makeCtx(45)
+	local id = saveNew(g, ctx, "pixel", "Apex Compact")
+	for i = 1, Catalog.RULES.maxLotHistory + 15 do
+		local r = Actions.createLot(g, ctx, { designId = id, qty = 10 + i })
+		check(r.ok, "lote " .. i)
+		Actions.closeSale(g, ctx, { lotId = r.lotId })
+	end
+	eq(#g.lotHistory, Catalog.RULES.maxLotHistory, "historial reciente acotado")
+	eq(#g.modelHistory, 1, "un modelo y generación en el historial permanente")
+	eq(g.modelHistory[1].lots, Catalog.RULES.maxLotHistory + 15, "cuenta todos los lotes, también los que salieron del reciente")
+	-- Nueva generación: otra entrada, la anterior no se pisa.
+	g.time.day = 12 * 7
+	local nd = draftFor(g, "pixel", "Apex Compact")
+	check(Actions.saveDesign(g, ctx, { draft = nd, newGenOf = id }).ok, "Apex Compact 2")
+	local id2 = g.designs[#g.designs].id
+	local r = Actions.createLot(g, ctx, { designId = id2, qty = 50 })
+	Actions.closeSale(g, ctx, { lotId = r.lotId })
+	eq(#g.modelHistory, 2, "una entrada por generación")
+	eq(g.modelHistory[1].gen, 1, "la 1.ª generación conserva su configuración")
+	eq(g.modelHistory[2].gen, 2, "la 2.ª tiene la suya")
+	check(g.modelHistory[1].spec.parts.motor ~= nil and g.modelHistory[1].stats.unitCost ~= nil, "configuración y estadísticas guardadas")
+	-- Eliminar el diseño no borra su historia.
+	check(Actions.delDesign(g, ctx, { designId = id }).ok, "eliminar el diseño")
+	eq(#g.modelHistory, 2, "la historia sigue")
+	check(GameState.validate(g), "partida válida")
+end)
+
+test("Migración 3 → 4: historial permanente desde los lotes, campaña y seguridad", function()
+	local g = bigCompany("Vieja Tres")
+	local ctx = makeCtx(46)
+	local id = saveNew(g, ctx, "brisa")
+	local full = {}
+	for i = 1, 3 do
+		local r = Actions.createLot(g, ctx, { designId = id, qty = 20 * i })
+		local l = findLot(g, r.lotId)
+		l.produced, l.sold, l.revenue, l.costSpent = l.qty, l.qty, l.qty * l.price, l.qty * l.unitCost
+		l.saleState, l.prodState = "agotado", "completado"
+		table.remove(g.lots, 1)
+		table.insert(full, 1, l) -- versión 3: el historial guardaba el lote completo
+	end
+	local old = jsonCopy(g)
+	old.schema = 3
+	old.lotHistory = jsonCopy(full)
+	old.modelHistory, old.launched, old.marketShare = nil, nil, nil
+	old.promo = true
+	old.designs[1].parts.seguridad = nil
+	local m, err = GameState.migrate(old, 1)
+	check(m ~= nil, "migra: " .. tostring(err))
+	local ok, why = GameState.validate(m)
+	check(ok, "válida: " .. tostring(why))
+	eq(m.schema, GameState.SCHEMA, "esquema actual")
+	eq(#m.modelHistory, 1, "un resumen")
+	eq(m.modelHistory[1].sold, 20 + 40 + 60, "con todas las ventas")
+	eq(m.promo, 1, "la campaña activa pasa a radio y prensa")
+	eq(m.designs[1].parts.seguridad, "basica", "seguridad básica en los diseños viejos")
+	check(m.lotHistory[1].design.calc == nil, "historial reciente liviano")
+	eq(m.money, old.money, "no cambia el dinero")
+end)
+
+test("[C24] Competidores: generaciones, precios que importan y reacción a tu cuota", function()
+	local g = newCompany("Rival SA")
+	local early = Rules.rivalOffers("compacto", 1970, g)
+	local later = Rules.rivalOffers("compacto", 1990, g)
+	check(#early >= 2 and #later >= 2, "hay rivales en compactos")
+	local genUp = false
+	for _, o in later do
+		genUp = genUp or o.gen > 1
+	end
+	check(genUp, "los rivales sacan generaciones nuevas")
+	-- El precio de un rival cambia tu reparto: si se abarata, vendés menos.
+	local ctx = makeCtx(47)
+	g.money = 1000000
+	local id = saveNew(g, ctx, "pixel")
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 500 }).lotId
+	runReal(g, ctx, 0.5)
+	local lot = findLot(g, lotId)
+	local base = Rules.lotPotentialRate(g, lot)
+	local saved = Catalog.RIVALS[2].price
+	Catalog.RIVALS[2].price = 0.6
+	local cheaperRivals = Rules.lotPotentialRate(g, lot)
+	Catalog.RIVALS[2].price = saved
+	check(cheaperRivals < base, "un rival más barato te quita ventas")
+	-- Si les quitás mercado, los agresivos bajan precios.
+	local calm = Rules.rivalOffers("compacto", 1975, g)
+	g.marketShare.compacto = 0.6
+	local react = Rules.rivalOffers("compacto", 1975, g)
+	local cut = false
+	for i, o in react do
+		cut = cut or o.price < calm[i].price
+	end
+	check(cut, "bajan precios cuando tu cuota es alta")
+	-- La cuota se actualiza sola cada mes.
+	runReal(g, ctx, 2)
+	check((g.marketShare.compacto or 0) > 0, "la cuota de mercado se registra")
+end)
+
+test("Inversiones: campaña paga el primer mes al activarse, duplicar paga ingeniería", function()
+	local g = newCompany("Gasto SA")
+	local ctx = makeCtx(48)
+	g.money = 500000
+	check(not Actions.setCampaign(g, ctx, { level = 1 }).ok, "sin investigar no hay campaña")
+	table.insert(g.research.done, "mk1")
+	local m = g.money
+	check(Actions.setCampaign(g, ctx, { level = 1 }).ok, "radio y prensa")
+	eq(g.money, m - Rules.campaignCost(g, 1), "primer mes cobrado enseguida")
+	check(not Actions.setCampaign(g, ctx, { level = 2 }).ok, "televisión requiere otra investigación")
+	check(Actions.setCampaign(g, ctx, { level = 0 }).ok, "apagar")
+	eq(g.money, m - Rules.campaignCost(g, 1), "apagar no devuelve ni cobra")
+	local id = saveNew(g, ctx, "pixel")
+	local m2 = g.money
+	check(Actions.dupDesign(g, ctx, { designId = id }).ok, "duplicar")
+	eq(g.money, m2 - DesignCalc.engineeringCost(g, g.designs[1], "nuevo"), "el duplicado paga la ingeniería de un modelo nuevo")
+	-- Estaciones: hasta nivel 2 por sede (10 con el imperio), cada nivel más caro.
+	eq(Rules.maxStationLevel(g), 2, "garaje: nivel 2")
+	g.sede = 5
+	eq(Rules.maxStationLevel(g), 10, "imperio: nivel 10")
+	check(Rules.upgradeCost({ level = 9 }) > Rules.upgradeCost({ level = 2 }) * 100, "los niveles altos cuestan mucho más")
+end)
+
+test("[C17][C18] Ampliar la sede: cobra, aplica enseguida, no se puede sin dinero ni dos veces", function()
+	local g = newCompany("Ampliar SA")
+	local ctx = makeCtx(49)
+	local nx = Rules.nextSede(g)
+	g.counters.unitsSold = nx.req.sold
+	g.reputation = nx.req.rep
+	g.money = nx.cost - 1
+	check(not Actions.expandSede(g, ctx, {}).ok, "sin dinero suficiente no amplía")
+	eq(g.sede, 1, "sigue en el garaje")
+	g.money = nx.cost + 10
+	local pi0, lines0 = Rules.piPerMinute(g), Rules.caps(g).lines
+	check(Actions.expandSede(g, ctx, {}).ok, "amplía")
+	eq(g.money, 10, "descuenta el costo exacto")
+	check(Rules.piPerMinute(g) > pi0 and Rules.caps(g).lines == lines0 + 1, "más PI y una línea más, al instante")
+	check(not Actions.expandSede(g, ctx, {}).ok, "la siguiente pide sus propios requisitos")
+	eq(g.sede, 2, "no se compra dos veces")
+end)
+
+test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y progreso del bot", function()
+	-- Escenarios de 1970, 1980, 1990, 2000, 2010 y 2020 con la sede esperada de la época.
+	local SEDE = { [1970] = 1, [1980] = 3, [1990] = 4, [2000] = 5, [2010] = 5, [2020] = 5 }
+	for _, year in { 1970, 1980, 1990, 2000, 2010, 2020 } do
+		local g = newCompany("Década " .. year)
+		local ctx = makeCtx(year)
+		g.time.day = (year - 1970) * 12
+		g.sede = SEDE[year]
+		g.money = 200000000
+		for _, key in Catalog.RESEARCH_ORDER do
+			for _, n in Catalog.RESEARCH[key].nodes do
+				if n.year <= year - 2 then
+					table.insert(g.research.done, n.id)
+				end
+			end
+		end
+		local types = 0
+		for _, b in Catalog.BASES do
+			if DesignCalc.baseAvailable(g, b) == nil and Rules.demand(g, b.type) > 0 then
+				local d = Bot.bestDesign(g, b.id, b.name, g.money)
+				local c = DesignCalc.computeDesign(g, d)
+				local est = Rules.designSalesEstimate(g, c, d, c.price)
+				check(c.price > c.unitCost, year .. " · " .. b.name .. ": deja margen")
+				check(est.rate > 0.5, year .. " · " .. b.name .. ": se vende (" .. Util.num(est.rate, 1) .. "/min)")
+				types += 1
+			end
+		end
+		check(types >= 3, year .. ": varios tipos rentables (" .. types .. ")")
+		-- Una investigación de la época se termina dentro del objetivo con la generación de la sede esperada.
+		for _, key in Catalog.RESEARCH_ORDER do
+			for _, n in Catalog.RESEARCH[key].nodes do
+				if n.year == year or (n.year > year and n.year <= year + 1) then
+					-- Objetivos pedidos: pequeña 1–2 min, normal 3–5, importante 6–10, gran avance 10–15.
+					local mins = n.rp / Catalog.interp(Catalog.EXPECTED_PI, n.year)
+					local MAX = { s = 2, n = 5, i = 10, b = 15 }
+					check(mins <= MAX[n.tier] + 0.01, n.id .. " dentro del objetivo (" .. Util.num(mins, 1) .. " min)")
+				end
+			end
+		end
+	end
+	-- Progresión completa simulada: ni demasiado rápida ni demasiado lenta, y siempre con dinero positivo.
+	local log = Bot.play("normal", 330)
+	check(log.milestones["primera venta"] < 1, "primera venta en menos de 1 min")
+	check(log.milestones["primera ganancia"] < 5, "primera ganancia en menos de 5 min")
+	check(log.milestones["sede 2"] >= 8 and log.milestones["sede 2"] <= 25, "Empresa pequeña entre 8 y 25 min (" .. Util.num(log.milestones["sede 2"], 1) .. ")")
+	check(log.milestones["sede 3"] ~= nil and log.milestones["sede 3"] <= 70, "Sede empresarial antes de 70 min")
+	check(log.milestones["sede 4"] ~= nil and log.milestones["sede 4"] <= 200, "Corporación antes de 200 min")
+	check(log.minMoney >= 0, "nunca dinero negativo")
+	local rs = Bot.researchSummary(log)
+	check(rs.avgGap > 0 and rs.avgGap <= 15, "una tecnología nueva cada " .. Util.num(rs.avgGap, 1) .. " min en promedio")
+	check(log.newUnlocks >= 10, "componentes nuevos durante la partida (" .. log.newUnlocks .. ")")
+	for typeId, bt in log.byType do
+		check(bt.revenue > bt.cost, typeId .. ": rentable en la partida")
+	end
+	-- Recuperarse de una mala decisión: un lote con precio absurdo se cierra y la empresa sigue.
+	local g = newCompany("Error SA", nil, "dificil")
+	local ctx = makeCtx(50)
+	local id = saveNew(g, ctx, "pixel")
+	local c = DesignCalc.computeDesign(g, g.designs[1])
+	local hi = select(2, Rules.priceRange(c.unitCost, c.price))
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 15, price = hi }).lotId
+	runReal(g, ctx, 2)
+	Actions.closeSale(g, ctx, { lotId = lotId })
+	local after = g.money
+	local r = Actions.createLot(g, ctx, { designId = id, qty = 400 })
+	check(r.ok, "puede lanzar otro lote")
+	-- Patrimonio = dinero + autos terminados sin vender (a su costo): crece vendiendo a buen precio.
+	local function equity(): number
+		local e = g.money
+		for _, l in g.lots do
+			e += Rules.lotAvailable(l) * l.unitCost
+		end
+		return e
+	end
+	check(runUntil(g, ctx, function()
+		return equity() > after + 60000
+	end, 25), "se recupera vendiendo a buen precio (" .. Util.money(after) .. " → " .. Util.money(equity()) .. ")")
+end)
+
 -- Guardado y sesiones ---------------------------------------------------------------------------
 
 local function newStore()
@@ -1213,6 +1594,78 @@ test("Reenviar Cerrar venta o Lanzar lote con el mismo identificador no los dupl
 	check(mgr:request(p, "closeSale", { lotId = s.game.lots[1].id, requestId = cid }).ok, "cerrado")
 	check(mgr:request(p, "closeSale", { lotId = s.game.lotHistory[1].id, requestId = cid }).duplicate, "reenvío del cierre")
 	eq(s.game.counters.lotsRetired, 1, "cerrado una sola vez")
+end)
+
+test("Salir durante una producción y volver: nada se fabrica ni se vende sin conexión y sigue igual", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 43 }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	g.money = 2000000
+	mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa"), requestId = rid() })
+	local r = mgr:request(p, "createLot", { designId = g.designs[1].id, qty = 5000, requestId = rid() })
+	check(r.ok, r.msg)
+	for _ = 1, 90 do
+		clock.t += 1
+		clock.c += 1
+		mgr:tick()
+	end
+	local snap = jsonCopy({ produced = g.lots[1].produced, sold = g.lots[1].sold, money = g.money, day = g.time.day })
+	check(snap.produced > 0 and snap.produced < 5000, "a mitad de producción")
+	mgr:remove(p)
+	clock.t += 3600 -- una hora sin conexión
+	local mgr2, pushed2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "vuelve a entrar")
+	local g2 = mgr2.list[p].game
+	eq(g2.lots[1].produced, snap.produced, "lo fabricado se conserva")
+	eq(g2.lots[1].sold, snap.sold, "lo vendido se conserva")
+	eq(g2.money, snap.money, "el dinero se conserva")
+	eq(g2.time.day, snap.day, "el calendario no avanzó sin conexión")
+	for _ = 1, 30 do
+		clock.t += 1
+		clock.c += 1
+		mgr2:tick()
+	end
+	check(g2.lots[1].produced > snap.produced, "la producción sigue al volver")
+	check(pushed2[p].game.lots[1].produced == g2.lots[1].produced, "el cliente recibe el avance segundo a segundo")
+	check(GameState.validate(g2), "partida válida")
+end)
+
+test("Envío al cliente: liviano segundo a segundo, completo cuando cambia la estructura", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local sizes = {}
+	local mgr = makeServer(store, "A", clock)
+	mgr.deps.push = function(_player: any, payload: any)
+		table.insert(sizes, { tick = payload.tick == true, bytes = #serde.encode("json", payload) })
+	end
+	local p = { UserId = 44 }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	s.game.money = 5000000
+	mgr:request(p, "saveDesign", { draft = draftFor(s.game, "brisa"), requestId = rid() })
+	mgr:request(p, "createLot", { designId = s.game.designs[1].id, qty = 50000, requestId = rid() })
+	table.clear(sizes)
+	for _ = 1, 20 do
+		clock.t += 1
+		clock.c += 1
+		mgr:tick()
+	end
+	local light, full, maxLight = 0, 0, 0
+	for _, x in sizes do
+		if x.tick then
+			light += 1
+			maxLight = math.max(maxLight, x.bytes)
+		else
+			full += 1
+		end
+	end
+	check(light >= 15, "la mayoría de los envíos son livianos (" .. light .. " de " .. #sizes .. ")")
+	check(maxLight < 4000, "un envío liviano pesa poco (" .. maxLight .. " bytes)")
 end)
 
 T.finish()

@@ -103,7 +103,9 @@ function Screen.build(main: Frame, side: Frame)
 			(Ui.kv("Producción", caps.lines .. " × " .. Util.num(caps.perLine, 1) .. " autos/min")),
 			(Ui.kv("Alcance comercial", "×" .. Util.num(caps.reach, 1))),
 			(Ui.kv("Personal", #g.employees .. "/" .. caps.staff)),
-		}, phone and 2 or 4),
+			(Ui.kv("Estaciones", "hasta nivel " .. Rules.maxStationLevel(g))),
+			(Ui.kv("Banco de investigación", Util.num(math.floor(g.derived.piCap)) .. " PI")),
+		}, phone and 2 or 3),
 	}
 	if next then
 		local checks = Rules.expandChecks(g)
@@ -125,7 +127,7 @@ function Screen.build(main: Frame, side: Frame)
 		end, { disabled = not ok, why = "Faltan requisitos", name = "AmpliarSede" })
 		local items: { Instance? } = {
 			Ui.text("Próxima sede: " .. next.name, { size = Ui.S.base, weight = W.bold }),
-			Ui.text(next.pi .. " PI/min · " .. next.lines .. " líneas × " .. next.perLine .. " autos/min · alcance ×" .. Util.num(next.reach, 1) .. " · " .. next.staff .. " empleados", { size = Ui.S.xs, color = T.mut }),
+			Ui.text("Beneficios: " .. next.pi .. " PI/min (ahora " .. Rules.sede(g).pi .. ") · " .. next.lines .. " líneas × " .. next.perLine .. " autos/min (ahora " .. caps.lines .. " × " .. Rules.sede(g).perLine .. ") · alcance ×" .. Util.num(next.reach, 1) .. " · estaciones hasta nivel " .. math.min(10, next.level * 2) .. " · " .. next.staff .. " empleados", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 		}
 		for _, l in lines do
 			table.insert(items, l)

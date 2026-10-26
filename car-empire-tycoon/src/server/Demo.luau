@@ -99,6 +99,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 		local snap = Simulation.designSnapshot(g, d)
 		local l = Simulation.makeLot(g, snap, qty, round(snap.calc.price * (priceK or 1) / 10) * 10)
 		l.produced, l.sold = produced, sold
+		l.bestMonth = math.floor(sold / 5)
 		l.costSpent = produced * l.unitCost
 		l.revenue = sold * l.price
 		l.prodState = prodState
