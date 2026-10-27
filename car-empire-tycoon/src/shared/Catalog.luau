@@ -211,6 +211,68 @@ Catalog.BASES = {
 		defaults = { motor = "em200", turbo = "none", transmision = "single", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "ev60", refrigeracion = "std", escape = "none", peso = "none", seguridad = "basica" } },
 }
 
+--[[ Carrocerías 3D definitivas (modelos hechos en Studio). Un diseño guarda cuál usa en `vehicleModel`
+	(nil = la predeterminada de su tipo y su año de modelo; "provisional" = el modelo genérico de piezas).
+	- type: tipo de vehículo que la puede usar (la base del diseño debe ser de ese tipo).
+	- year: desde ese año se puede elegir y queda disponible para siempre (también en décadas posteriores).
+	- default: años en que es la carrocería predeterminada de su tipo (diseños nuevos y diseños sin elección).
+	- asset: nombre del Model en ServerStorage.VehicleModels (el servidor publica una copia para el cliente en
+	  ReplicatedStorage.CarEmpireAssets.VehicleModels). Si no existe, se usa el modelo provisional.
+	- paintSuffix: las piezas cuyo nombre termina así toman el color principal del diseño.
+	Es puramente visual: no cambia costos, estadísticas ni ventas. Para sumar otro auto, agregar una entrada. ]]
+Catalog.VEHICLE_MODELS = {
+	{ id = "pioneer70", name = "Pioneer 70", type = "sedan", year = 1970, default = { 1970, 1979 }, asset = "Pioneer70_World", paintSuffix = "_Paint",
+		desc = "Sedán compacto familiar de cuatro puertas (1972)" },
+}
+Catalog.PROVISIONAL_MODEL = "provisional"
+
+function Catalog.vehicleModel(id: any): any
+	if type(id) ~= "string" then
+		return nil
+	end
+	for _, m in Catalog.VEHICLE_MODELS do
+		if m.id == id then
+			return m
+		end
+	end
+	return nil
+end
+
+-- Carrocerías 3D que puede usar un tipo de vehículo (en orden del catálogo).
+function Catalog.vehicleModelsFor(typeId: string): { any }
+	local out = {}
+	for _, m in Catalog.VEHICLE_MODELS do
+		if m.type == typeId then
+			table.insert(out, m)
+		end
+	end
+	return out
+end
+
+-- Carrocería predeterminada de un tipo en un año (nil = no hay modelo 3D: se usa el provisional).
+function Catalog.defaultVehicleModel(typeId: string, year: number): any
+	for _, m in Catalog.VEHICLE_MODELS do
+		if m.type == typeId and m.default and year >= m.default[1] and year <= m.default[2] then
+			return m
+		end
+	end
+	return nil
+end
+
+-- Carrocería 3D que corresponde a un diseño (o nil si va el modelo provisional). Una elección que no
+-- coincide con el tipo de la base (por ejemplo, después de cambiar la base) vuelve a la predeterminada.
+function Catalog.resolveVehicleModel(spec: any): any
+	local base = Catalog.base(spec and spec.baseId)
+	if not base or spec.vehicleModel == Catalog.PROVISIONAL_MODEL then
+		return nil
+	end
+	local m = Catalog.vehicleModel(spec.vehicleModel)
+	if m and m.type == base.type then
+		return m
+	end
+	return Catalog.defaultVehicleModel(base.type, tonumber(spec.modelYear) or Catalog.CALENDAR.startYear)
+end
+
 Catalog.CATS = {
 	{ "motor", "Motor" },
 	{ "turbo", "Sobrealimentación" },

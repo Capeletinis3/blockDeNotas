@@ -11,14 +11,60 @@ local TextService = game:GetService("TextService")
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
 
+local ServerStorage = game:GetService("ServerStorage")
+
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Util = require(Shared.Util)
--- Modelos 3D definitivos (fase futura): si existen en ReplicatedStorage.CarEmpireAssets.Cars, se usan.
-require(Shared.CarModel).assetResolver = function(baseId: string): Model?
+local Catalog = require(Shared.Catalog)
+local CarModel = require(Shared.CarModel)
+-- Modelos 3D por base (fase 3D): si existen en ReplicatedStorage.CarEmpireAssets.Cars, se usan.
+CarModel.assetResolver = function(baseId: string): Model?
 	local assets = ReplicatedStorage:FindFirstChild("CarEmpireAssets")
 	local cars = assets and assets:FindFirstChild("Cars")
 	local m = cars and cars:FindFirstChild(baseId)
 	return (m and m:IsA("Model")) and m or nil
+end
+
+--[[ Carrocerías 3D definitivas (Catalog.VEHICLE_MODELS): el original vive en ServerStorage.VehicleModels
+	(lo pone el equipo en Studio; Rojo no lo toca porque default.project.json no incluye ServerStorage).
+	El servidor clona desde ahí y publica una copia SIN scripts en ReplicatedStorage.CarEmpireAssets.
+	VehicleModels para que el cliente la use en el editor y las miniaturas. El original no se modifica. ]]
+local function vehicleSource(asset: string): Model?
+	local folder = ServerStorage:FindFirstChild("VehicleModels")
+	local m = folder and folder:FindFirstChild(asset)
+	return (m and m:IsA("Model")) and m or nil
+end
+CarModel.vehicleResolver = vehicleSource
+do
+	local assets = ReplicatedStorage:FindFirstChild("CarEmpireAssets")
+	if not assets then
+		assets = Instance.new("Folder")
+		assets.Name = "CarEmpireAssets"
+		assets.Parent = ReplicatedStorage
+	end
+	local public = assets:FindFirstChild("VehicleModels")
+	if not public then
+		public = Instance.new("Folder")
+		public.Name = "VehicleModels"
+		public.Parent = assets
+	end
+	for _, entry in Catalog.VEHICLE_MODELS do
+		local src = vehicleSource(entry.asset)
+		if not src then
+			warn("[CarEmpire] Falta ServerStorage.VehicleModels." .. entry.asset .. " (" .. entry.name .. "): se usa el modelo provisional.")
+		elseif not public:FindFirstChild(entry.asset) then
+			local copy = src:Clone()
+			if copy then
+				for _, d in copy:GetDescendants() do
+					if d:IsA("LuaSourceContainer") then
+						d:Destroy()
+					end
+				end
+				copy.Parent = public
+				print("[CarEmpire] Carrocería 3D lista: " .. entry.name .. " (" .. entry.asset .. ")")
+			end
+		end
+	end
 end
 
 local GameState = require(script.Parent.GameState)

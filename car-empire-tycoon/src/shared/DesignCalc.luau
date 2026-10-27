@@ -132,9 +132,26 @@ function DesignCalc.generationLabel(modelYear: number, gen: number): string
 	return modelYear .. " · " .. gen .. ".ª gen."
 end
 
+-- Carrocería 3D (Catalog.VEHICLE_MODELS): nil si el diseño la puede usar, o el motivo. El modelo
+-- provisional siempre se puede elegir.
+function DesignCalc.vehicleModelBlock(g: any, d: any, m: any): string?
+	if m == nil then
+		return nil
+	end
+	local b = Catalog.base(d.baseId)
+	if not b or m.type ~= b.type then
+		return "Solo para " .. string.lower(Catalog.TYPES[m.type] or m.type)
+	end
+	if m.year > DesignCalc.year(g) then
+		return "Disponible desde " .. m.year
+	end
+	return nil
+end
+
 function DesignCalc.newDraft(g: any, baseId: string): any
 	local b = Catalog.base(baseId)
 	local year = DesignCalc.year(g)
+	local body3d = Catalog.defaultVehicleModel(b.type, year)
 	return {
 		id = nil,
 		name = DesignCalc.autoName(g, baseId),
@@ -155,6 +172,7 @@ function DesignCalc.newDraft(g: any, baseId: string): any
 		spoiler = false,
 		body = Util.deepCopy(Catalog.BODY_DEFAULTS),
 		interior = Util.deepCopy(Catalog.INTERIOR_DEFAULTS),
+		vehicleModel = body3d and body3d.id or nil, -- carrocería 3D (nil = la predeterminada de su año)
 		version = 0,
 	}
 end
@@ -173,6 +191,12 @@ function DesignCalc.changeBase(g: any, d: any, baseId: string)
 		end
 	end
 	d.baseId = b.id
+	-- La carrocería 3D es de un tipo: al cambiar a otro tipo vuelve a la predeterminada.
+	local m = Catalog.vehicleModel(d.vehicleModel)
+	if (m and m.type ~= b.type) or (old.type ~= b.type and d.vehicleModel ~= Catalog.PROVISIONAL_MODEL) then
+		local def = Catalog.defaultVehicleModel(b.type, DesignCalc.year(g))
+		d.vehicleModel = def and def.id or nil
+	end
 	DesignCalc.fixParts(d)
 	local ch = Catalog.CHASSIS[d.chassis]
 	if ch and ch.need and not Util.contains(b.tags, ch.need) then
@@ -571,12 +595,27 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	if Util.isHexColor(interior.color) then
 		d.interior.color = string.upper(interior.color)
 	end
+	-- Carrocería 3D (visual). Una de otro tipo se ignora (queda la predeterminada de este).
+	if raw.vehicleModel == Catalog.PROVISIONAL_MODEL then
+		d.vehicleModel = Catalog.PROVISIONAL_MODEL
+	elseif raw.vehicleModel ~= nil then
+		local m = Catalog.vehicleModel(raw.vehicleModel)
+		if not m then
+			return nil, "Carrocería desconocida."
+		end
+		local why = DesignCalc.vehicleModelBlock(g, d, m)
+		if why and m.type == b.type then
+			return nil, m.name .. ": " .. why .. "."
+		elseif not why then
+			d.vehicleModel = m.id
+		end
+	end
 	return d, nil
 end
 
 -- Compara dos diseños solo por los campos que el jugador puede cambiar.
 function DesignCalc.sameSpec(a: any, b: any): boolean
-	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler" }
+	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler", "vehicleModel" }
 	for _, f in fields do
 		if a[f] ~= b[f] then
 			return false

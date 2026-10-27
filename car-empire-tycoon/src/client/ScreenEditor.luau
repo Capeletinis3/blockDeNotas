@@ -122,7 +122,7 @@ local view = { yaw = 145, pitch = 16, zoom = 1, cam = "angulo", auto = false, dr
 
 local function visualSig(d: any): string
 	local ok, enc = pcall(function()
-		return game:GetService("HttpService"):JSONEncode({ d.baseId, d.paint, d.wheels, d.caliper, d.spoiler, d.body, d.interior })
+		return game:GetService("HttpService"):JSONEncode({ d.baseId, d.paint, d.wheels, d.caliper, d.spoiler, d.body, d.interior, d.vehicleModel or "" })
 	end)
 	return ok and enc or tostring(os.clock())
 end
@@ -1382,7 +1382,26 @@ local function panelDesign(g: any, d: any, body: Instance)
 		end, "Pinzas") }, 6),
 	}, 10).Parent = body
 
-	local bodyRows: { Instance? } = {
+	local bodyRows: { Instance? } = {}
+	-- Carrocería 3D definitiva del tipo (por ejemplo, el Pioneer 70 para los sedanes): solo cambia el aspecto.
+	local models3d = Catalog.vehicleModelsFor((Catalog.base(d.baseId) or Catalog.BASES[1]).type)
+	if #models3d > 0 then
+		local cur = Catalog.resolveVehicleModel(d)
+		local opts3d = {}
+		for _, m in models3d do
+			local why = DesignCalc.vehicleModelBlock(g, d, m)
+			local def = m.default and (" · predeterminada " .. m.default[1] .. "–" .. m.default[2]) or ""
+			table.insert(opts3d, { m.id, m.name .. " <font size=\"11\" color=\"#A3AAB8\">" .. def .. "</font>", 0, why and { disabled = why } or nil })
+		end
+		table.insert(opts3d, { Catalog.PROVISIONAL_MODEL, "Provisional (genérica)", 0 })
+		table.insert(bodyRows, optRow("Carrocería 3D", opts3d, cur and cur.id or Catalog.PROVISIONAL_MODEL, function(v)
+			change(function(dd)
+				dd.vehicleModel = v
+			end)
+		end, { name = "Carroceria3D" }))
+		table.insert(bodyRows, Ui.text((cur and (cur.name .. ": " .. cur.desc .. ". ") or "") .. "Solo cambia el aspecto del auto (editor, garaje y concesionario); no cambia costos ni ventas.", { size = Ui.S.xs, color = T.mut }))
+	end
+	table.insert(bodyRows,
 		Ui.card({
 			Ui.grow(Ui.col({ Ui.text("Alerón trasero", { size = Ui.S.sm, weight = W.bold }), Ui.text("+3 de manejo, −4 km/h de velocidad máxima, +" .. Util.money(600) .. "/u", { size = Ui.S.xs, color = T.mut }) }, 2)),
 			Ui.toggle(d.spoiler, function()
@@ -1390,8 +1409,8 @@ local function panelDesign(g: any, d: any, body: Instance)
 					dd.spoiler = not dd.spoiler
 				end)
 			end),
-		}, { dir = "H", v = "C", gap = 10, name = "Aleron" }),
-	}
+		}, { dir = "H", v = "C", gap = 10, name = "Aleron" })
+	)
 	for _, grp in BODY_LABELS do
 		local opts = {}
 		for _, o in Catalog.BODY_OPTS[grp[1]] do

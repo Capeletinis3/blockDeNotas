@@ -205,6 +205,13 @@ function Scenes.list(_ctx: any): { any }
 	add("editor-paso3", "Editor paso 3", function(c)
 		editorStep(c, 3)
 	end)
+	add("editor-paso3-sedan", "Editor paso 3 · sedán con carrocería Pioneer 70", function(c)
+		local e = editorStep(c, 3)
+		if e then
+			require("./.build-ui/shared/DesignCalc").changeBase(c.App.g, e.draft, "brisa")
+		end
+		c.App.forceRender()
+	end)
 	add("editor-paso3-interior", "Editor paso 3 interior", function(c)
 		local e = editorStep(c, 3)
 		if e then

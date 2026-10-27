@@ -395,6 +395,8 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	plot.sig = sig
 	plot.dynamic:ClearAllChildren()
 
+	-- Cada auto es una copia (clon de la plantilla 3D o modelo provisional); la carpeta se vacía antes de
+	-- reconstruir, así que nunca hay más de 9 autos por parcela (1 en la línea, 6 en stock y 2 en el salón).
 	local function place(spec: any, localCf: CFrame, ghost: boolean?): Model
 		local car = CarModel.build(spec, { ghost = ghost })
 		car:PivotTo(plot.cf * localCf)
@@ -413,7 +415,8 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 			table.insert(selling, l)
 			if slot < 6 then
 				local r, c = slot // 3, slot % 3
-				local car = place(l.design.spec, CFrame.new(22 + r * 16, 0.5, -10 + c * 12) * CFrame.Angles(0, math.pi / 2, 0))
+				-- Filas a 18 studs: entran autos de hasta 18 de largo (el Pioneer 70 mide 17,5 con paragolpes).
+				local car = place(l.design.spec, CFrame.new(21 + r * 18, 0.5, -10 + c * 12) * CFrame.Angles(0, math.pi / 2, 0))
 				label(car.PrimaryPart :: BasePart, l.design.name .. " · en stock", UDim2.fromOffset(200, 30), Vector3.new(0, 5, 0), C.bl)
 				slot += 1
 			end

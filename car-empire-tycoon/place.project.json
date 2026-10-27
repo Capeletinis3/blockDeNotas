@@ -1,0 +1,32 @@
+{
+  "name": "CarEmpireTycoon",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "CarEmpireShared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "CarEmpireServer": {
+        "$path": "src/server"
+      }
+    },
+    "ServerStorage": {
+      "$className": "ServerStorage",
+      "VehicleModels": {
+        "$className": "Folder",
+        "Pioneer70_World": {
+          "$path": "assets/vehicles/Pioneer70_World.rbxm"
+        }
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "CarEmpireClient": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}

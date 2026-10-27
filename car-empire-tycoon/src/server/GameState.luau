@@ -162,6 +162,10 @@ local function checkSpec(spec: any, what: string): string?
 	if not isInt(spec.quality, 0, 5) then
 		return what .. ": calidad de terminación inválida."
 	end
+	-- Carrocería 3D: una que ya no esté en el catálogo no daña la partida (se ve el modelo provisional).
+	if spec.vehicleModel ~= nil and type(spec.vehicleModel) ~= "string" then
+		return what .. ": carrocería 3D inválida."
+	end
 	return nil
 end
 
@@ -814,7 +818,7 @@ function GameState.compactSpec(spec: any): any
 	return {
 		baseId = spec.baseId, objective = spec.objective, segment = spec.segment, chassis = spec.chassis, quality = spec.quality,
 		parts = Util.deepCopy(spec.parts), paint = { primary = spec.paint.primary, secondary = spec.paint.secondary, finish = spec.paint.finish },
-		wheels = { size = spec.wheels and spec.wheels.size }, generation = spec.generation,
+		wheels = { size = spec.wheels and spec.wheels.size }, generation = spec.generation, vehicleModel = spec.vehicleModel,
 	}
 end
 

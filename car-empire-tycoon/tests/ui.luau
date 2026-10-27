@@ -20,6 +20,16 @@ local shared = M.Instance.new("Folder")
 shared.Name = "CarEmpireShared"
 shared.Parent = M.services.ReplicatedStorage
 
+-- El Pioneer 70 real (assets/vehicles/Pioneer70_World.rbxm) donde lo guarda el equipo en Studio.
+local VehicleAsset = require("./vehicle_asset")
+local pioneerOriginal = VehicleAsset.load(M, "assets/vehicles/Pioneer70_World.rbxm")
+do
+	local folder = M.Instance.new("Folder")
+	folder.Name = "VehicleModels"
+	folder.Parent = M.services.ServerStorage
+	pioneerOriginal.Parent = folder
+end
+
 require("./.build-ui/server/Main")
 -- El límite de acciones por segundo se prueba en un caso propio; para el resto se amplía porque las
 -- pruebas hacen clics mucho más rápido que una persona.
@@ -520,6 +530,178 @@ test("[P15] PC y celular: todas las pantallas en 1600×900, 1280×720, 844×390 
 	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
 	M.task.wait()
 	noErrors("Resoluciones")
+end)
+
+test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el garaje", function()
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local CarModel = require("./.build-ui/shared/CarModel")
+	local function parts(m: any): { any }
+		local out = {}
+		for _, d in m:GetDescendants() do
+			if d:IsA("BasePart") then
+				out[d.Name] = d
+			end
+		end
+		return out
+	end
+	local function count(t: any): number
+		local n = 0
+		for _ in t do
+			n += 1
+		end
+		return n
+	end
+	local function minY(m: any): number
+		local y = math.huge
+		for _, d in m:GetDescendants() do
+			if d:IsA("BasePart") then
+				y = math.min(y, d.CFrame.Y - d.Size.Y / 2)
+			end
+		end
+		return y
+	end
+	local orig = parts(pioneerOriginal)
+	eq(count(orig), 38, "el modelo real tiene 38 piezas")
+	-- El servidor publicó una copia sin scripts para el cliente; el original queda igual (con su script).
+	local public = M.services.ReplicatedStorage:FindFirstChild("CarEmpireAssets"):FindFirstChild("VehicleModels"):FindFirstChild("Pioneer70_World")
+	check(public ~= nil, "copia publicada en ReplicatedStorage.CarEmpireAssets.VehicleModels")
+	check(public:FindFirstChildWhichIsA("LuaSourceContainer", true) == nil, "la copia publicada no lleva scripts")
+	check(pioneerOriginal:FindFirstChild("Script") ~= nil and pioneerOriginal.Parent ~= nil, "el original sigue en ServerStorage con su script")
+
+	-- Diseño de sedán de los 70: carrocería predeterminada Pioneer 70.
+	local g70 = { time = { day = 2 * 12 }, research = { done = {} }, company = { name = "Prueba" }, devPaid = {} }
+	local d = DesignCalc.newDraft(g70, "brisa")
+	eq(d.vehicleModel, "pioneer70", "el sedán de 1972 usa el Pioneer 70")
+	d.paint.primary = "#1E88E5"
+	local car = CarModel.build(d)
+	eq(car:GetAttribute("vehicleModel"), "pioneer70", "se arma con el modelo 3D")
+	local cp = parts(car)
+	eq(count(cp), 38, "conserva las 38 piezas")
+	check(car:FindFirstChildWhichIsA("LuaSourceContainer", true) == nil, "la copia no lleva el script de prueba de pintura")
+	local blue = M.Color3.fromHex("#1E88E5")
+	local painted, kept = 0, 0
+	for name, p in cp do
+		local o = orig[name]
+		check(o ~= nil, name .. " existe en el original")
+		check(p.Material == o.Material and math.abs(p.Size.X - o.Size.X) < 1e-6 and math.abs(p.Size.Z - o.Size.Z) < 1e-6, name .. ": mismo material y tamaño")
+		if string.sub(name, -6) == "_Paint" then
+			check(p.Color == blue, name .. " toma el color elegido")
+			painted += 1
+		else
+			check(p.Color == o.Color and p.Transparency == o.Transparency, name .. " conserva su color y transparencia")
+			kept += 1
+		end
+	end
+	eq(painted, 7, "carrocería, capó, baúl y 4 puertas pintados")
+	check(cp.Wheel_FL_Tire.Color == orig.Wheel_FL_Tire.Color and cp.Windows_Glass.Material == orig.Windows_Glass.Material and cp.Interior_Seats_Seat.Color == orig.Interior_Seats_Seat.Color, "neumáticos, cristales y asientos sin pintar")
+	check(cp.FrontBumper_Chrome.Material == orig.FrontBumper_Chrome.Material and cp.Headlights_Lens.Material == orig.Headlights_Lens.Material, "paragolpes y faros sin cambios")
+	check(cp.Headlights_Lens.Parent == cp.Interior_Controls_Rubber, "la jerarquía de piezas se conserva")
+	local oc = orig.Body_Paint.Color
+	check(math.floor(oc.R * 255 + 0.5) == 196 and math.floor(oc.G * 255 + 0.5) == 40 and math.floor(oc.B * 255 + 0.5) == 28, "el original no se pinta (sigue rojo)")
+	-- Ubicación: el pivote queda a ras del suelo en el centro; las piezas mantienen sus distancias.
+	car:PivotTo(M.CFrame.new(100, 0.5, 50) * M.CFrame.Angles(0, math.pi / 2, 0))
+	check(math.abs(minY(car) - 0.5) < 1e-3, "las ruedas apoyan en el suelo (ni debajo ni flotando): " .. minY(car))
+	local function dist(a: any, b: any): number
+		return (a.CFrame.Position - b.CFrame.Position).Magnitude
+	end
+	check(math.abs(dist(cp.Wheel_FL_Tire, cp.Body_Paint) - dist(orig.Wheel_FL_Tire, orig.Body_Paint)) < 1e-4, "las piezas no cambian de posición entre sí")
+	check(math.abs(dist(cp.Headlights_Lens, cp.Taillights_TailRed) - dist(orig.Headlights_Lens, orig.Taillights_TailRed)) < 1e-4, "faros y luces traseras en su lugar")
+	check(math.abs(car:GetPivot().X - 100) < 1e-6 and math.abs(car:GetPivot().Z - 50) < 1e-6, "centrado donde se lo pide")
+	check(cp.Body_Paint.Anchored == true and cp.Body_Paint.CanCollide == false, "anclado y sin colisión (es de exhibición)")
+	local dims = CarModel.dims(d)
+	check(dims.Z > 17 and dims.Z < 18 and dims.Y > 5 and dims.Y < 6, "medidas reales para encuadrar la cámara")
+	-- Otra copia con otro color no hereda el anterior; fantasma = semitransparente.
+	d.paint.primary = "#2E7D32"
+	local ghost = CarModel.build(d, { ghost = true })
+	local gp = parts(ghost)
+	check(gp.Body_Paint.Color == M.Color3.fromHex("#2E7D32") and gp.Body_Paint.Transparency > 0.5, "cada copia con su pintura; en fabricación, semitransparente")
+	-- Décadas: en 1985 el sedán nuevo no lo usa por defecto, pero se puede elegir (queda desbloqueado).
+	local g85 = { time = { day = 15 * 12 }, research = { done = {} }, company = { name = "Prueba" }, devPaid = {} }
+	local d85 = DesignCalc.newDraft(g85, "brisa")
+	eq(d85.vehicleModel, nil, "en 1985 no es la predeterminada")
+	eq(CarModel.build(d85):GetAttribute("vehicleModel"), nil, "un sedán de 1985 sin elección usa el provisional")
+	check(DesignCalc.vehicleModelBlock(g85, d85, Catalog.vehicleModel("pioneer70")) == nil, "pero sigue disponible para elegir")
+	d85.vehicleModel = "pioneer70"
+	eq(CarModel.build(d85):GetAttribute("vehicleModel"), "pioneer70", "y se usa si se elige")
+	-- Otro tipo no puede usarlo; "provisional" fuerza el genérico.
+	local compact = DesignCalc.newDraft(g70, "pixel")
+	compact.vehicleModel = "pioneer70"
+	eq(CarModel.build(compact):GetAttribute("vehicleModel"), nil, "un compacto no usa la carrocería del sedán")
+	d.vehicleModel = "provisional"
+	eq(CarModel.build(d):GetAttribute("vehicleModel"), nil, "«Provisional» usa el modelo genérico")
+	-- Sin el modelo en Studio no hay error: se usa el provisional.
+	local saved = CarModel.vehicleResolver
+	CarModel.vehicleResolver = function()
+		return nil
+	end
+	d.vehicleModel = "pioneer70"
+	local okBuild, fallback = pcall(CarModel.build, d)
+	check(okBuild and fallback:GetAttribute("vehicleModel") == nil and fallback.PrimaryPart ~= nil, "si falta el modelo, provisional y sin errores")
+	CarModel.vehicleResolver = saved
+
+	-- Editor: en el paso 3 de un sedán se elige la carrocería 3D (Pioneer 70 o provisional).
+	App.go("editor", { new = true })
+	M.task.wait()
+	DesignCalc.changeBase(App.g, App.ui.editor.draft, "brisa")
+	App.screens.editor.goStep(3)
+	M.task.wait()
+	check(named("Carroceria3D_pioneer70") ~= nil and named("Carroceria3D_provisional") ~= nil, "el editor ofrece la carrocería 3D del sedán")
+	clickN("Carroceria3D_provisional")
+	eq(App.ui.editor.draft.vehicleModel, "provisional", "elegir «Provisional»")
+	clickN("Carroceria3D_pioneer70")
+	eq(App.ui.editor.draft.vehicleModel, "pioneer70", "volver al Pioneer 70")
+	-- Salir del editor descartando el borrador de prueba.
+	App.ui.editor = nil
+	App.closeAllDialogs()
+	App.go("juego")
+	M.task.wait()
+
+	-- Juego real: un sedán fabricado aparece en el garaje con el Pioneer 70, sin acumular copias.
+	local draft = DesignCalc.newDraft(App.g, "brisa")
+	draft.name = "Pioneer Prueba"
+	draft.paint.primary = "#F7C95C"
+	local r = App.request("saveDesign", { draft = draft })
+	check(r.ok, "guardar: " .. tostring(r.msg))
+	local id = r.designId
+	local saved3d = nil
+	for _, x in App.g.designs do
+		if x.id == id then
+			saved3d = x
+		end
+	end
+	check(saved3d ~= nil and Catalog.resolveVehicleModel(saved3d) ~= nil and Catalog.resolveVehicleModel(saved3d).id == "pioneer70", "el diseño guardado usa el Pioneer 70")
+	local lot = App.request("createLot", { designId = id, qty = 40 })
+	check(lot.ok, "lanzar lote: " .. tostring(lot.msg))
+	local function garageCars(): { any }
+		local out = {}
+		for _, f in M.services.Workspace:GetDescendants() do
+			if f.Name == "Dinamico" then
+				for _, c in f:GetChildren() do
+					if c:IsA("Model") then
+						table.insert(out, c)
+					end
+				end
+			end
+		end
+		return out
+	end
+	local maxCars, seen3d = 0, false
+	for _ = 1, 40 do
+		advance(1)
+		local cars = garageCars()
+		maxCars = math.max(maxCars, #cars)
+		for _, c in cars do
+			if c:GetAttribute("vehicleModel") == "pioneer70" then
+				seen3d = true
+				check(math.abs(minY(c) - c:GetPivot().Y) < 1e-3 and c:GetPivot().Y >= 0, "apoyado en su lugar del garaje")
+				check(c:FindFirstChildWhichIsA("LuaSourceContainer", true) == nil, "sin scripts en el garaje")
+			end
+		end
+	end
+	check(seen3d, "el sedán fabricado se ve con el Pioneer 70 en el garaje")
+	check(maxCars <= 9, "nunca más de 9 autos por parcela (" .. maxCars .. ")")
+	noErrors("Pioneer 70")
 end)
 
 test("Fin de partida: expansión global, récords y años extra en las cuatro resoluciones", function()

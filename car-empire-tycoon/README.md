@@ -77,6 +77,8 @@ car-empire-tycoon/
 ├─ tools/preview/              Dibuja la interfaz de Roblox y la compara con capturas de la V3
 ├─ docs/CORRECCIONES-FINALES.md Calendario después de 2030, fin de partida, historial, pruebas y Studio (etapa 6)
 ├─ docs/SEGUNDA-AUDITORIA.md  Errores corregidos, mejoras, equilibrio, pruebas y guía de Studio (etapa 5)
+├─ docs/PIONEER70.md           Integración del Pioneer 70 (primer vehículo 3D): cómo funciona y qué probar
+├─ assets/vehicles/            Copia de seguridad de los modelos 3D (.rbxm) para generar el .rbxl
 ├─ docs/FASE-3D.md            Qué modelos provisionales reemplazar y cómo, sin tocar las mecánicas
 ├─ docs/CAMBIOS-AUDITORIA.md   Cambios, estado de cada parte, equilibrio y pruebas en Studio (etapa 4)
 ├─ docs/COMPARACION-V3.md      Comparación visual con la V3 (etapa 3)
@@ -86,12 +88,17 @@ car-empire-tycoon/
 ## Cómo abrir el proyecto
 
 **Opción A — archivo listo:** abrir `CarEmpireTycoon.rbxl` en Roblox Studio (generado con
-`rojo build` a partir de estos mismos scripts; se comprobó con `tests/verify_place.luau`).
+`rojo build place.project.json` a partir de estos mismos scripts más el Pioneer 70 en
+`ServerStorage.VehicleModels`; se comprobó con `tests/verify_place.luau`).
 
 **Opción B — Rojo (para seguir desarrollando):**
 1. Instalar [Rojo](https://rojo.space) 7 y su plugin de Studio.
-2. En esta carpeta: `rojo serve`; en Studio: plugin Rojo → **Connect**.
-3. O generar el archivo: `rojo build -o CarEmpireTycoon.rbxl`.
+2. En esta carpeta: `rojo serve`; en Studio: plugin Rojo → **Connect**. `default.project.json` sincroniza
+   **solo los scripts**: no toca `ServerStorage`, así que los modelos 3D configurados a mano en Studio
+   (`ServerStorage.VehicleModels`) quedan intactos.
+3. O generar el archivo completo: `rojo build place.project.json -o CarEmpireTycoon.rbxl` (incluye
+   `assets/vehicles/Pioneer70_World.rbxm`). No usar `place.project.json` con `rojo serve`: reemplazaría
+   el modelo de Studio por la copia del archivo.
 
 **Ajustes manuales en Studio**
 - Guardado real: publicar el place y activar *Game Settings › Security › Enable Studio Access to API Services*.

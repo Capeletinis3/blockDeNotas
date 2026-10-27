@@ -2013,6 +2013,80 @@ test("[F10] Sin regresiones: lote, venta automática y Cerrar venta en un año c
 	lotInvariants(g)
 end)
 
+test("Pioneer 70: carrocería 3D predeterminada del sedán en los 70, elegible después y puramente visual", function()
+	local P = Catalog.vehicleModel("pioneer70")
+	check(P ~= nil and P.type == "sedan" and P.asset == "Pioneer70_World" and P.paintSuffix == "_Paint", "está en el catálogo")
+	for y = 1970, 1979 do
+		eq(Catalog.defaultVehicleModel("sedan", y), P, "predeterminada del sedán en " .. y)
+	end
+	eq(Catalog.defaultVehicleModel("sedan", 1980), nil, "en 1980 deja de ser la predeterminada")
+	eq(Catalog.defaultVehicleModel("compacto", 1972), nil, "solo para sedanes")
+	local g = newCompany("Pioneer SA", nil, "facil")
+	local ctx = makeCtx(301)
+	g.money = 5000000
+	g.time.day = 2 * 12 -- 1972
+	-- Diseño nuevo de sedán: la usa sin que el jugador haga nada; se guarda y llega al lote.
+	local id = saveNew(g, ctx, "brisa", "Pioneer Familiar")
+	local d = g.designs[#g.designs]
+	eq(d.id, id, "diseño guardado")
+	eq(d.vehicleModel, "pioneer70", "el diseño guardado usa el Pioneer 70")
+	local r = Actions.createLot(g, ctx, { designId = id, qty = 20 })
+	check(r.ok, r.msg)
+	eq(findLot(g, r.lotId).design.spec.vehicleModel, "pioneer70", "el lote fabricado conserva la carrocería")
+	-- Cambiar solo la carrocería es estético: no paga ingeniería ni cambia costos o estadísticas.
+	local before = DesignCalc.computeDesign(g, d)
+	local edit = jsonCopy(d)
+	edit.vehicleModel = "provisional"
+	eq(DesignCalc.engineeringKind(d, edit), "estetico", "cambio estético")
+	local after = DesignCalc.computeDesign(g, edit)
+	check(before.unitCost == after.unitCost and before.price == after.price and before.hp == after.hp, "no cambia costos ni estadísticas")
+	check(not DesignCalc.sameSpec(d, edit), "pero cuenta como cambio del diseño")
+	local m = g.money
+	local sv = Actions.saveDesign(g, ctx, { draft = edit, sourceId = id })
+	check(sv.ok, sv.msg)
+	check(g.money == m, "guardar el cambio de carrocería no cobra")
+	-- Saneamiento del borrador que manda el cliente.
+	local raw = draftFor(g, "brisa", "Otro sedán")
+	raw.vehicleModel = "inventado"
+	check(not DesignCalc.sanitize(g, raw), "carrocería desconocida rechazada")
+	raw.vehicleModel = "pioneer70"
+	eq((DesignCalc.sanitize(g, raw)).vehicleModel, "pioneer70", "Pioneer 70 aceptada")
+	raw.vehicleModel = "provisional"
+	eq((DesignCalc.sanitize(g, raw)).vehicleModel, "provisional", "provisional aceptada")
+	local rawC = draftFor(g, "pixel", "Compacto")
+	rawC.vehicleModel = "pioneer70"
+	eq((DesignCalc.sanitize(g, rawC)).vehicleModel, nil, "un compacto no la puede usar (queda la suya)")
+	-- Cambiar la base a otro tipo vuelve a la carrocería de ese tipo.
+	local dd = DesignCalc.newDraft(g, "brisa")
+	DesignCalc.changeBase(g, dd, "pixel")
+	eq(dd.vehicleModel, nil, "de sedán a compacto: sin Pioneer")
+	DesignCalc.changeBase(g, dd, "brisa")
+	eq(dd.vehicleModel, "pioneer70", "y de vuelta a sedán: Pioneer")
+	-- Décadas posteriores: sigue disponible para elegir.
+	g.time.day = (1995 - 1970) * 12
+	eq(DesignCalc.newDraft(g, "brisa").vehicleModel, nil, "en 1995 un sedán nuevo no la usa por defecto")
+	raw = draftFor(g, "brisa", "Sedán 95")
+	raw.vehicleModel = "pioneer70"
+	eq((DesignCalc.sanitize(g, raw)).vehicleModel, "pioneer70", "pero se puede elegir en 1995")
+	eq(Catalog.resolveVehicleModel(d).id, "pioneer70", "el diseño de 1972 sigue usándola")
+	-- Diseños de partidas anteriores (sin el campo): sedanes de los 70 la usan; los demás, el provisional.
+	local old = jsonCopy(d)
+	old.vehicleModel = nil
+	old.modelYear = 1974
+	eq(Catalog.resolveVehicleModel(old).id, "pioneer70", "sedán viejo de 1974 sin el campo: Pioneer 70")
+	old.modelYear = 1988
+	eq(Catalog.resolveVehicleModel(old), nil, "sedán viejo de 1988: provisional")
+	-- Validación de la partida guardada.
+	local ok = GameState.validate(jsonCopy(g))
+	check(ok, "partida válida con la carrocería guardada")
+	local bad = jsonCopy(g)
+	bad.designs[1].vehicleModel = 5
+	check(not GameState.validate(bad), "un valor que no es texto es un dato dañado")
+	local gone = jsonCopy(g)
+	gone.designs[1].vehicleModel = "modelo_retirado"
+	check(GameState.validate(gone), "una carrocería que ya no existe no daña la partida")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

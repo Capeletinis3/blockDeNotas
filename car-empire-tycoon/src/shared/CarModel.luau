@@ -6,6 +6,8 @@
 	estilo, color), pinzas, alerón, paragolpes, capó, difusor, faldones, faros, polarizado, vinilos, número,
 	emblema, matrícula e interior (asientos, tapizado, volante, tablero, iluminación).
 	Orientación: el frente mira hacia −Z; el pivote queda a ras del suelo.
+	Si el diseño usa una carrocería 3D definitiva (Catalog.VEHICLE_MODELS, por ejemplo el Pioneer 70), se
+	devuelve un clon de ese modelo pintado con el color del diseño (CarModel.fromVehicleModel).
 ]]
 
 local Catalog = require(script.Parent.Catalog)
@@ -123,8 +125,131 @@ function CarModel.fromAssets(spec: any): Model?
 	return m
 end
 
+--[[ Carrocerías 3D definitivas (Catalog.VEHICLE_MODELS). vehicleResolver(asset) devuelve el Model
+	original: en el servidor, ServerStorage.VehicleModels.<asset>; en el cliente, la copia que publica el
+	servidor en ReplicatedStorage.CarEmpireAssets.VehicleModels (ver Main.server y Main.client).
+	El original nunca se modifica. Se prepara UNA plantilla por modelo (sin scripts, piezas ancladas, sin
+	colisión ni consultas, pivote en el centro a ras del suelo con el frente hacia −Z) y cada auto que se
+	muestra es un clon de la plantilla: conserva geometría, materiales y piezas. ]]
+CarModel.vehicleResolver = nil :: ((string) -> Model?)?
+local templates: { [string]: any } = {}
+
+-- Caja que ocupan todas las piezas (en coordenadas del mundo, contando la rotación de cada pieza).
+local function bounds(m: Instance): (Vector3?, Vector3?)
+	local x0, y0, z0, x1, y1, z1 = math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			local cf, h = d.CFrame, d.Size / 2
+			for _, sx in { -1, 1 } do
+				for _, sy in { -1, 1 } do
+					for _, sz in { -1, 1 } do
+						local w = cf:PointToWorldSpace(Vector3.new(h.X * sx, h.Y * sy, h.Z * sz))
+						x0, y0, z0 = math.min(x0, w.X), math.min(y0, w.Y), math.min(z0, w.Z)
+						x1, y1, z1 = math.max(x1, w.X), math.max(y1, w.Y), math.max(z1, w.Z)
+					end
+				end
+			end
+		end
+	end
+	if x0 == math.huge then
+		return nil, nil
+	end
+	return Vector3.new(x0, y0, z0), Vector3.new(x1, y1, z1)
+end
+
+-- Plantilla preparada de un modelo 3D (o nil si no está cargado). Se rehace solo si cambia el original.
+function CarModel.template(asset: string): any
+	local resolver = CarModel.vehicleResolver
+	if not resolver then
+		return nil
+	end
+	local ok, src = pcall(resolver, asset)
+	if not ok or src == nil or typeof(src) ~= "Instance" or not (src :: Instance):IsA("Model") then
+		return nil
+	end
+	local cached = templates[asset]
+	if cached and cached.source == src then
+		return cached
+	end
+	local m = (src :: Model):Clone()
+	if not m then
+		return nil -- Archivable = false en el original
+	end
+	-- Los scripts del modelo (por ejemplo, pruebas de pintura) no deben correr en cada copia.
+	for _, d in m:GetDescendants() do
+		if d:IsA("LuaSourceContainer") then
+			d:Destroy()
+		end
+	end
+	local primary, biggest = nil, -1
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.Anchored = true
+			d.CanCollide = false
+			d.CanTouch = false
+			d.CanQuery = false
+			local v = d.Size.X * d.Size.Y * d.Size.Z
+			if v > biggest then
+				primary, biggest = d, v
+			end
+		end
+	end
+	local lo, hi = bounds(m)
+	if not primary or not lo or not hi then
+		return nil
+	end
+	-- Pivote: centro de la planta, a la altura de la pieza más baja (las ruedas apoyan en el suelo).
+	m.PrimaryPart = primary
+	m.WorldPivot = CFrame.new((lo.X + hi.X) / 2, lo.Y, (lo.Z + hi.Z) / 2)
+	m:PivotTo(CFrame.new())
+	m.Name = "Auto"
+	local size = hi - lo
+	m:SetAttribute("length", size.Z)
+	m:SetAttribute("width", size.X)
+	m:SetAttribute("height", size.Y)
+	cached = { source = src, model = m, size = size }
+	templates[asset] = cached
+	return cached
+end
+
+-- Auto con la carrocería 3D del diseño, o nil si el diseño no usa una (o el modelo no está cargado).
+-- Pintura: las piezas cuyo nombre termina en paintSuffix («_Paint») toman el color principal con su
+-- intensidad; también las que tienen el atributo «Pintura» = "primaria" ("secundaria" toma el segundo
+-- color). Neumáticos, cristales, asientos, faros, cromados y el resto conservan su color y material.
+function CarModel.fromVehicleModel(spec: any, opts: { ghost: boolean?, brandColor: string? }?): Model?
+	local entry = Catalog.resolveVehicleModel(spec)
+	if not entry then
+		return nil
+	end
+	local t = CarModel.template(entry.asset)
+	if not t then
+		return nil
+	end
+	local m = t.model:Clone()
+	local paint = spec.paint or {}
+	local primary = scaleColor(color(paint.primary, "#C0C6D0"), (tonumber(paint.intensity) or 100) / 100)
+	local secondary = color(paint.secondary, "#15171C")
+	local suffix = entry.paintSuffix or "_Paint"
+	local ghost = opts and opts.ghost or false
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") then
+			local role = d:GetAttribute("Pintura")
+			if role == "secundaria" then
+				d.Color = secondary
+			elseif role == "primaria" or string.sub(d.Name, -#suffix) == suffix then
+				d.Color = primary
+			end
+			if ghost then
+				d.Transparency = 1 - (1 - d.Transparency) * 0.45
+			end
+		end
+	end
+	m:SetAttribute("vehicleModel", entry.id)
+	return m
+end
+
 function CarModel.build(spec: any, opts: { ghost: boolean?, brandColor: string? }?): Model
-	local custom = CarModel.fromAssets(spec)
+	local custom = CarModel.fromVehicleModel(spec, opts) or CarModel.fromAssets(spec)
 	if custom then
 		return custom
 	end
@@ -299,6 +424,11 @@ end
 
 -- Dimensiones del bloque que ocupa el auto (para encuadrar la cámara sin cortarlo).
 function CarModel.dims(spec: any): Vector3
+	local entry = Catalog.resolveVehicleModel(spec)
+	local t = entry and CarModel.template(entry.asset)
+	if t then
+		return t.size + Vector3.new(0.2, 0, 0.2)
+	end
 	local base = Catalog.base(spec.baseId) or Catalog.BASES[1]
 	local s = SHAPES[base.type] or SHAPES.sedan
 	local tireD = 2.3 + ((tonumber(spec.wheels and spec.wheels.size) or 18) - 18) * 0.14

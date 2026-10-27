@@ -11,6 +11,13 @@ require(Shared.CarModel).assetResolver = function(baseId: string): Model?
 	local m = cars and cars:FindFirstChild(baseId)
 	return (m and m:IsA("Model")) and m or nil
 end
+-- Carrocerías 3D definitivas: la copia que publica el servidor (sin scripts) desde ServerStorage.VehicleModels.
+require(Shared.CarModel).vehicleResolver = function(asset: string): Model?
+	local assets = ReplicatedStorage:FindFirstChild("CarEmpireAssets")
+	local folder = assets and assets:FindFirstChild("VehicleModels")
+	local m = folder and folder:FindFirstChild(asset)
+	return (m and m:IsA("Model")) and m or nil
+end
 
 local App = require(script.Parent.App)
 require(script.Parent.WorldPrompts).start()

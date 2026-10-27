@@ -15,6 +15,12 @@ definitivos se pueden incorporar **sin tocar la lógica del juego**.
 
 ## Cómo incorporar los definitivos
 
+- **Carrocerías por tipo y década (sistema usado por el Pioneer 70):** poner el `Model` en
+  `ServerStorage.VehicleModels.<Nombre>` (frente hacia −Z, piezas pintables con el nombre terminado en
+  `_Paint`) y agregar una entrada en `Catalog.VEHICLE_MODELS` (`type`, `year`, `default = { desde, hasta }`,
+  `asset`). El servidor publica una copia sin scripts para el cliente, el editor la ofrece en el paso 3 y
+  `CarModel.build` la clona y pinta. Detalle en `docs/PIONEER70.md`.
+
 - **Autos:** poner un `Model` por base en `ReplicatedStorage.CarEmpireAssets.Cars.<baseId>` (`pixel`,
   `brisa`, `toro`, `duna`, `aurora`, `titan`, `vento`, `rayo`), con el frente hacia −Z y el pivote a ras
   del suelo. Las piezas con el atributo `Pintura = "primaria"` o `"secundaria"` toman los colores del

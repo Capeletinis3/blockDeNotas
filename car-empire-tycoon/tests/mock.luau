@@ -541,6 +541,10 @@ local HIER = {
 	Part = { "BasePart", "PVInstance" },
 	SpawnLocation = { "Part", "BasePart", "PVInstance" },
 	WedgePart = { "BasePart", "PVInstance" },
+	MeshPart = { "BasePart", "PVInstance" },
+	Script = { "BaseScript", "LuaSourceContainer" },
+	LocalScript = { "Script", "BaseScript", "LuaSourceContainer" },
+	ModuleScript = { "LuaSourceContainer" },
 	Model = { "PVInstance" },
 	WorldModel = { "Model", "PVInstance" },
 	Player = {},
@@ -836,8 +840,11 @@ function methods:ClearAllChildren()
 		c:Destroy()
 	end
 end
-function methods:Clone()
+-- Como en Roblox: las propiedades que apuntan a instancias dentro de lo clonado (PrimaryPart, Adornee…)
+-- apuntan a las copias, no a los originales.
+local function cloneInto(self, map)
 	local c = Instance.new(self.ClassName)
+	map[self] = c
 	for k, v in rawget(self, "__props") do
 		if k ~= "Parent" then
 			rawget(c, "__props")[k] = v
@@ -847,7 +854,20 @@ function methods:Clone()
 		rawget(c, "__attrs")[k] = v
 	end
 	for _, ch in rawget(self, "__children") do
-		ch:Clone().Parent = c
+		cloneInto(ch, map).Parent = c
+	end
+	return c
+end
+function methods:Clone()
+	local map = {}
+	local c = cloneInto(self, map)
+	for _, copy in map do
+		local props = rawget(copy, "__props")
+		for k, v in props do
+			if k ~= "Parent" and map[v] then
+				props[k] = map[v]
+			end
+		end
 	end
 	return c
 end
@@ -874,8 +894,15 @@ function methods:GetFullName()
 	end
 	return table.concat(parts, ".")
 end
+-- Como en Roblox: mover el pivote mueve todas las piezas del modelo, conservando sus posiciones relativas.
 function methods:PivotTo(c)
 	assert(M.typeof(c) == "CFrame", "PivotTo: se esperaba CFrame")
+	local delta = c * self:GetPivot():Inverse()
+	for _, d in self:GetDescendants() do
+		if isA(d, "BasePart") then
+			rawget(d, "__props").CFrame = delta * rawget(d, "__props").CFrame
+		end
+	end
 	rawget(self, "__props").__pivot = c
 end
 function methods:GetPivot()
@@ -979,7 +1006,7 @@ function M.reset(opts: any?)
 	M.log = {}
 	local S = {}
 	M.services = S
-	for _, name in { "ReplicatedStorage", "ServerScriptService", "StarterPlayer", "Lighting", "StarterGui", "SoundService", "ProximityPromptService", "ContentProvider" } do
+	for _, name in { "ReplicatedStorage", "ServerStorage", "ServerScriptService", "StarterPlayer", "Lighting", "StarterGui", "SoundService", "ProximityPromptService", "ContentProvider" } do
 		S[name] = service(name)
 	end
 	S.StarterGui.SetCore = function() end
