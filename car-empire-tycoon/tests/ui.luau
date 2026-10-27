@@ -704,6 +704,109 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 	noErrors("Pioneer 70")
 end)
 
+test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 y se fabrica con él", function()
+	local function find3d(root: any): { any }
+		local out = {}
+		for _, d in root:GetDescendants() do
+			if d:IsA("Model") and d:GetAttribute("vehicleModel") == "pioneer70" then
+				table.insert(out, d)
+			end
+		end
+		return out
+	end
+	local function minY(m: any): number
+		local y = math.huge
+		for _, d in m:GetDescendants() do
+			if d:IsA("BasePart") then
+				y = math.min(y, d.CFrame.Y - d.Size.Y / 2)
+			end
+		end
+		return y
+	end
+	local gui = M.localPlayer:FindFirstChild("PlayerGui")
+	-- 1) Editor nuevo: el jugador hace clic en la tarjeta «Brisa Sedán».
+	App.go("editor", { new = true })
+	M.task.wait()
+	clickN("Base_brisa")
+	M.task.wait()
+	eq(App.ui.editor.draft.baseId, "brisa", "eligió el sedán")
+	App.screens.editor.sync3d()
+	M.task.wait()
+	local inEditor = find3d(gui)
+	check(#inEditor == 1, "la vista 3D del editor muestra el Pioneer 70 (" .. #inEditor .. ")")
+	local vp = inEditor[1] and inEditor[1]:FindFirstAncestorWhichIsA("ViewportFrame")
+	print("    editor: modelo «" .. tostring(inEditor[1] and inEditor[1].Name) .. "» dentro de " .. tostring(vp and vp:GetFullName()))
+	-- 2) Elige un color en el paso 3 y guarda.
+	for _ = 1, 2 do
+		clickN("Siguiente")
+	end
+	check(named("Carroceria3D_pioneer70") ~= nil, "paso 3: la carrocería 3D elegida es el Pioneer 70")
+	clickN("Pintura_Rojo carrera")
+	M.task.wait()
+	eq(App.ui.editor.draft.paint.primary, "#D6333F", "eligió «Rojo carrera»")
+	App.screens.editor.sync3d()
+	M.task.wait()
+	local red = find3d(gui)[1]
+	check(red ~= nil and red:FindFirstChild("Body_Paint").Color == M.Color3.fromHex("#D6333F"), "la vista 3D se repinta con el color elegido")
+	clickN("Siguiente")
+	local before = #App.g.designs
+	clickN("GuardarDiseno")
+	check(waitFor(function()
+		return #App.g.designs > before
+	end), "diseño guardado")
+	local saved = App.g.designs[#App.g.designs]
+	print("    guardado: «" .. saved.name .. "» · base " .. saved.baseId .. " · carrocería " .. tostring(saved.vehicleModel) .. " · color " .. saved.paint.primary)
+	eq(saved.vehicleModel, "pioneer70", "el diseño guardado lleva el Pioneer 70")
+	-- 3) Lanza un lote desde el diálogo de producción.
+	App.ui.editor = nil
+	App.closeAllDialogs()
+	App.go("fabrica")
+	M.task.wait()
+	App.openDialog("lot", { designId = saved.id })
+	M.task.wait()
+	clickN("ConfirmarLote")
+	check(waitFor(function()
+		for _, l in App.g.lots do
+			if l.designId == saved.id then
+				return true
+			end
+		end
+		return false
+	end), "lote lanzado")
+	-- 4) El garaje muestra el auto fabricado con el Pioneer 70, pintado y apoyado en el piso.
+	-- Con una sola línea, el lote espera en cola a que termine el anterior (como en el juego real).
+	local found = {}
+	for _ = 1, 200 do
+		if next(found) ~= nil and #App.g.lots > 0 and App.g.lots[#App.g.lots].produced >= 3 then
+			break
+		end
+		advance(1)
+		for _, c in find3d(M.services.Workspace) do
+			local body = c:FindFirstChild("Body_Paint")
+			if body and body.Color == M.Color3.fromHex("#D6333F") then
+				local p = c:GetPivot()
+				found[c] = string.format("%s · pivote (%.1f, %.2f, %.1f) · piso de las ruedas %.2f · %s", c.Parent and c.Parent.Parent and c.Parent.Parent.Name or "?", p.X, p.Y, p.Z, minY(c), body.Transparency > 0.3 and "en fabricación (semitransparente)" or "terminado")
+			end
+		end
+	end
+	for _, l in App.g.lots do
+		print(string.format("    lote %s · %s · %s · fabricadas %d/%d · vendidas %d", l.id, l.design.name, l.prodState, l.produced, l.qty, l.sold))
+	end
+	for _, c in M.services.Workspace:GetDescendants() do
+		if c:IsA("Model") and c.Name == "Auto" then
+			local b = c:FindFirstChild("Body_Paint") or c:FindFirstChild("Carroceria")
+			print("    auto en el mundo: " .. tostring(c:GetAttribute("vehicleModel")) .. " · color " .. (b and b.Color:ToHex() or "?"))
+		end
+	end
+	local n = 0
+	for _, line in found do
+		n += 1
+		print("    garaje: " .. line)
+	end
+	check(n >= 1, "el sedán rojo aparece en el garaje con el Pioneer 70")
+	noErrors("Recorrido Pioneer 70")
+end)
+
 test("Fin de partida: expansión global, récords y años extra en las cuatro resoluciones", function()
 	local function lateGame()
 		local g = App.g
