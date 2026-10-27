@@ -609,6 +609,7 @@ local function defaults(className: string)
 	if HIER[className] and table.find(HIER[className], "BasePart") then
 		p.Size = v3(4, 1, 2)
 		p.CFrame = CFrame.new()
+		p.PivotOffset = CFrame.new()
 		p.Anchored = false
 		p.Transparency = 0
 		p.Color = Color3.new(0.6, 0.6, 0.6)
@@ -895,18 +896,34 @@ function methods:GetFullName()
 	return table.concat(parts, ".")
 end
 -- Como en Roblox: mover el pivote mueve todas las piezas del modelo, conservando sus posiciones relativas.
+-- El pivote de un modelo con PrimaryPart es el de esa pieza (CFrame * PivotOffset) y WorldPivot se
+-- ignora; sin PrimaryPart, es WorldPivot.
 function methods:PivotTo(c)
 	assert(M.typeof(c) == "CFrame", "PivotTo: se esperaba CFrame")
+	if isA(self, "BasePart") then
+		rawget(self, "__props").CFrame = c * rawget(self, "__props").PivotOffset:Inverse()
+		return
+	end
 	local delta = c * self:GetPivot():Inverse()
 	for _, d in self:GetDescendants() do
 		if isA(d, "BasePart") then
 			rawget(d, "__props").CFrame = delta * rawget(d, "__props").CFrame
 		end
 	end
-	rawget(self, "__props").__pivot = c
+	if not rawget(self, "__props").PrimaryPart then
+		rawget(self, "__props").WorldPivot = c
+	end
 end
 function methods:GetPivot()
-	return rawget(self, "__props").__pivot or rawget(self, "__props").WorldPivot or CFrame.new()
+	local props = rawget(self, "__props")
+	if isA(self, "BasePart") then
+		return props.CFrame * props.PivotOffset
+	end
+	local pp = props.PrimaryPart
+	if pp then
+		return rawget(pp, "__props").CFrame * rawget(pp, "__props").PivotOffset
+	end
+	return props.WorldPivot or CFrame.new()
 end
 function methods:GetBoundingBox()
 	return self:GetPivot(), v3(8, 4, 14)

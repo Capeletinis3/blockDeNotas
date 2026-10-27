@@ -17,6 +17,7 @@ local function convert(M: any, src: any): any
 	if src:IsA("BasePart") then
 		local cf = src.CFrame
 		inst.CFrame = M.CFrame.new(cf:GetComponents())
+		inst.PivotOffset = M.CFrame.new(src.PivotOffset:GetComponents())
 		inst.Size = M.Vector3.new(src.Size.X, src.Size.Y, src.Size.Z)
 		inst.Color = M.Color3.new(src.Color.R, src.Color.G, src.Color.B)
 		inst.Material = M.Enum.Material[src.Material.Name]

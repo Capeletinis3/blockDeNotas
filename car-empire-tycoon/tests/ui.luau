@@ -608,6 +608,10 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 	check(math.abs(dist(cp.Wheel_FL_Tire, cp.Body_Paint) - dist(orig.Wheel_FL_Tire, orig.Body_Paint)) < 1e-4, "las piezas no cambian de posición entre sí")
 	check(math.abs(dist(cp.Headlights_Lens, cp.Taillights_TailRed) - dist(orig.Headlights_Lens, orig.Taillights_TailRed)) < 1e-4, "faros y luces traseras en su lugar")
 	check(math.abs(car:GetPivot().X - 100) < 1e-6 and math.abs(car:GetPivot().Z - 50) < 1e-6, "centrado donde se lo pide")
+	-- Horizontal: el techo sigue arriba y el largo queda acostado (girado solo en Y, como se pidió).
+	check(cp.Body_Paint.CFrame.UpVector.Y > 0.999, "el auto queda horizontal, no parado")
+	check(math.abs(cp.Body_Paint.CFrame.LookVector.X) > 0.999, "girado 90° en Y como se pidió (largo a lo ancho)")
+	check(cp.Interior_Headliner_TrimLight.CFrame.Y > cp.Wheel_FL_Tire.CFrame.Y + 2, "el techo queda arriba de las ruedas")
 	check(cp.Body_Paint.Anchored == true and cp.Body_Paint.CanCollide == false, "anclado y sin colisión (es de exhibición)")
 	local dims = CarModel.dims(d)
 	check(dims.Z > 17 and dims.Z < 18 and dims.Y > 5 and dims.Y < 6, "medidas reales para encuadrar la cámara")
@@ -695,6 +699,24 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 			if c:GetAttribute("vehicleModel") == "pioneer70" then
 				seen3d = true
 				check(math.abs(minY(c) - c:GetPivot().Y) < 1e-3 and c:GetPivot().Y >= 0, "apoyado en su lugar del garaje")
+				check(c:FindFirstChild("Body_Paint").CFrame.UpVector.Y > 0.999, "horizontal en el garaje")
+				-- En el concesionario (pivote a 1,4: arriba de la plataforma) el auto entra en el círculo.
+				if math.abs(c:GetPivot().Y - 1.4) < 1e-3 then
+					local center = c:GetPivot().Position
+					local far = 0
+					for _, d in c:GetDescendants() do
+						if d:IsA("BasePart") then
+							local h = d.Size / 2
+							for _, sx in { -1, 1 } do
+								for _, sz in { -1, 1 } do
+									local w = d.CFrame:PointToWorldSpace(M.Vector3.new(h.X * sx, 0, h.Z * sz))
+									far = math.max(far, math.sqrt((w.X - center.X) ^ 2 + (w.Z - center.Z) ^ 2))
+								end
+							end
+						end
+					end
+					check(far <= 10, "en el concesionario el auto entra en la plataforma (radio usado " .. string.format("%.2f", far) .. " de 10)")
+				end
 				check(c:FindFirstChildWhichIsA("LuaSourceContainer", true) == nil, "sin scripts en el garaje")
 			end
 		end

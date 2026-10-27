@@ -198,9 +198,14 @@ function CarModel.template(asset: string): any
 	if not primary or not lo or not hi then
 		return nil
 	end
-	-- Pivote: centro de la planta, a la altura de la pieza más baja (las ruedas apoyan en el suelo).
+	-- Pivote: centro de la planta, a la altura de la pieza más baja (las ruedas apoyan en el suelo), sin
+	-- giro. Con PrimaryPart, Roblox usa el pivote de esa pieza (CFrame * PivotOffset) e ignora WorldPivot,
+	-- y las piezas importadas de Blender traen un PivotOffset girado 90°: por eso se fija el PivotOffset de
+	-- la pieza principal (de la plantilla, no del original) para que el pivote quede donde corresponde.
+	local pivot = CFrame.new((lo.X + hi.X) / 2, lo.Y, (lo.Z + hi.Z) / 2)
 	m.PrimaryPart = primary
-	m.WorldPivot = CFrame.new((lo.X + hi.X) / 2, lo.Y, (lo.Z + hi.Z) / 2)
+	primary.PivotOffset = primary.CFrame:ToObjectSpace(pivot)
+	m.WorldPivot = pivot
 	m:PivotTo(CFrame.new())
 	m.Name = "Auto"
 	local size = hi - lo
@@ -415,6 +420,8 @@ function CarModel.build(spec: any, opts: { ghost: boolean?, brandColor: string? 
 	end
 
 	model.PrimaryPart = mainBody
+	-- Pivote a ras del suelo en el centro (con PrimaryPart cuenta el PivotOffset de esa pieza).
+	mainBody.PivotOffset = mainBody.CFrame:ToObjectSpace(CFrame.new(0, 0, 0))
 	model.WorldPivot = CFrame.new(0, 0, 0)
 	model:SetAttribute("length", s.L + 1.6)
 	model:SetAttribute("width", s.W + 0.4)

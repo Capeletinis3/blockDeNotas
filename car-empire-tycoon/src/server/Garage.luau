@@ -270,10 +270,11 @@ function Garage:buildPlot(i: number, company: any)
 	label(wh, "🚗  Stock terminado", UDim2.fromOffset(160, 36), Vector3.new(0, 7, -14), C.bl)
 	self:prompt(wh, "Catálogo", "Stock y catálogo", "autos", i)
 
-	-- Concesionario: dos plataformas al frente
-	local show = self:plotPart(i, "Concesionario", Vector3.new(44, 0.3, 18), CFrame.new(-8, 0.5, 22), Color3.fromHex("#0C0E13"), { Material = Enum.Material.Glass })
+	-- Concesionario: dos plataformas al frente (20 studs de diámetro: entra un auto de 17,5 de largo
+	-- como el Pioneer 70, también girado).
+	local show = self:plotPart(i, "Concesionario", Vector3.new(48, 0.3, 22), CFrame.new(-8, 0.5, 22), Color3.fromHex("#0C0E13"), { Material = Enum.Material.Glass })
 	for k = 0, 1 do
-		self:plotPart(i, "Plataforma", Vector3.new(1, 15, 15), CFrame.new(-19 + k * 22, 0.9, 22) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromHex("#292D38"), { Shape = Enum.PartType.Cylinder })
+		self:plotPart(i, "Plataforma", Vector3.new(1, 20, 20), CFrame.new(-19 + k * 22, 0.9, 22) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromHex("#292D38"), { Shape = Enum.PartType.Cylinder })
 	end
 	label(show, "🏷  Concesionario", UDim2.fromOffset(200, 38), Vector3.new(0, 9, 0), C.gr)
 	self:prompt(show, "Ventas", "Concesionario", "ventas", i)
