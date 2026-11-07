@@ -598,40 +598,46 @@ end
 
 -- Investigación ------------------------------------------------------------------------------
 
--- Investigación: se paga el dinero al empezar; los PI salen del banco y de la generación de la sede.
+--[[ Investigación: se pueden llevar varias a la vez (hasta RESEARCH_RULES.maxParallel). Para empezar hacen
+	falta los PI y el dinero (se pagan AL EMPEZAR, una sola vez), los requisitos y que la tecnología no esté
+	ya completada ni en curso; se puede adelantar hasta 5 años con recargo (Rules.researchCost). Avanza por
+	días simulados y no se puede cancelar. ]]
 function Actions.startResearch(g: any, _ctx: any, payload: any): any
 	local n = Catalog.researchNode(arg(payload, "id"))
 	if not n then
 		return fail("Investigación desconocida.")
 	end
 	local st = Rules.researchState(g, n)
-	if st ~= "disponible" then
-		local miss = Rules.researchMissing(g, n)
-		return fail(#miss > 0 and table.concat(miss, " · ") or (st == "hecha" and "Ya está investigada." or "Ya está en curso."))
+	if st == "hecha" then
+		return fail("«" .. n.name .. "» ya está investigada.")
+	elseif st == "activa" then
+		return fail("«" .. n.name .. "» ya está en curso.")
+	elseif st ~= "disponible" then
+		return fail(table.concat(Rules.researchMissing(g, n), " · "))
 	end
-	if g.research.active then
-		return fail("Ya hay una investigación en curso.")
+	if #g.research.projects >= Catalog.RESEARCH_RULES.maxParallel then
+		return fail("Ya tenés " .. Catalog.RESEARCH_RULES.maxParallel .. " investigaciones en curso (el máximo). Esperá a que termine alguna.")
 	end
-	local rp, cost, factor = Rules.researchCost(g, n)
-	if not Simulation.spend(g, cost, "investigacion", "Investigación: " .. n.name) then
+	local pi, cost, days, info = Rules.researchCost(g, n)
+	if g.rp < pi then
+		return fail("Faltan PI: cuesta " .. Util.num(pi) .. " PI y tenés " .. Util.num(math.floor(g.rp)) .. ".")
+	end
+	if not Simulation.canAfford(g, cost) then
 		return fail("Fondos insuficientes: cuesta " .. money(cost) .. ".")
 	end
-	g.research.active = { id = n.id, progress = 0, paid = cost, rp = rp }
-	local eta = Rules.researchEta(g) or 0
-	return { ok = true, msg = "Investigando «" .. n.name .. "»: " .. rp .. " PI" .. (factor < 1 and (" (−" .. round((1 - factor) * 100) .. " % por ser una tecnología conocida)") or "") .. " · ≈ " .. Util.realTime(eta) .. (g.rp > 0 and " con los PI ahorrados como acelerador" or "") .. "." }
+	Simulation.spend(g, cost, "investigacion", "Investigación: " .. n.name)
+	g.rp -= pi
+	table.insert(g.research.projects, { id = n.id, progress = 0, days = days, paidMoney = cost, paidPi = pi, ahead = info.ahead, startDay = Rules.absDay(g) })
+	return {
+		ok = true,
+		msg = "Investigando «" .. n.name .. "»: " .. Util.num(pi) .. " PI y " .. money(cost) .. " pagados, " .. days .. " días"
+			.. (info.ahead > 0 and (" (adelantada " .. info.ahead .. (info.ahead == 1 and " año" or " años") .. ": recargo incluido)") or "") .. ".",
+	}
 end
 
-function Actions.cancelResearch(g: any, _ctx: any, _payload: any): any
-	local a = g.research.active
-	if not a then
-		return fail("No hay investigación en curso.")
-	end
-	local n = Catalog.researchNode(a.id)
-	Simulation.earn(g, a.paid, "reintegro", "Reintegro: " .. n.name)
-	g.rp += a.progress
-	g.research.active = nil
-	g.rp = math.min(g.rp, Rules.piCap(g) + a.progress)
-	return { ok = true, msg = "Investigación cancelada: se devolvieron " .. money(a.paid) .. " y " .. math.floor(a.progress) .. " PI." }
+-- Las investigaciones no se cancelan (los costos ya se pagaron).
+function Actions.cancelResearch(_g: any, _ctx: any, _payload: any): any
+	return fail("Las investigaciones en curso no se pueden cancelar.")
 end
 
 -- Personal ------------------------------------------------------------------------------------

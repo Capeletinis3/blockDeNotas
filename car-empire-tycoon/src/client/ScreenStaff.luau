@@ -1,7 +1,7 @@
 --!strict
 -- Personal (SCREENS.personal de la V3): equipo (asignación y despido) y candidatos. El personal es un
--- extra opcional: suma velocidad a la fábrica (máx. +30 %), PI al laboratorio (máx. +30 %) y alcance
--- comercial (máx. +25 %). No hay cansancio ni descansos que atender.
+-- extra opcional: suma velocidad a la fábrica (máx. +30 %) y alcance comercial (máx. +25 %). El laboratorio
+-- queda preparado para la etapa de personal de I+D (no suma PI por minuto). No hay cansancio ni descansos que atender.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -76,7 +76,7 @@ function Screen.build(main: Frame, side: Frame)
 	tabs.Parent = main
 	if tab == "team" then
 		if #g.employees == 0 then
-			Ui.empty("users", "Todavía no contrataste a nadie. El personal es opcional: suma velocidad, PI y alcance comercial.", Ui.button("Ver candidatos", "p", function()
+			Ui.empty("users", "Todavía no contrataste a nadie. El personal es opcional: suma velocidad y alcance comercial.", Ui.button("Ver candidatos", "p", function()
 				App.ui.tabs.personal = "hire"
 				App.forceRender()
 			end, { small = true })).Parent = main
@@ -126,7 +126,7 @@ function Screen.build(main: Frame, side: Frame)
 	for _, d in Catalog.DEPARTMENTS do
 		areaRow(d[1], d[2], d[3])
 	end
-	table.insert(rows, Ui.text("El número de la derecha es el aporte (habilidad × afinidad con el puesto; la mitad si no es el rol ideal). Estaciones: +5 % de velocidad por punto (máx. +30 %). Laboratorio: más PI (máx. +30 %). Ventas y marketing: más alcance (máx. +25 %). Cada estación admite " .. Catalog.RULES.assignMax.station .. " personas y cada departamento " .. Catalog.RULES.assignMax.dept .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }))
+	table.insert(rows, Ui.text("El número de la derecha es el aporte (habilidad × afinidad con el puesto; la mitad si no es el rol ideal). Estaciones: +5 % de velocidad por punto (máx. +30 %). Laboratorio: preparado para una etapa próxima (hoy sin efecto). Ventas y marketing: más alcance (máx. +25 %). Cada estación admite " .. Catalog.RULES.assignMax.station .. " personas y cada departamento " .. Catalog.RULES.assignMax.dept .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.5 }))
 	Ui.card(rows, { gap = 6 }).Parent = side
 end
 

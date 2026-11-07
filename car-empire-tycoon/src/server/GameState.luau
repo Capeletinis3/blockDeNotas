@@ -16,7 +16,7 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 7
+GameState.SCHEMA = 8
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -71,7 +71,8 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		candidates = {},
 		stations = freshStations(),
 		ledger = {},
-		research = { done = {}, active = nil },
+		-- projects = investigaciones en curso { id, progress (días), days, paidMoney, paidPi, ahead, startDay }
+		research = { done = {}, projects = {} },
 		devPaid = {},
 		claimed = {},
 		counters = {
@@ -169,6 +170,22 @@ local function checkSpec(spec: any, what: string): string?
 	if not isInt(spec.quality, 0, 5) then
 		return what .. ": calidad de terminación inválida."
 	end
+	if spec.motorLevel ~= nil and not isInt(spec.motorLevel, 1, Catalog.RESEARCH_RULES.engineMaxLevel) then
+		return what .. ": nivel de motor inválido."
+	end
+	if spec.motorVariant ~= nil and not Catalog.engineVariant(spec.motorVariant) then
+		return what .. ": variante de motor inválida."
+	end
+	if spec.equipment ~= nil then
+		if not isList(spec.equipment) then
+			return what .. ": equipamiento dañado."
+		end
+		for _, id in spec.equipment do
+			if not Catalog.equipment(id) then
+				return what .. ": equipamiento desconocido."
+			end
+		end
+	end
 	-- Carrocería 3D: una que ya no esté en el catálogo no daña la partida (se ve el modelo provisional).
 	if spec.vehicleModel ~= nil and type(spec.vehicleModel) ~= "string" then
 		return what .. ": carrocería 3D inválida."
@@ -257,9 +274,15 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("Investigación desconocida: " .. tostring(id) .. ".")
 		end
 	end
-	local ra = g.research.active
-	if ra ~= nil and (type(ra) ~= "table" or not Catalog.researchNode(ra.id) or not nonNeg(ra.progress) or not nonNeg(ra.paid) or (ra.rp ~= nil and not nonNeg(ra.rp))) then
-		return fail("La investigación en curso está dañada.")
+	if not isList(g.research.projects) or #g.research.projects > Catalog.RESEARCH_RULES.maxParallel then
+		return fail("Las investigaciones en curso están dañadas.")
+	end
+	local running = {}
+	for _, p in g.research.projects do
+		if type(p) ~= "table" or not Catalog.researchNode(p.id) or not nonNeg(p.progress) or not isFinite(p.days) or p.days <= 0 or running[p.id] or Util.contains(g.research.done, p.id) then
+			return fail("Una investigación en curso está dañada.")
+		end
+		running[p.id] = true
 	end
 	-- Estaciones
 	if type(g.stations) ~= "table" then
@@ -765,6 +788,54 @@ MIGRATIONS[6] = function(g: any, _now: number)
 	g.schema = 7
 end
 
+-- 7 → 8: I+D por días con varias investigaciones a la vez; motores por nivel y variante; equipamiento.
+-- La investigación activa pasa a la lista con los días que le faltaban (proporcional a su avance). Los efectos
+-- que antes se aplicaban solos (aire acondicionado, dirección asistida, zonas de deformación, computadora
+-- de a bordo) pasan a ser equipamiento: los diseños existentes lo reciben para conservar sus estadísticas.
+MIGRATIONS[7] = function(g: any, _now: number)
+	local r = type(g.research) == "table" and g.research or { done = {} }
+	r.done = type(r.done) == "table" and r.done or {}
+	r.projects = type(r.projects) == "table" and r.projects or {}
+	local a = r.active
+	if type(a) == "table" then
+		local n = Catalog.researchNode(a.id)
+		if n and not Util.contains(r.done, a.id) then
+			local need = (isFinite(a.rp) and a.rp > 0) and a.rp or n.rp
+			local left = math.clamp(1 - (isFinite(a.progress) and a.progress or 0) / need, 0.05, 1)
+			table.insert(r.projects, { id = n.id, progress = 0, days = math.max(1, math.floor(n.days * left + 0.5)), paidMoney = isFinite(a.paid) and a.paid or 0, paidPi = 0, ahead = 0, startDay = 0 })
+		end
+	end
+	r.active = nil
+	g.research = r
+	-- Antes, estas tecnologías se aplicaban solas a todos los autos: los diseños existentes las conservan
+	-- como equipamiento elegido (en el orden del catálogo) para no cambiar sus estadísticas.
+	local AUTO = { se2 = true, co1 = true, co3 = true, el2 = true }
+	local equip = {}
+	for _, e in Catalog.EQUIPMENT do
+		if AUTO[e.research] and Util.contains(r.done, e.research) then
+			table.insert(equip, e.id)
+		end
+	end
+	local function upgrade(spec: any)
+		if type(spec) == "table" then
+			spec.motorLevel = spec.motorLevel or 1
+			spec.motorVariant = spec.motorVariant or "balanced"
+			if spec.equipment == nil then
+				spec.equipment = table.clone(equip)
+			end
+		end
+	end
+	for _, d in g.designs or {} do
+		upgrade(d)
+	end
+	for _, l in g.lots or {} do
+		if type(l) == "table" and type(l.design) == "table" then
+			upgrade(l.design.spec)
+		end
+	end
+	g.schema = 8
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1106,7 +1177,7 @@ function GameState.live(g: any): any
 		month = table.clone(g.stats.month),
 		dayKey = key,
 		day = g.stats.days[key] and Util.deepCopy(g.stats.days[key]) or nil,
-		research = g.research.active and table.clone(g.research.active) or nil,
+		research = Util.deepCopy(g.research.projects),
 		lots = lots,
 		derived = { caps = caps, lineRate = caps.perLine, piPerMinute = Rules.piPerMinute(g), piCap = Rules.piCap(g), year = Rules.year(g), xpNext = Rules.xpForLevel(g.level), sedeName = Rules.sede(g).name },
 	}
@@ -1115,7 +1186,7 @@ end
 -- Firma de la estructura: si cambia, el cliente recibe la partida completa.
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
-		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), g.research.active and g.research.active.id or "",
+		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
 		tostring(#g.candidates), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)

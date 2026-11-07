@@ -980,6 +980,109 @@ test("Etapa 1 en la interfaz: pausa con diálogos, guardar ahora, guardar y volv
 	noErrors("Etapa 1")
 end)
 
+test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultáneos, nivel de motor y equipamiento", function()
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Rules = require("./.build-ui/shared/Rules")
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.closeAllDialogs()
+	App.ui.editor = nil
+	-- PI y capital de prueba en el servidor.
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	sess.game.money = 5000000
+	sess.game.rp = 5000
+	inst:push(sess)
+	check(waitFor(function()
+		return App.g.rp == 5000
+	end), "PI de prueba")
+	App.go("investigacion")
+	M.task.wait()
+	for _, key in { "chasis", "motores", "seguridad", "tecnologia" } do
+		check(named("Pestana_" .. key) ~= nil, "pestaña " .. Catalog.RESEARCH[key].label)
+	end
+	check(named("PI") ~= nil and named("EnCurso") ~= nil, "panel de PI y de proyectos en curso")
+	-- Una investigación disponible por categoría: se empiezan dos a la vez desde sus tarjetas.
+	local started = {}
+	for _, key in { "tecnologia", "seguridad" } do
+		clickN("Pestana_" .. key)
+		M.task.wait()
+		local pick
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if not pick and Rules.researchState(App.g, n) == "disponible" and Rules.researchAhead(App.g, n) == 0 then
+				pick = n
+			end
+		end
+		check(pick ~= nil, key .. ": hay una disponible")
+		if pick then
+			local card = named("Nodo_" .. pick.id)
+			check(card ~= nil, key .. ": tarjeta de " .. pick.name)
+			check(card and card:FindFirstChild("Costo", true) ~= nil, key .. ": muestra dinero, PI y días")
+			clickN("Investigar_" .. pick.id)
+			check(waitFor(function()
+				return Rules.researchProject(App.g, pick.id) ~= nil
+			end), key .. ": empieza " .. pick.name)
+			table.insert(started, pick)
+		end
+	end
+	eq(#App.g.research.projects, #started, "dos proyectos simultáneos")
+	for _, n in started do
+		check(named("Proyecto_" .. n.id) ~= nil, "en curso: " .. n.name)
+	end
+	-- Avanzan con el calendario y se completan.
+	App.go("juego")
+	M.task.wait()
+	App.request("setSpeed", { speed = 3 })
+	for _ = 1, 400 do
+		advance(1)
+		if #App.g.research.projects == 0 then
+			break
+		end
+	end
+	for _, n in started do
+		check(Rules.has(App.g, n.id), "completada: " .. n.name)
+	end
+	App.request("setSpeed", { speed = 1 })
+	App.go("investigacion")
+	M.task.wait()
+	check(find("COMPLETADAS") ~= nil, "sección de completadas")
+	-- Editor: nivel de motor, variante y equipamiento (solo lo investigado).
+	App.go("editor", { new = true, force = true })
+	M.task.wait()
+	if dialogOpen() then
+		clickN("Descartar")
+		M.task.wait()
+	end
+	App.screens.editor.goStep(2)
+	M.task.wait()
+	check(named("NivelMotor_1") ~= nil and named("VarianteMotor_balanced") ~= nil, "nivel y variante del motor")
+	App.screens.editor.goStep(3)
+	M.task.wait()
+	local anyEquip = false
+	for _, e in Catalog.EQUIPMENT do
+		check(named("Equipo_" .. e.id) ~= nil, "equipamiento: " .. e.name)
+		if Rules.equipmentUnlocked(App.g, e) and not anyEquip then
+			anyEquip = true
+			eq(#App.ui.editor.draft.equipment, 0, "no viene instalado")
+			clickN("Equipo_" .. e.id)
+			M.task.wait()
+			eq(App.ui.editor.draft.equipment[1], e.id, "se elige " .. e.name)
+		end
+	end
+	check(anyEquip, "hay equipamiento investigado para elegir")
+	App.ui.editor = nil
+	App.go("juego")
+	M.task.wait()
+	if dialogOpen() then
+		clickN("Descartar")
+	end
+	noErrors("Etapa 3")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()

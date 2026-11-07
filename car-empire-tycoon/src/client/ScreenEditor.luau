@@ -1075,6 +1075,34 @@ local function panelPerf(g: any, d: any, body: Instance): Instance
 		table.insert(cards, partCard(g, d, e, p, selId))
 	end
 	Ui.col(cards, 8).Parent = body
+	-- Motor: nivel (investigado por familia) y variante. Elegir un nivel más bajo sirve para autos económicos;
+	-- un diseño guardado conserva su nivel aunque después se investigue otro.
+	if cat == "motor" then
+		local fam = DesignCalc.engineFamily(d)
+		local maxLvl = DesignCalc.maxEngineLevel(g, d)
+		local levels = {}
+		for l = 1, Catalog.RESEARCH_RULES.engineMaxLevel do
+			table.insert(levels, { l, "Nivel " .. l, 0, l > maxLvl and { disabled = "Requiere investigar " .. tostring(fam) .. " nivel " .. l } or nil })
+		end
+		local variants = {}
+		for _, v in Catalog.ENGINE_VARIANTS do
+			local why = DesignCalc.variantBlock(g, d, v)
+			table.insert(variants, { v.id, v.name, 0, why and { disabled = why } or nil })
+		end
+		section("Nivel y variante del motor" .. (fam and (" · familia " .. fam) or ""), {
+			optRow(nil, levels, d.motorLevel or 1, function(v)
+				change(function(dd)
+					dd.motorLevel = v
+				end)
+			end, { columns = 5, height = 34, name = "NivelMotor" }),
+			optRow(nil, variants, d.motorVariant or "balanced", function(v)
+				change(function(dd)
+					dd.motorVariant = v
+				end)
+			end, { columns = 3, height = 36, name = "VarianteMotor" }),
+			Ui.text("Cada nivel suma +" .. Util.round(Catalog.ENGINE_LEVEL_FX.hp * 100) .. " % de potencia y " .. Util.round(Catalog.ENGINE_LEVEL_FX.cons * 100) .. " % de consumo, pero el motor cuesta +" .. Util.round(Catalog.ENGINE_LEVEL_FX.cost * 100) .. " % más. Económica: menos consumo y potencia. Deportiva: más potencia, consumo y costo.", { size = Ui.S.xs, color = T.mut }),
+		}, 8).Parent = body
+	end
 
 	local installed = selP == nil or selP.id == d.parts[cat]
 	local block = selP and DesignCalc.partBlock(g, d, selP)
@@ -1127,7 +1155,9 @@ local function panelPerf(g: any, d: any, body: Instance): Instance
 	return Ui.button("Instalar en el prototipo", "p", function()
 		local p = selP :: any
 		change(function(dd)
+			dd.motorFamily = DesignCalc.engineFamily(dd)
 			dd.parts[cat] = p.id
+			DesignCalc.fixEngine(g, dd)
 		end)
 		e.sel = nil
 		local paid = Util.contains(g.devPaid, cat .. ":" .. p.id)
@@ -1381,6 +1411,53 @@ local function panelDesign(g: any, d: any, body: Instance)
 			end)
 		end, "Pinzas") }, 6),
 	}, 10).Parent = body
+
+	-- Equipamiento investigado (seguridad y tecnología): se elige por diseño, nada viene puesto solo.
+	local equipRows: { Instance? } = {}
+	local unlockedAny = false
+	for _, grp in { { "seguridad", "Seguridad" }, { "tecnologia", "Tecnología y confort" } } do
+		local items = {}
+		for _, eq in Catalog.EQUIPMENT do
+			if eq.group == grp[1] then
+				local why = DesignCalc.equipmentBlock(g, eq)
+				unlockedAny = unlockedAny or why == nil
+				local on = table.find(d.equipment or {}, eq.id) ~= nil
+				local fxText = {}
+				for k, v in eq.fx do
+					local label = ({ comfort = "comodidad", safety = "seguridad", q = "calidad", grip = "manejo", eff = "eficiencia", kg = "kg" })[k]
+					if label then
+						table.insert(fxText, (v > 0 and "+" or "") .. v .. " " .. label)
+					end
+				end
+				table.insert(items, Ui.opt((on and "✓ " or "") .. eq.name .. " <font size=\"11\" color=\"#A3AAB8\">" .. table.concat(fxText, ", ") .. " · +" .. Util.money(eq.unit * Catalog.ECON.unitCostScale) .. "/u</font>", on, function()
+					change(function(dd)
+						local list = {}
+						for _, id in dd.equipment or {} do
+							if id ~= eq.id then
+								table.insert(list, id)
+							end
+						end
+						if not on then
+							table.insert(list, eq.id)
+						end
+						-- Orden del catálogo (el servidor lo guarda igual).
+						local ordered = {}
+						for _, x in Catalog.EQUIPMENT do
+							if table.find(list, x.id) then
+								table.insert(ordered, x.id)
+							end
+						end
+						dd.equipment = ordered
+					end)
+				end, { height = 36, disabled = why ~= nil, why = why, name = "Equipo_" .. eq.id }))
+			end
+		end
+		table.insert(equipRows, Ui.col({ Ui.fl(grp[2]), Ui.row(items, 8, { wrap = true }) }, 6))
+	end
+	if not unlockedAny then
+		table.insert(equipRows, Ui.text("Todavía no investigaste equipamiento. Investigá «Radio AM/FM», «Aire acondicionado» y más en Investigación › Tecnología y Seguridad.", { size = Ui.S.xs, color = T.mut }))
+	end
+	section("Equipamiento", equipRows, 10).Parent = body
 
 	local bodyRows: { Instance? } = {}
 	-- Carrocería 3D definitiva del tipo (por ejemplo, el Pioneer 70 para los sedanes): solo cambia el aspecto.

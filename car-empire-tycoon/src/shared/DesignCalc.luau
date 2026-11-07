@@ -34,12 +34,17 @@ function DesignCalc.year(g: any): number
 	return Catalog.CALENDAR.startYear
 end
 
+-- Lo que pide una investigación se puede usar apenas está investigado (aunque se haya adelantado al año en
+-- que aparece); lo que no pide investigación espera a su año.
 function DesignCalc.baseAvailable(g: any, b: any): string?
+	if b.research then
+		if not DesignCalc.has(g, b.research) then
+			return "Requiere investigar «" .. DesignCalc.researchName(b.research) .. "»"
+		end
+		return nil
+	end
 	if (b.year or 1970) > DesignCalc.year(g) then
 		return "Disponible desde " .. b.year
-	end
-	if b.research and not DesignCalc.has(g, b.research) then
-		return "Requiere investigar «" .. DesignCalc.researchName(b.research) .. "»"
 	end
 	return nil
 end
@@ -70,11 +75,14 @@ function DesignCalc.partBlock(g: any, d: any, p: any): string?
 	if p.cat == "turbo" and p.id ~= "none" and Util.contains(b.tags, "electrico") then
 		return "Los eléctricos no usan turbo"
 	end
+	if p.research then
+		if not DesignCalc.has(g, p.research) then
+			return "Requiere investigar «" .. DesignCalc.researchName(p.research) .. "»"
+		end
+		return nil
+	end
 	if (p.year or 1970) > DesignCalc.year(g) then
 		return "Disponible desde " .. p.year
-	end
-	if p.research and not DesignCalc.has(g, p.research) then
-		return "Requiere investigar «" .. DesignCalc.researchName(p.research) .. "»"
 	end
 	return nil
 end
@@ -84,11 +92,61 @@ function DesignCalc.optionBlock(g: any, opt: any): string?
 	if not opt then
 		return "Opción desconocida"
 	end
+	if opt.research then
+		if not DesignCalc.has(g, opt.research) then
+			return "Requiere investigar «" .. DesignCalc.researchName(opt.research) .. "»"
+		end
+		return nil
+	end
 	if (opt.year or 1970) > DesignCalc.year(g) then
 		return "Disponible desde " .. opt.year
 	end
-	if opt.research and not DesignCalc.has(g, opt.research) then
-		return "Requiere investigar «" .. DesignCalc.researchName(opt.research) .. "»"
+	return nil
+end
+
+-- Después de cambiar el motor o la base: el nivel no puede pasar el investigado para la familia nueva
+-- (si se cambió de familia, se usa el más alto disponible) y la variante tiene que ser compatible.
+function DesignCalc.fixEngine(g: any, d: any)
+	local maxLvl = DesignCalc.maxEngineLevel(g, d)
+	if d.motorFamily ~= DesignCalc.engineFamily(d) then
+		d.motorLevel = maxLvl
+	end
+	d.motorFamily = nil
+	d.motorLevel = math.clamp(math.floor(tonumber(d.motorLevel) or maxLvl), 1, maxLvl)
+	if DesignCalc.variantBlock(g, d, Catalog.engineVariant(d.motorVariant)) then
+		d.motorVariant = "balanced"
+	end
+end
+
+-- Motor: familia de la pieza elegida, nivel máximo investigado, variante y equipamiento disponibles.
+function DesignCalc.engineFamily(d: any): string?
+	return Catalog.ENGINE_FAMILY_OF[d.parts and d.parts.motor]
+end
+
+function DesignCalc.maxEngineLevel(g: any, d: any): number
+	return Rules.engineLevelMax(g, DesignCalc.engineFamily(d))
+end
+
+function DesignCalc.variantBlock(g: any, d: any, v: any): string?
+	if not v then
+		return "Variante desconocida"
+	end
+	local b = Catalog.base(d.baseId)
+	if v.need and b and not Util.contains(b.tags, v.need) then
+		return "Solo para motores a combustión"
+	end
+	if not Rules.variantUnlocked(g, v) then
+		return "Requiere investigar «" .. DesignCalc.researchName(v.research) .. "»"
+	end
+	return nil
+end
+
+function DesignCalc.equipmentBlock(g: any, e: any): string?
+	if not e then
+		return "Equipamiento desconocido"
+	end
+	if not Rules.equipmentUnlocked(g, e) then
+		return "Requiere investigar «" .. DesignCalc.researchName(e.research) .. "»"
 	end
 	return nil
 end
@@ -173,6 +231,10 @@ function DesignCalc.newDraft(g: any, baseId: string): any
 		body = Util.deepCopy(Catalog.BODY_DEFAULTS),
 		interior = Util.deepCopy(Catalog.INTERIOR_DEFAULTS),
 		vehicleModel = body3d and body3d.id or nil, -- carrocería 3D (nil = la predeterminada de su año)
+		-- Motor: nivel (1–10, por familia) y variante; el diseño los conserva aunque después se investigue más.
+		motorLevel = Rules.engineLevelMax(g, Catalog.ENGINE_FAMILY_OF[b.defaults.motor]),
+		motorVariant = "balanced",
+		equipment = {}, -- equipamiento elegido (seguridad y tecnología): nada viene puesto solo
 		version = 0,
 	}
 end
@@ -198,6 +260,7 @@ function DesignCalc.changeBase(g: any, d: any, baseId: string)
 		d.vehicleModel = def and def.id or nil
 	end
 	DesignCalc.fixParts(d)
+	DesignCalc.fixEngine(g, d)
 	local ch = Catalog.CHASSIS[d.chassis]
 	if ch and ch.need and not Util.contains(b.tags, ch.need) then
 		d.chassis = "Monocasco"
@@ -268,7 +331,9 @@ function DesignCalc.engineeringKind(saved: any?, d: any): string
 	if saved == nil then
 		return "nuevo"
 	end
-	if saved.baseId ~= d.baseId or saved.quality ~= d.quality or saved.objective ~= d.objective or saved.chassis ~= d.chassis then
+	if saved.baseId ~= d.baseId or saved.quality ~= d.quality or saved.objective ~= d.objective or saved.chassis ~= d.chassis
+		or (saved.motorLevel or 1) ~= (d.motorLevel or 1) or (saved.motorVariant or "balanced") ~= (d.motorVariant or "balanced")
+		or table.concat(saved.equipment or {}, ",") ~= table.concat(d.equipment or {}, ",") then
 		return "version"
 	end
 	for _, c in Catalog.CATS do
@@ -345,9 +410,21 @@ function DesignCalc.computeDesign(g: any, d: any): any
 	for _, p in parts do
 		add(p.fx)
 	end
+	for _, id in d.equipment or {} do
+		local e = Catalog.equipment(id)
+		if e then
+			add(e.fx)
+		end
+	end
 	for group in Catalog.INTERIOR do
 		add(intOpt(group, d.interior[group])[4])
 	end
+	-- Nivel y variante del motor (nivel 1 y «Equilibrada» = la pieza tal cual).
+	local lvl = math.max(1, math.floor(tonumber(d.motorLevel) or 1)) - 1
+	local LF = Catalog.ENGINE_LEVEL_FX
+	local variant = Catalog.engineVariant(d.motorVariant) or Catalog.ENGINE_VARIANTS[1]
+	fx.hp = fx.hp * (1 + LF.hp * lvl) * variant.hp
+	fx.q += LF.q * lvl + variant.q
 	if d.interior.seats == "lux" then
 		fx.kg += 15
 	end
@@ -382,7 +459,7 @@ function DesignCalc.computeDesign(g: any, d: any): any
 	if ev then
 		consumption = clamp(12 + kg * 0.003 + hp * 0.006 - fx.eff * 0.15, 10, 30)
 	else
-		consumption = clamp((4 + hp * 0.014 + kg * 0.0015 - fx.eff * 0.12) * (1 + tech("consPct") / 100), 3.5, 25)
+		consumption = clamp((4 + hp * 0.014 + kg * 0.0015 - fx.eff * 0.12) * (1 + tech("consPct") / 100) * (1 + LF.cons * lvl) * variant.cons, 3.5, 25)
 	end
 	local comfort = clamp(b.comfort + fx.comfort + tech("comfort"), 0, 100)
 	local durability = clamp(b.durability + fx.dur + tech("durability"), 0, 100)
@@ -395,6 +472,16 @@ function DesignCalc.computeDesign(g: any, d: any): any
 	local unitCost = b.unit + fin.unit + d.quality * 700 + math.max(0, d.wheels.size - 15) * 150 + (d.spoiler and 600 or 0)
 	for _, p in parts do
 		unitCost += p.unit
+		if p.cat == "motor" then
+			-- Un motor más desarrollado (o deportivo) cuesta más fabricarlo.
+			unitCost += p.unit * ((1 + LF.cost * lvl) * variant.cost - 1)
+		end
+	end
+	for _, id in d.equipment or {} do
+		local e = Catalog.equipment(id)
+		if e then
+			unitCost += e.unit
+		end
 	end
 	for group in Catalog.BODY_OPTS do
 		unitCost += optCost(group, d.body[group])
@@ -601,6 +688,40 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	if Util.isHexColor(interior.color) then
 		d.interior.color = string.upper(interior.color)
 	end
+	-- Motor: nivel investigado de su familia y variante disponible.
+	local maxLvl = DesignCalc.maxEngineLevel(g, d)
+	local lvl = raw.motorLevel == nil and maxLvl or intIn(raw.motorLevel, 1, Catalog.RESEARCH_RULES.engineMaxLevel)
+	if lvl == nil or lvl > maxLvl then
+		return nil, "Nivel de motor no investigado (hasta " .. maxLvl .. ")."
+	end
+	d.motorLevel = lvl
+	local variant = Catalog.engineVariant(raw.motorVariant or "balanced")
+	local vb = DesignCalc.variantBlock(g, d, variant)
+	if vb then
+		return nil, "Variante de motor: " .. vb .. "."
+	end
+	d.motorVariant = variant.id
+	-- Equipamiento: solo elementos investigados, sin repetir, en el orden del catálogo.
+	local want = {}
+	if raw.equipment ~= nil then
+		if type(raw.equipment) ~= "table" then
+			return nil, "Equipamiento inválido."
+		end
+		for _, id in raw.equipment do
+			local e = Catalog.equipment(id)
+			local why = DesignCalc.equipmentBlock(g, e)
+			if why then
+				return nil, (e and e.name or tostring(id)) .. ": " .. why .. "."
+			end
+			want[id] = true
+		end
+	end
+	d.equipment = {}
+	for _, e in Catalog.EQUIPMENT do
+		if want[e.id] then
+			table.insert(d.equipment, e.id)
+		end
+	end
 	-- Carrocería 3D (visual). Una de otro tipo se ignora (queda la predeterminada de este).
 	if raw.vehicleModel == Catalog.PROVISIONAL_MODEL then
 		d.vehicleModel = Catalog.PROVISIONAL_MODEL
@@ -621,7 +742,10 @@ end
 
 -- Compara dos diseños solo por los campos que el jugador puede cambiar.
 function DesignCalc.sameSpec(a: any, b: any): boolean
-	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler", "vehicleModel" }
+	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler", "vehicleModel", "motorLevel", "motorVariant" }
+	if table.concat(a.equipment or {}, ",") ~= table.concat(b.equipment or {}, ",") then
+		return false
+	end
 	for _, f in fields do
 		if a[f] ~= b[f] then
 			return false

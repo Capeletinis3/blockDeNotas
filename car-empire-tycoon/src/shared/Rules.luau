@@ -229,16 +229,35 @@ function Rules.caps(g: any): any
 	}
 end
 
--- Puntos de investigación por minuto real: la sede es la fuente principal; el laboratorio suma hasta 30 %.
-function Rules.piPerMinute(g: any): number
-	local base = Rules.sede(g).pi
-	local lab = math.min(base * 0.3, Rules.staffBonus(g, "laboratorio") * math.max(1, base * 0.15))
-	return base + lab
+--[[ Puntos de investigación (PI), por minuto real a 1× (2× y 3× multiplican el tiempo simulado):
+	- Centro de investigación: lo que genera la sede (su nivel crecerá con las mejoras del centro).
+	- Líneas de fabricación: cada línea que está fabricando suma RESEARCH_RULES.linePi, sin importar el auto.
+	El personal no suma PI por minuto (ver Rules.researchModifiers). ]]
+function Rules.piCenter(g: any): number
+	return Rules.sede(g).pi
 end
 
--- Tope del banco de PI sin proyecto activo: unos minutos de generación (Catalog.RULES.piBankMinutes).
-function Rules.piCap(g: any): number
-	return Rules.piPerMinute(g) * Catalog.RULES.piBankMinutes
+function Rules.activeLines(g: any): number
+	local n = 0
+	for _, lot in Rules.producingLots(g) do
+		if lot.prodState == "produciendo" then
+			n += 1
+		end
+	end
+	return n
+end
+
+function Rules.piLines(g: any): number
+	return Rules.activeLines(g) * Catalog.RESEARCH_RULES.linePi
+end
+
+function Rules.piPerMinute(g: any): number
+	return Rules.piCenter(g) + Rules.piLines(g)
+end
+
+-- Sin tope de acumulación de PI (se conserva por compatibilidad con pantallas y pruebas anteriores).
+function Rules.piCap(_g: any): number
+	return math.huge
 end
 
 function Rules.xpForLevel(l: number): number
@@ -598,10 +617,22 @@ end
 
 -- Investigación ---------------------------------------------------------------------------
 
+--[[ Puntos de integración para el personal de I+D (etapa futura): conocimiento reduce los PI necesarios,
+	creatividad la duración y precisión el costo en dinero. Hoy no hay bonificaciones: devuelve 1. ]]
+function Rules.researchModifiers(_g: any): any
+	return { pi = 1, days = 1, money = 1 }
+end
+
+-- Años de adelanto de una tecnología respecto del año actual (0 si ya apareció).
+function Rules.researchAhead(g: any, n: any): number
+	return math.max(0, n.year - Rules.year(g))
+end
+
 function Rules.researchMissing(g: any, n: any): { string }
 	local m = {}
-	if Rules.year(g) < n.year then
-		table.insert(m, "Disponible desde " .. n.year)
+	local R = Catalog.RESEARCH_RULES
+	if Rules.year(g) + R.aheadMaxYears < n.year then
+		table.insert(m, "Se puede adelantar desde " .. (n.year - R.aheadMaxYears) .. " (aparece en " .. n.year .. ")")
 	end
 	for _, r in n.req do
 		if not Rules.has(g, r) then
@@ -611,56 +642,70 @@ function Rules.researchMissing(g: any, n: any): { string }
 	return m
 end
 
+-- Proyecto en curso de una tecnología (o nil).
+function Rules.researchProject(g: any, id: string): any
+	for _, p in g.research.projects or {} do
+		if p.id == id then
+			return p
+		end
+	end
+	return nil
+end
+
 function Rules.researchState(g: any, n: any): string
 	if Rules.has(g, n.id) then
 		return "hecha"
 	end
-	if g.research.active and g.research.active.id == n.id then
+	if Rules.researchProject(g, n.id) then
 		return "activa"
 	end
 	return #Rules.researchMissing(g, n) > 0 and "bloqueada" or "disponible"
 end
 
--- Segundos reales que faltan (a 1×) para terminar la investigación activa con el banco y la generación actual.
--- Costo de investigar `n` hoy: PI y dinero, con el descuento por difusión de las tecnologías viejas.
-function Rules.researchCost(g: any, n: any): (number, number, number)
-	local R = Catalog.RULES
-	local age = Rules.year(g) - n.year - R.diffusionGrace
-	local factor = age > 0 and math.max(R.diffusionFloor, 1 - R.diffusionPerYear * age) or 1
-	local rp = math.max(1, math.floor(n.rp * factor + 0.5))
-	local money = math.floor(n.cost * factor / 100 + 0.5) * 100
-	return rp, money, factor
+--[[ Costo de investigar `n` hoy: (PI, dinero, días, detalle). Parte del costo base por complejidad; las
+	tecnologías viejas son más baratas (difusión) y las adelantadas pagan el recargo por año de adelanto
+	(RESEARCH_RULES.aheadPi/aheadMoney/aheadDays). Es el mismo cálculo que muestra la tarjeta y que cobra el
+	servidor. detalle = { ahead, diffusion } ]]
+function Rules.researchCost(g: any, n: any): (number, number, number, any)
+	local R = Catalog.RESEARCH_RULES
+	local RR = Catalog.RULES
+	local ahead = Rules.researchAhead(g, n)
+	local age = Rules.year(g) - n.year - RR.diffusionGrace
+	local diffusion = age > 0 and math.max(RR.diffusionFloor, 1 - RR.diffusionPerYear * age) or 1
+	local mod = Rules.researchModifiers(g)
+	local pi = math.max(1, math.floor(n.rp * diffusion * (1 + R.aheadPi * ahead) * mod.pi + 0.5))
+	local money = math.floor(n.cost * diffusion * (1 + R.aheadMoney * ahead) * mod.money / 100 + 0.5) * 100
+	local days = math.max(1, math.floor(n.days * (1 + R.aheadDays * ahead) * mod.days + 0.5))
+	return pi, money, days, { ahead = ahead, diffusion = diffusion }
 end
 
--- PI que pide el proyecto activo (fijados al empezar).
-function Rules.activeRp(g: any): number
-	local a = g.research.active
-	if not a then
-		return 0
-	end
-	return a.rp or Catalog.researchNode(a.id).rp
+-- Segundos reales que le faltan a un proyecto a la velocidad indicada (1 día = realSecondsPerDay a 1×).
+function Rules.projectSecondsLeft(p: any, speed: number?): number
+	return math.max(0, p.days - p.progress) * Catalog.CALENDAR.realSecondsPerDay / math.max(1, speed or 1)
 end
 
--- Minutos reales (a 1×) para juntar `left` PI con la generación de la sede y el banco como acelerador.
-function Rules.researchMinutesFor(g: any, left: number, bank: number?): number
-	local pi = math.max(0.01, Rules.piPerMinute(g))
-	local fast = pi * (1 + Catalog.RULES.bankSpeedup)
-	local b = bank or g.rp
-	local tFast = b / (pi * Catalog.RULES.bankSpeedup) -- minutos que dura el banco a máxima velocidad
-	if left <= fast * tFast then
-		return left / fast
+-- Motores: nivel máximo investigado de una familia (el 1 viene con el motor) y variantes disponibles.
+function Rules.engineLevelMax(g: any, family: string?): number
+	if not family then
+		return 1
 	end
-	return tFast + (left - fast * tFast) / pi
+	local lvl = 1
+	for l = 2, Catalog.RESEARCH_RULES.engineMaxLevel do
+		if Rules.has(g, "eng_" .. family .. "_" .. l) then
+			lvl = l
+		else
+			break
+		end
+	end
+	return lvl
 end
 
--- Segundos reales (a 1×) que faltan para terminar la investigación activa.
-function Rules.researchEta(g: any): number?
-	local a = g.research.active
-	if not a then
-		return nil
-	end
-	local left = math.max(0, Rules.activeRp(g) - a.progress)
-	return Rules.researchMinutesFor(g, left) * 60
+function Rules.variantUnlocked(g: any, v: any): boolean
+	return v ~= nil and (v.research == nil or Rules.has(g, v.research))
+end
+
+function Rules.equipmentUnlocked(g: any, e: any): boolean
+	return e ~= nil and (e.research == nil or Rules.has(g, e.research))
 end
 
 -- Estadísticas por mes --------------------------------------------------------------------

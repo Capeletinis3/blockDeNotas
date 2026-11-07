@@ -223,7 +223,7 @@ function Util.mergeLive(game: any, live: any)
 		end
 	end
 	if game.research then
-		game.research.active = live.research
+		game.research.projects = live.research or {}
 	end
 	local byId = {}
 	for _, l in live.lots or {} do

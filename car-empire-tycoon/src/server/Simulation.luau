@@ -104,19 +104,12 @@ function Simulation.addXp(g: any, ctx: any, n: number)
 	end
 end
 
--- Generación de la sede al banco de PI: se detiene al llegar al tope (Catalog.RULES.piBankMinutes) y
--- avisa una vez; nunca quita PI que ya estaban en el banco.
-function Simulation.addPi(g: any, n: number, ctx: any?)
-	local cap = Rules.piCap(g)
-	if g.rp >= cap then
-		if not g.bankFull then
-			g.bankFull = true
-			Simulation.notify(g, ctx, "aviso", "El banco de investigación está lleno (" .. math.floor(g.rp) .. " PI). Elegí una investigación para no desperdiciar la generación de la sede.", "investigacion")
-		end
-		return
-	end
+-- Suma PI generados (sin tope; los decimales se conservan para no perder precisión entre ticks cortos).
+function Simulation.addPi(g: any, n: number, _ctx: any?)
 	g.bankFull = nil
-	g.rp = math.min(cap, g.rp + n)
+	if n > 0 then
+		g.rp += n
+	end
 end
 
 --[[ PI por jugar (ventas, lotes agotados con ganancia, lanzamientos exitosos). Comparten un tope por mes
@@ -124,6 +117,10 @@ end
 	acciones baratas. Se suman aunque el banco esté lleno: una recompensa nunca desaparece en silencio.
 	Devuelve los PI otorgados. ]]
 function Simulation.bonusPi(g: any, amount: number): number
+	-- Etapa 3: los PI salen solo del centro de investigación y de las líneas (y de las misiones).
+	if not Catalog.ECON.bonusPiEnabled then
+		return 0
+	end
 	local m = g.stats.month
 	local cap = Rules.piPerMinute(g) * Catalog.ECON.bonusPiCapMinutes
 	local give = math.max(0, math.min(amount, cap - (m.bonusPi or 0)))
@@ -356,33 +353,32 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 	end
 end
 
--- Investigación: la generación de la sede llena el banco; el proyecto activo toma del banco.
+--[[ Investigación: el centro y las líneas activas generan PI (se acumulan para pagar proyectos nuevos) y cada
+	proyecto en curso avanza por DÍAS simulados (las velocidades y la pausa se aplican solas porque dependen de
+	los minutos simulados). Al llegar a sus días se completa una sola vez y desbloquea la tecnología. ]]
 function Simulation.stepResearch(g: any, ctx: any, minutes: number)
-	local gain = Rules.piPerMinute(g) * Rules.realMinutes(minutes)
-	local a = g.research.active
-	if not a then
-		Simulation.addPi(g, gain, ctx)
+	Simulation.addPi(g, Rules.piPerMinute(g) * Rules.realMinutes(minutes), ctx)
+	local projects = g.research.projects
+	if not projects or #projects == 0 then
 		return
 	end
-	-- Con un proyecto activo la generación va al proyecto y el banco lo acelera: aporta hasta
-	-- bankSpeedup veces la generación (nunca lo completa de golpe).
-	local n = Catalog.researchNode(a.id)
-	local need = Rules.activeRp(g)
-	local fromBank = math.min(g.rp, gain * Catalog.RULES.bankSpeedup)
-	local add = math.min(gain + fromBank, need - a.progress)
-	-- Primero se usa la generación; del banco sale solo lo que falta.
-	local usedBank = math.max(0, add - gain)
-	a.progress += add
-	g.rp -= usedBank
-	if add < gain then
-		g.rp = math.min(g.rp + (gain - add), math.max(g.rp, Rules.piCap(g))) -- sobrante del último paso
+	local days = minutes / Catalog.RULES.gameDayMinutes
+	local finished = {}
+	for i, p in projects do
+		p.progress = math.min(p.days, p.progress + days)
+		if p.progress >= p.days - 1e-9 then
+			table.insert(finished, i)
+		end
 	end
-	if a.progress >= need - 1e-6 then
-		table.insert(g.research.done, a.id)
-		g.research.active = nil
-		g.counters.researchDone += 1
-		Simulation.addXp(g, ctx, 150)
-		Simulation.notify(g, ctx, "ok", "Investigación completada: " .. n.name .. ". " .. n.gain, "investigacion")
+	for k = #finished, 1, -1 do
+		local p = table.remove(projects, finished[k])
+		local n = Catalog.researchNode(p.id)
+		if n and not Rules.has(g, p.id) then
+			table.insert(g.research.done, p.id)
+			g.counters.researchDone += 1
+			Simulation.addXp(g, ctx, 150)
+			Simulation.notify(g, ctx, "ok", "Investigación completada: " .. n.name .. ". " .. n.gain, "investigacion")
+		end
 	end
 end
 

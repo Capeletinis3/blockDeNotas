@@ -364,7 +364,11 @@ local function structuralSig(p: any): string
 			table.insert(emps, { e.id, e.assign })
 		end
 		copy.employees = emps
-		copy.research = { done = g.research.done, active = g.research.active and g.research.active.id }
+		local running = {}
+		for _, p in g.research.projects or {} do
+			table.insert(running, p.id)
+		end
+		copy.research = { done = g.research.done, projects = running }
 		stripped.g = copy
 	end
 	local ok, enc = pcall(HttpService.JSONEncode, HttpService, stripped)

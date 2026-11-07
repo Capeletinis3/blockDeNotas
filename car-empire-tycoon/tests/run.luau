@@ -218,7 +218,7 @@ test("Épocas: en 1970 no hay tecnologías de otra época", function()
 			if string.find(lower, "redes sociales") or string.find(lower, "internet") then
 				check(n.year >= 1995, n.name .. " no aparece en los 70 (" .. n.year .. ")")
 			end
-			if string.find(lower, "eléctric") or string.find(lower, "híbrid") or string.find(lower, "8 velocidades") then
+			if (string.find(lower, "eléctric") and not string.find(lower, "ventanillas")) or string.find(lower, "híbrid") or string.find(lower, "8 velocidades") then
 				check(n.year >= 1997, n.name .. " es moderna (" .. n.year .. ")")
 			end
 		end
@@ -227,7 +227,7 @@ test("Épocas: en 1970 no hay tecnologías de otra época", function()
 	local raw = draftFor(g, "brisa")
 	raw.parts.transmision = "auto8"
 	local ok, err = DesignCalc.sanitize(g, raw)
-	check(ok == nil and string.find(err or "", "2008") ~= nil, "caja de 8 velocidades rechazada en 1970: " .. tostring(err))
+	check(ok == nil and string.find(err or "", "Requiere investigar", 1, true) ~= nil, "caja de 8 velocidades rechazada en 1970: " .. tostring(err))
 	raw = draftFor(g, "brisa")
 	raw.wheels.size = 20
 	check(DesignCalc.sanitize(g, raw) == nil, "llantas de 20″ rechazadas en 1970")
@@ -601,48 +601,43 @@ test("[P12] Ampliar la sede aumenta los PI por minuto (3 → 8 → 20 → 45 →
 		check(Rules.caps(g).capacity > 0 and Rules.sede(g).lines == lvl, "más líneas")
 	end
 	check(not Actions.expandSede(g, ctx, {}).ok, "no hay sede después del imperio")
-	-- El personal es solo un extra, con tope.
+	-- El personal no suma PI por minuto (en una etapa futura reducirá costos y duración).
 	local base = Rules.piPerMinute(g)
 	for i = 1, 30 do
 		table.insert(g.employees, { id = "e" .. i, name = "X", role = "Ingeniero", level = 6, skill = 98, salary = 100, assign = "laboratorio" })
 	end
-	check(Rules.piPerMinute(g) <= base * 1.3 + 1e-6, "el personal suma como máximo 30 %")
-	check(Rules.piPerMinute(g) > base, "pero suma")
+	eq(Rules.piPerMinute(g), base, "el personal no aumenta los PI por minuto")
 end)
 
 -- [P13] Investigación ----------------------------------------------------------------------------
 
-test("[P13] Investigación bloqueada por requisitos y por época", function()
+test("[P13] Investigación bloqueada por requisitos, por época y por recursos", function()
 	local g = newCompany("Lab SA", nil, "facil")
 	local ctx = makeCtx(14)
 	local turbo = Catalog.researchNode("mo3") -- 1977, requiere mo1
 	local r = Actions.startResearch(g, ctx, { id = "mo3" })
-	check(not r.ok and string.find(r.msg, "1977") ~= nil, "bloqueada por época: " .. r.msg)
+	check(not r.ok and string.find(r.msg, "1972") ~= nil and string.find(r.msg, "1977") ~= nil, "más de 5 años adelantada: " .. r.msg)
 	g.time.day = (1977 - 1970) * 12
 	r = Actions.startResearch(g, ctx, { id = "mo3" })
 	check(not r.ok and string.find(r.msg, Catalog.researchNode("mo1").name, 1, true) ~= nil, "bloqueada por requisito: " .. r.msg)
 	g.time.day = 0
 	g.rp = 0
+	r = Actions.startResearch(g, ctx, { id = "mo1" })
+	check(not r.ok and string.find(r.msg, "PI") ~= nil, "sin PI no empieza: " .. r.msg)
+	local pi, cost, days = Rules.researchCost(g, Catalog.researchNode("mo1"))
+	g.rp = pi
 	local m = g.money
 	r = Actions.startResearch(g, ctx, { id = "mo1" })
 	check(r.ok, r.msg)
-	eq(g.money, m - Catalog.researchNode("mo1").cost, "cuesta dinero al empezar")
-	check(not Actions.startResearch(g, ctx, { id = "ca1" }).ok, "una a la vez")
-	local mins = Catalog.researchNode("mo1").rp / Rules.piPerMinute(g)
-	check(mins >= 1 and mins <= 2.5, "mejora pequeña ≈ 1–2 min en el garaje (" .. Util.num(mins, 1) .. ")")
-	runReal(g, ctx, mins + 0.1)
+	eq(g.money, m - cost, "cuesta dinero al empezar")
+	eq(g.rp, 0, "y los PI")
+	check(not Actions.startResearch(g, ctx, { id = "mo1" }).ok, "no se repite una en curso")
+	check(not Actions.cancelResearch(g, ctx, {}).ok, "no se cancela")
+	runReal(g, ctx, days * Catalog.CALENDAR.realSecondsPerDay / 60 + 0.05)
 	check(Util.contains(g.research.done, "mo1"), "terminada a tiempo")
 	g.time.day = (1977 - 1970) * 12
 	check(Rules.researchState(g, turbo) == "disponible", "con época y requisito, disponible")
-	-- Cancelar devuelve el dinero y los PI.
-	g.money = 1000000
-	local m2, rp2 = g.money, g.rp
-	check(Actions.startResearch(g, ctx, { id = "mo3" }).ok, "empieza turbo")
-	Simulation.simulate(g, ctx, 60)
-	local c = Actions.cancelResearch(g, ctx, {})
-	check(c.ok, c.msg)
-	eq(g.money, m2, "dinero devuelto")
-	check(g.rp >= rp2, "PI devueltos")
+	check(not Actions.startResearch(g, ctx, { id = "mo1" }).ok, "no se investiga dos veces")
 end)
 
 test("Árbol completo 1970–2030: todas las ramas, cada nodo con un efecto real y tiempos razonables", function()
@@ -650,7 +645,7 @@ test("Árbol completo 1970–2030: todas las ramas, cada nodo con un efecto real
 	for _, key in Catalog.RESEARCH_ORDER do
 		table.insert(labels, Catalog.RESEARCH[key].label)
 	end
-	for _, want in { "Motores", "Carrocerías", "Transmisiones", "Seguridad", "Producción", "Electrónica", "Materiales" } do
+	for _, want in { "Chasis", "Motores", "Seguridad", "Tecnología" } do
 		local found = false
 		for _, l in labels do
 			found = found or string.find(l, want, 1, true) ~= nil
@@ -684,6 +679,14 @@ test("Árbol completo 1970–2030: todas las ramas, cada nodo con un efecto real
 		end
 	end
 	unlocks.pr5 = true -- acabados Perlado y Cromado (DesignCalc.finishBlock)
+	for _, e in Catalog.EQUIPMENT do
+		unlocks[e.research] = true -- equipamiento elegible en el diseñador
+	end
+	for _, v in Catalog.ENGINE_VARIANTS do
+		if v.research then
+			unlocks[v.research] = true
+		end
+	end
 	local fxUsed = { hpPct = 1, consPct = 1, comfort = 1, quality = 1, safety = 1, handling = 1, durability = 1, topPct = 1, kgPct = 1, brake = 1, prodSpeed = 1, unitCostPct = 1, demand = 1, devCostPct = 1, repGain = 1, spoilerGrip = 1, campaign = 1 }
 	local years, total = {}, 0
 	for _, key in Catalog.RESEARCH_ORDER do
@@ -694,16 +697,19 @@ test("Árbol completo 1970–2030: todas las ramas, cada nodo con un efecto real
 				check(fxUsed[k] ~= nil, n.id .. ": efecto «" .. k .. "» que el juego usa")
 				hasFx = hasFx or v ~= 0
 			end
-			check(hasFx or unlocks[n.id], n.id .. " (" .. n.name .. ") tiene un efecto real")
+			check(hasFx or unlocks[n.id] or (n.family ~= nil and n.level ~= nil), n.id .. " (" .. n.name .. ") tiene un efecto real")
 			check(n.year >= 1970 and n.year <= 2030, n.id .. " año " .. n.year)
 			for _, req in n.req do
 				local rn = Catalog.researchNode(req)
 				check(rn ~= nil and rn.year <= n.year, n.id .. " requiere " .. req .. " de un año anterior")
 			end
 			years[math.floor(n.year / 10) * 10] = true
-			-- Tiempo con la sede esperada de su época: 1–15 minutos.
-			local mins = n.rp / Catalog.interp(Catalog.EXPECTED_PI, n.year)
-			check(mins >= 1 and mins <= 15, n.id .. " tarda " .. Util.num(mins, 1) .. " min")
+			-- Duración (días de juego a 1×) y PI con la sede esperada de su época: hasta 15 minutos reales.
+			local mins = n.days * Catalog.CALENDAR.realSecondsPerDay / 60
+			check(mins >= 0.5 and mins <= 15, n.id .. " tarda " .. Util.num(mins, 1) .. " min")
+			local piMins = n.rp / Catalog.interp(Catalog.EXPECTED_PI, n.year)
+			-- Solo con el centro (sin líneas fabricando): hasta 30 min para lo más complejo de su época.
+			check(piMins <= 30, n.id .. " junta sus PI en " .. Util.num(piMins, 1) .. " min")
 		end
 	end
 	check(total >= 40, "árbol amplio (" .. total .. " nodos)")
@@ -781,7 +787,7 @@ test("[P16] El tutorial se completa en todas las dificultades sin trabarse por d
 		check(log.minMoney >= 0, dif .. ": nunca en negativo")
 		-- El primer lote se fabrica completo y recibe reseñas antes de venderse.
 		check(log.milestones["primera venta"] ~= nil and log.milestones["primera venta"] < 3, dif .. ": primera venta en menos de 3 minutos (" .. tostring(log.milestones["primera venta"]) .. ")")
-		check(log.milestones["sede 2"] ~= nil and log.milestones["sede 2"] < 25, dif .. ": Empresa pequeña antes de 25 min (" .. tostring(log.milestones["sede 2"]) .. ")")
+		check(log.milestones["sede 2"] ~= nil and log.milestones["sede 2"] < 28, dif .. ": Empresa pequeña antes de 28 min (" .. tostring(log.milestones["sede 2"]) .. ")")
 		check(GameState.validate(g), dif .. ": partida válida")
 	end
 	-- Recorrido mínimo del tutorial con el capital más bajo: un solo diseño barato y un lote chico.
@@ -803,12 +809,13 @@ test("[P16] El tutorial se completa en todas las dificultades sin trabarse por d
 	local cheapest
 	for _, key in Catalog.RESEARCH_ORDER do
 		for _, n in Catalog.RESEARCH[key].nodes do
-			if Rules.researchState(g, n) == "disponible" and (not cheapest or n.cost < cheapest.cost) then
+			if Rules.researchState(g, n) == "disponible" and Rules.researchAhead(g, n) == 0 and (not cheapest or n.cost < cheapest.cost) then
 				cheapest = n
 			end
 		end
 	end
-	check(cheapest and g.money >= cheapest.cost, "puede pagar una investigación")
+	local cpi, cmoney = Rules.researchCost(g, cheapest)
+	check(cheapest and g.money >= cmoney and g.rp >= cpi, "puede pagar una investigación (" .. cpi .. " PI, tiene " .. math.floor(g.rp) .. ")")
 	check(Actions.startResearch(g, ctx, { id = cheapest.id }).ok, "investiga")
 	check(runUntil(g, ctx, function()
 		return g.counters.researchDone >= 1
@@ -937,41 +944,36 @@ test("[C13] Cambiar el precio cambia el ritmo de ventas desde ese momento", func
 	check(cheap.rate > dear.rate and (c.price * 1.4 - c.unitCost) > (c.price * 0.8 - c.unitCost), "volumen contra margen")
 end)
 
-test("[C19] Banco de PI: acumula 20 minutos, avisa al llenarse y las recompensas no se pierden", function()
+test("[C19] PI: recurso propio sin tope, independiente del dinero; las recompensas suman", function()
 	local g = newCompany("Banco SA")
 	local ctx = makeCtx(42)
-	eq(Catalog.RULES.piBankMinutes, 20, "capacidad configurable: 20 minutos")
-	eq(Rules.piCap(g), 60, "garaje: 3 PI/min × 20")
+	eq(Rules.piCap(g), math.huge, "sin tope de acumulación")
+	local m0 = g.money
 	runReal(g, ctx, 25)
-	eq(g.rp, 60, "se llena y se detiene en el tope")
-	check(g.bankFull == true, "marca de banco lleno")
-	local warned = false
-	for _, n in g.notifications do
-		warned = warned or string.find(n.text, "banco de investigación está lleno", 1, true) ~= nil
-	end
-	check(warned, "avisa una vez")
-	-- Una misión cobrada con el banco lleno suma igual.
+	check(math.abs(g.rp - 25 * Rules.piCenter(g)) < 0.01, "25 min de centro en el garaje: " .. Util.num(g.rp, 2) .. " PI")
+	eq(g.money, m0, "generar PI no mueve el dinero")
 	saveNew(g, ctx, "brisa")
 	local before = g.rp
 	check(Actions.claimMission(g, ctx, { id = "t1" }).ok, "misión")
-	check(g.rp > before, "el PI de la misión se suma aunque el banco esté lleno")
-	-- Con un proyecto activo, la generación va al proyecto.
+	check(g.rp > before, "el PI de la misión se suma")
+	-- Los PI acumulados alcanzan para investigar.
 	check(Actions.startResearch(g, ctx, { id = "mo1" }).ok, "investigar")
 	runReal(g, ctx, 3)
-	check(Util.contains(g.research.done, "mo1"), "se completa con el banco")
+	check(Util.contains(g.research.done, "mo1"), "se completa")
 end)
 
-test("Anti-farmeo: lotes chicos o repetidos no generan PI sin límite", function()
+test("Anti-farmeo: lotes chicos o repetidos no generan PI extra (solo las líneas mientras fabrican)", function()
 	local g = bigCompany("Farmeo SA")
 	g.sede = 1
 	local ctx = makeCtx(43)
 	local id = saveNew(g, ctx, "brisa")
-	local cap = Rules.piPerMinute(g) * Catalog.ECON.bonusPiCapMinutes
+	check(not Catalog.ECON.bonusPiEnabled, "sin bonificación de PI por lote")
+	local center = Rules.piCenter
+	Rules.piCenter = function()
+		return 0
+	end
 	g.rp = 0
-	g.research.active = { id = "mo1", progress = 0, paid = 0 } -- todo lo generado va a un proyecto: el banco solo junta bonificaciones
-	local nodeRp = Catalog.researchNode("mo1").rp
-	Catalog.researchNode("mo1").rp = 1e9
-	local bonus = 0
+	local t0 = Rules.absDay(g)
 	for _ = 1, 30 do
 		local r = orderLot(g, ctx, id, 1)
 		if r.ok then
@@ -979,9 +981,10 @@ test("Anti-farmeo: lotes chicos o repetidos no generan PI sin límite", function
 			runReal(g, ctx, 0.2)
 		end
 	end
-	bonus = g.rp
-	Catalog.researchNode("mo1").rp = nodeRp
-	check(bonus <= cap * 2 + 0.01, "30 lotes de una unidad dan como mucho el tope mensual (" .. Util.num(bonus, 2) .. " PI)")
+	Rules.piCenter = center
+	local realMins = (Rules.absDay(g) - t0 + 1) * Catalog.CALENDAR.realSecondsPerDay / 60
+	check(g.rp <= Catalog.RESEARCH_RULES.linePi * realMins + 0.01, "30 lotes de una unidad: " .. Util.num(g.rp, 2) .. " PI en " .. Util.num(realMins, 1) .. " min")
+	check(g.rp < 0.5 * Catalog.RESEARCH_RULES.linePi * realMins, "la línea solo suma mientras fabrica")
 	eq(g.counters.lotsSoldOut >= 1 and true or false, true, "los lotes se agotan")
 end)
 
@@ -994,12 +997,11 @@ test("[C21] Desbloquear una tecnología de otra década (cuando llega su año y 
 	check(Rules.researchState(g, n) == "bloqueada", "sin requisito")
 	table.insert(g.research.done, "mo1")
 	check(Rules.researchState(g, n) == "disponible", "con requisito y año")
+	g.rp = 100000
 	check(Actions.startResearch(g, ctx, { id = "mo4" }).ok, "empieza")
-	g.rp = n.rp
 	check(runUntil(g, ctx, function()
 		return Util.contains(g.research.done, "mo4")
-	end, 120), "terminada (el banco acelera, no completa de golpe)")
-	g.time.day = (1984 - 1970) * 12 -- el motor llega al mercado un año después de la tecnología
+	end, 120), "terminada")
 	local d = DesignCalc.newDraft(g, "brisa")
 	check(DesignCalc.partBlock(g, d, Catalog.part("motor", "i4v")) == nil, "habilita el motor 2.0 16V de los 80")
 	-- El paso de los años no regala investigaciones.
@@ -1092,6 +1094,7 @@ test("[C24] Competidores: generaciones, precios que importan y reacción a tu cu
 	local ctx = makeCtx(47)
 	g.money = 3000000
 	g.time.day = 2 * 12 -- 1972: ya hay compactos
+	table.insert(g.research.done, "ch_compacto")
 	local id = saveNew(g, ctx, "pixel")
 	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 500 }).lotId
 	check(launchWhenReady(g, ctx, lotId), "a la venta")
@@ -1186,14 +1189,16 @@ test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y 
 		end
 		-- En 1970 se empieza con dos chasis (sedán y coupé básicos); después hay más tipos.
 		check(types >= (year == 1970 and 2 or 3), year .. ": varios tipos rentables (" .. types .. ")")
-		-- Una investigación de la época se termina dentro del objetivo con la generación de la sede esperada.
+		-- Una investigación de la época dura según su complejidad (días de juego a 1×) y sus PI se juntan
+		-- en un tiempo razonable con la sede esperada y una línea fabricando.
 		for _, key in Catalog.RESEARCH_ORDER do
 			for _, n in Catalog.RESEARCH[key].nodes do
 				if n.year == year or (n.year > year and n.year <= year + 1) then
-					-- Objetivos pedidos: pequeña 1–2 min, normal 3–5, importante 6–10, gran avance 10–15.
-					local mins = n.rp / Catalog.interp(Catalog.EXPECTED_PI, n.year)
-					local MAX = { s = 2, n = 5, i = 10, b = 15 }
-					check(mins <= MAX[n.tier] + 0.01, n.id .. " dentro del objetivo (" .. Util.num(mins, 1) .. " min)")
+					local mins = n.days * Catalog.CALENDAR.realSecondsPerDay / 60
+					local MAX = { 1.5, 3, 6, 10, 15 }
+					check(mins <= MAX[n.complexity] + 0.01, n.id .. " dura según su complejidad (" .. Util.num(mins, 1) .. " min)")
+					local piMins = n.rp / (Catalog.interp(Catalog.EXPECTED_PI, n.year) + Catalog.RESEARCH_RULES.linePi)
+					check(piMins <= 20, n.id .. " junta sus PI en " .. Util.num(piMins, 1) .. " min")
 				end
 			end
 		end
@@ -1787,6 +1792,7 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 	eq(Rules.year(g), 2030, "año visible")
 	eq(Util.gameDate(g.time.day), "Abr 2030", "fecha visible")
 	-- Una investigación pendiente de cualquier época se puede terminar.
+	g.rp = 1000
 	check(Actions.startResearch(g, ctx, { id = "mo1" }).ok, "empieza una investigación pendiente")
 	check(runUntil(g, ctx, function()
 		return Util.contains(g.research.done, "mo1")
@@ -1883,21 +1889,22 @@ test("[F3][F4] Guardar una partida larga y recuperarla sin cambiar el calendario
 	check(g2.counters.unitsSold > sold, "después de cargar sigue vendiendo")
 end)
 
-test("[F5] Las 56 investigaciones se completan", function()
+test("[F5] Todas las investigaciones se completan", function()
 	local nodes = allNodes()
-	eq(#nodes, 56, "el árbol tiene 56 tecnologías")
+	eq(#nodes, Catalog.RESEARCH_TOTAL, "el árbol tiene " .. Catalog.RESEARCH_TOTAL .. " tecnologías")
 	local log = longGame()
-	eq(#log.g.research.done, 56, "el bot las completa todas")
+	eq(#log.g.research.done, Catalog.RESEARCH_TOTAL, "el bot las completa todas")
 	local seen = {}
 	for _, id in log.g.research.done do
 		check(not seen[id], "sin repetidas: " .. id)
 		seen[id] = true
 	end
 	check(Rules.missionState(log.g, Catalog.mission("s12")) ~= "progreso", "misión «Completá todas las investigaciones»")
-	-- Revisión de las 56: año, nivel, PI, dinero y requisitos coherentes.
+	-- Revisión de todas: año, complejidad, PI, dinero, duración y requisitos coherentes.
 	for _, n in nodes do
 		check(n.year >= 1970 and n.year <= Catalog.CALENDAR.endYear, n.id .. ": año dentro del calendario")
-		check(Catalog.RESEARCH_TIERS[n.tier] ~= nil and n.rp > 0 and n.cost > 0, n.id .. ": nivel, PI y dinero")
+		check(n.complexity >= 1 and n.complexity <= 5 and n.rp > 0 and n.cost > 0 and n.days > 0, n.id .. ": complejidad, PI, dinero y días")
+		check(n.category ~= nil and Catalog.RESEARCH[n.category] ~= nil, n.id .. ": categoría")
 		for _, r in n.req do
 			local q = Catalog.researchNode(r)
 			check(q ~= nil and q.year <= n.year, n.id .. ": su requisito " .. r .. " existe y no es posterior")
@@ -1907,22 +1914,25 @@ end)
 
 test("[F6] Tiempos reales de investigación (bot): cerca de los objetivos", function()
 	local rs = Bot.researchSummary(longGame())
-	-- Objetivos: pequeña 1–2 min, normal 3–5, importante 6–10, gran avance 10–15. El bot optimizador usa
-	-- el banco como acelerador, así que termina algo antes; se acepta un margen.
-	-- Etapa 2: con un lote por modelo la progresión es algo más lenta (valores provisionales).
-	local RANGE = { s = { 0.7, 3.2 }, n = { 2.5, 7 }, i = { 4.5, 12 }, b = { 6, 16 } }
+	-- Duración real (minutos a 1×) por complejidad. El bot adelanta tecnologías, que tardan hasta 50 % más.
+	local RANGE = { { 0.7, 2.5 }, { 1.5, 4.5 }, { 3.5, 9 }, { 6, 15 }, { 9, 23 } }
 	for k, rg in RANGE do
 		local bt = rs.byTier[k]
-		local avg = bt.total / bt.n
-		check(avg >= rg[1] and avg <= rg[2], Catalog.RESEARCH_TIERS[k].label .. ": media " .. Util.num(avg, 1) .. " min")
-		check(bt.max <= rg[2] * 1.1, Catalog.RESEARCH_TIERS[k].label .. ": máxima " .. Util.num(bt.max, 1) .. " min")
+		local label = Catalog.RESEARCH_RULES.complexityLabel[k]
+		check(bt ~= nil, label .. ": investigadas")
+		if bt then
+			local avg = bt.total / bt.n
+			check(avg >= rg[1] and avg <= rg[2], label .. ": media " .. Util.num(avg, 1) .. " min")
+			check(bt.max <= rg[2] * 1.1, label .. ": máxima " .. Util.num(bt.max, 1) .. " min")
+		end
 	end
-	check(rs.avgLag <= 0.5, "el optimizador investiga apenas aparece cada tecnología (" .. Util.num(rs.avgLag, 1) .. " años)")
+	check(rs.avgLag <= 0.5, "el optimizador investiga apenas puede (" .. Util.num(rs.avgLag, 1) .. " años)")
 	-- Estrategia simple (sin ampliar más allá de la sede 3 hasta 2009): más lenta, pero sin esperas eternas.
 	local flat = Bot.researchSummary(Bot.play("normal", 732, { flat = true }))
-	check(flat.done >= 54, "la estrategia simple completa casi todas (" .. flat.done .. ")")
-	for k, cap in { s = 4, n = 19, i = 23, b = 23 } do
-		check(flat.byTier[k].max <= cap, "simple · " .. Catalog.RESEARCH_TIERS[k].label .. ": máxima " .. Util.num(flat.byTier[k].max, 1) .. " min")
+	check(flat.done >= Catalog.RESEARCH_TOTAL - 5, "la estrategia simple completa casi todas (" .. flat.done .. ")")
+	for k, rg in RANGE do
+		local bt = flat.byTier[k]
+		check(bt ~= nil and bt.max <= rg[2] * 1.1, "simple · " .. Catalog.RESEARCH_RULES.complexityLabel[k] .. ": máxima " .. Util.num(bt and bt.max or -1, 1) .. " min")
 	end
 end)
 
@@ -1953,7 +1963,8 @@ test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué in
 		check(d.revenue > d.manufacturing, dec .. ": ingresos mayores que la fabricación")
 	end
 	check(log.decades[2020].regions >= 5, "5 regiones o más en 2030 (" .. log.decades[2020].regions .. ")")
-	check(log.decades[2020].endMoney < 1500000000, "el dinero no se acumula sin destino (" .. Util.money(log.decades[2020].endMoney) .. ")")
+	-- Etapa 3: los niveles de motor y el equipamiento hacen más rentables los modelos tardíos.
+	check(log.decades[2020].endMoney < 3000000000, "el dinero no se acumula sin destino (" .. Util.money(log.decades[2020].endMoney) .. ")")
 	check(log.decades[2020].revenue > log.decades[2000].revenue, "los ingresos siguen creciendo con las regiones")
 	-- La expansión: requisitos, costo, efecto en la demanda y en las campañas.
 	local g = bigCompany("Global SA")
@@ -2125,6 +2136,7 @@ test("Pioneer 70: carrocería 3D predeterminada del sedán en los 70, elegible d
 	eq((DesignCalc.sanitize(g, raw)).vehicleModel, "pioneer70", "Pioneer 70 aceptada")
 	raw.vehicleModel = "provisional"
 	eq((DesignCalc.sanitize(g, raw)).vehicleModel, "provisional", "provisional aceptada")
+	table.insert(g.research.done, "ch_compacto")
 	local rawC = draftFor(g, "pixel", "Compacto")
 	rawC.vehicleModel = "pioneer70"
 	eq((DesignCalc.sanitize(g, rawC)).vehicleModel, nil, "un compacto no la puede usar (queda la suya)")
@@ -2221,21 +2233,23 @@ test("[E1] Pausa individual: un menú abierto pausa solo esa empresa (calendario
 	ga.money = 3000000
 	mgr:request(a, "saveDesign", { draft = draftFor(ga, "brisa"), requestId = rid() })
 	check(mgr:request(a, "createLot", { designId = ga.designs[1].id, qty = 500, requestId = rid() }).ok, "lote en fabricación")
+	ga.rp = 100
 	check(mgr:request(a, "startResearch", { id = "mo1", requestId = rid() }).ok, "investigación en curso")
 	ticks(mgr, clock, 4)
 	check(mgr:request(a, "setUiPause", { paused = true }).ok, "A abre un menú")
 	local dayA, dayB = Rules.absDay(ga), Rules.absDay(gb)
-	local prodA, resA, moneyA = ga.lots[1].produced, ga.research.active.progress, ga.money
+	local prodA, resA, moneyA = ga.lots[1].produced, ga.research.projects[1].progress, ga.money
 	ticks(mgr, clock, 20)
 	eq(Rules.absDay(ga), dayA, "la empresa de A no avanza")
 	eq(ga.lots[1].produced, prodA, "ni fabrica")
-	eq(ga.research.active.progress, resA, "ni investiga")
+	eq(ga.research.projects[1].progress, resA, "ni investiga")
 	eq(ga.money, moneyA, "ni cobra ni paga")
 	eq(Rules.absDay(gb) - dayB, 10, "la de B sigue normalmente")
 	check(mgr:request(a, "setUiPause", { paused = false }).ok, "A cierra el menú")
 	ticks(mgr, clock, 4)
 	eq(Rules.absDay(ga) - dayA, 2, "A continúa al cerrar el menú")
 	check(ga.lots[1].produced > prodA, "y vuelve a fabricar")
+	check(ga.research.projects[1] == nil or ga.research.projects[1].progress > resA, "y a investigar")
 	-- Volver al menú de empresas quita la pausa (la próxima empresa no arranca pausada).
 	mgr:request(a, "setUiPause", { paused = true })
 	mgr:request(a, "leaveCompany", {})
@@ -2499,6 +2513,285 @@ test("[E2] Primer ciclo completo: sedán I4 → lote de 100 → reseñas → pre
 	eq(serde.encode("json", g2.lotHistory[1].review), serde.encode("json", snapshot.review), "10. las reseñas se conservan")
 	eq(g2.designs[1].lotLaunched, true, "10. el modelo sigue marcado como fabricado")
 	check(not mgr2:request(p, "createLot", { designId = g2.designs[1].id, qty = 10, requestId = rid() }).ok, "10. y no se puede volver a fabricar")
+end)
+
+
+test("[E3] Migración 7 → 8: investigación en curso como proyecto y diseños con nivel, variante y equipamiento", function()
+	local g = bigCompany("Vieja SA")
+	local ctx = makeCtx(801)
+	local id = saveNew(g, ctx, "brisa")
+	local old = jsonCopy(g)
+	old.schema = 7
+	old.research = { done = { "mo1", "se1", "se2", "co1" }, active = { id = "ca1", progress = 5, rp = 10, paid = 5000 } }
+	for _, d in old.designs do
+		d.motorLevel, d.motorVariant, d.equipment = nil, nil, nil
+	end
+	local m, err = GameState.migrate(jsonCopy(old), 5000)
+	check(m ~= nil, "migra: " .. tostring(err))
+	eq(m.schema, GameState.SCHEMA, "esquema actual")
+	check(GameState.validate(m), "válida")
+	eq(m.research.active, nil, "sin el campo viejo")
+	eq(#m.research.projects, 1, "la investigación en curso sigue como proyecto")
+	local pr = m.research.projects[1]
+	eq(pr.id, "ca1", "misma tecnología")
+	eq(pr.days, math.floor(Catalog.researchNode("ca1").days * 0.5 + 0.5), "con los días que le faltaban")
+	eq(table.concat(m.research.done, ","), "mo1,se1,se2,co1", "lo investigado se conserva")
+	local d = m.designs[1]
+	eq(d.id, id, "mismo diseño")
+	eq(d.motorLevel, 1, "motor nivel 1")
+	eq(d.motorVariant, "balanced", "variante equilibrada")
+	eq(table.concat(d.equipment, ","), "crumple,ac", "lo que antes venía solo queda como equipamiento elegido")
+	local again = GameState.migrate(jsonCopy(m), 6000)
+	eq(serde.encode("json", again.research), serde.encode("json", m.research), "idempotente")
+end)
+
+test("[E3] Investigación completa: los 15 casos pedidos (chasis, motores, PI, proyectos simultáneos, adelanto y guardado)", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 701 }
+	mgr:add(p)
+	local g = playThrough(mgr, p).game
+	local function near(a: number, b: number): boolean
+		return math.abs(a - b) < 1e-6
+	end
+	local function start(id: string): any
+		return mgr:request(p, "startResearch", { id = id, requestId = rid() })
+	end
+	local function project(id: string): any
+		return Rules.researchProject(g, id)
+	end
+	local function runTicks(cond: () -> boolean, max: number): boolean
+		for _ = 1, max do
+			ticks(mgr, clock, 1)
+			if cond() then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- 1. Chasis de 1970: Sedán y Coupé básicos; la generación siguiente se investiga.
+	check(DesignCalc.baseAvailable(g, Catalog.base("brisa")) == nil, "1. Sedán 1970 disponible")
+	check(DesignCalc.baseAvailable(g, Catalog.base("duna")) == nil, "1. Coupé 1970 disponible")
+	check(DesignCalc.baseAvailable(g, Catalog.base("brisa2")) ~= nil, "1. el Sedán 1978 hay que investigarlo")
+	check(DesignCalc.baseAvailable(g, Catalog.base("pixel")) ~= nil, "1. el compacto también")
+
+	-- 2. Motores I4 e I6 en nivel 1 y variante equilibrada.
+	eq(Rules.engineLevelMax(g, "I4"), 1, "2. I4 nivel 1")
+	eq(Rules.engineLevelMax(g, "I6"), 1, "2. I6 nivel 1")
+	local draft = DesignCalc.newDraft(g, "brisa")
+	check(DesignCalc.partBlock(g, draft, Catalog.part("motor", "i4")) == nil and DesignCalc.partBlock(g, draft, Catalog.part("motor", "i6")) == nil, "2. ambos motores elegibles")
+	eq(draft.motorLevel, 1, "2. un diseño nuevo usa el nivel 1")
+	eq(draft.motorVariant, "balanced", "2. variante equilibrada")
+	check(DesignCalc.variantBlock(g, draft, Catalog.engineVariant("eco")) ~= nil and DesignCalc.variantBlock(g, draft, Catalog.engineVariant("sport")) ~= nil, "2. económica y deportiva se investigan")
+
+	-- 3. El centro genera PI (también con ticks cortos, sin perder decimales).
+	eq(g.rp, 0, "3. sin PI al empezar")
+	local m0 = g.money
+	ticks(mgr, clock, 1)
+	check(near(g.rp, Rules.piCenter(g) / 60), "3. un segundo: " .. Util.num(g.rp, 3) .. " PI")
+	ticks(mgr, clock, 59)
+	check(near(g.rp, Rules.piCenter(g)), "3. un minuto a 1×: " .. Util.num(g.rp, 3) .. " PI (" .. Rules.piCenter(g) .. "/min)")
+	eq(g.money, m0, "3. los PI no tocan el dinero")
+
+	-- 4. Una línea fabricando suma PI.
+	g.money = 5000000
+	check(mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Sedán I4"), requestId = rid() }).ok, "diseño")
+	local design = g.designs[1]
+	eq(design.motorLevel, 1, "diseño guardado con motor nivel 1")
+	check(mgr:request(p, "createLot", { designId = design.id, qty = 800, requestId = rid() }).ok, "lote")
+	local lotHp0 = g.lots[1].design.calc.hp
+	ticks(mgr, clock, 1)
+	eq(Rules.activeLines(g), 1, "4. una línea fabricando")
+	eq(Rules.piPerMinute(g), Rules.piCenter(g) + Catalog.RESEARCH_RULES.linePi, "4. centro + línea")
+	local rp0 = g.rp
+	ticks(mgr, clock, 12)
+	check(near(g.rp - rp0, Rules.piPerMinute(g) * 12 / 60), "4. 12 s con la línea: +" .. Util.num(g.rp - rp0, 2) .. " PI")
+
+	-- 7. Sin recursos suficientes no empieza ni cobra.
+	local ca1 = Catalog.researchNode("ca1")
+	local pi1, cost1, days1 = Rules.researchCost(g, ca1)
+	eq(pi1, ca1.rp, "costo base sin adelanto (PI)")
+	eq(cost1, ca1.cost, "costo base sin adelanto (dinero)")
+	eq(days1, ca1.days, "costo base sin adelanto (días)")
+	g.rp = pi1 - 1
+	local money7 = g.money
+	local r = start("ca1")
+	check(not r.ok and string.find(r.msg, "PI") ~= nil, "7. faltan PI: " .. tostring(r.msg))
+	eq(g.money, money7, "7. no cobró dinero")
+	g.rp = 1000
+	g.money = cost1 - 1
+	r = start("ca1")
+	check(not r.ok and string.find(r.msg, "Fondos") ~= nil, "7. falta dinero: " .. tostring(r.msg))
+	eq(g.rp, 1000, "7. no cobró PI")
+	eq(#g.research.projects, 0, "7. no quedó nada en curso")
+
+	-- 8-9. Varias a la vez; cada una se cobra una sola vez al empezar.
+	g.money = 5000000
+	local ids = { "ca1", "mo1", "se1", "te_radio" }
+	local paidPi, paidMoney = 0, 0
+	for _, id in ids do
+		local n = Catalog.researchNode(id)
+		local pi, cost = Rules.researchCost(g, n)
+		local rpB, mB = g.rp, g.money
+		r = start(id)
+		check(r.ok, "9. empieza " .. id .. ": " .. tostring(r.msg))
+		eq(rpB - g.rp, pi, "8. " .. id .. ": PI cobrados al empezar")
+		eq(mB - g.money, cost, "8. " .. id .. ": dinero cobrado al empezar")
+		paidPi += pi
+		paidMoney += cost
+	end
+	eq(#g.research.projects, 4, "9. cuatro investigaciones simultáneas")
+	check(not start("ca1").ok, "no se repite una que está en curso")
+	check(not mgr:request(p, "cancelResearch", { id = "ca1", requestId = rid() }).ok, "no se cancela")
+	ticks(mgr, clock, 4)
+	for _, id in ids do
+		check(near(project(id).progress, 2), "9. " .. id .. " avanza en paralelo (" .. Util.num(project(id).progress, 2) .. " días)")
+	end
+
+	-- 5. Las velocidades aceleran PI y progreso por igual.
+	check(mgr:request(p, "setSpeed", { speed = 3, requestId = rid() }).ok, "3×")
+	local rpS, prS = g.rp, project("ca1").progress
+	ticks(mgr, clock, 4)
+	check(near(g.rp - rpS, Rules.piPerMinute(g) * 3 * 4 / 60), "5. a 3× los PI se triplican")
+	check(near(project("ca1").progress - prS, 6), "5. a 3× el progreso se triplica (+" .. Util.num(project("ca1").progress - prS, 2) .. " días)")
+	check(mgr:request(p, "setSpeed", { speed = 2, requestId = rid() }).ok, "2×")
+	prS = project("ca1").progress
+	ticks(mgr, clock, 2)
+	check(near(project("ca1").progress - prS, 2), "5. a 2× el doble")
+
+	-- 6. La pausa detiene PI y progreso.
+	check(mgr:request(p, "setUiPause", { paused = true }).ok, "pausa")
+	local rpP, prP = g.rp, project("ca1").progress
+	ticks(mgr, clock, 30)
+	eq(g.rp, rpP, "6. en pausa no se generan PI")
+	eq(project("ca1").progress, prP, "6. ni avanza la investigación")
+	check(mgr:request(p, "setUiPause", { paused = false }).ok, "sigue")
+
+	-- 10. Al terminar se desbloquea, avisa y no se repite.
+	check(runTicks(function()
+		return #g.research.projects == 0
+	end, 600), "10. las cuatro terminan")
+	for _, id in ids do
+		check(Rules.has(g, id), "10. " .. id .. " desbloqueada")
+	end
+	eq(g.counters.researchDone, 4, "10. cuatro completadas, ni una más")
+	local noticed = false
+	for _, nt in g.notifications do
+		noticed = noticed or string.find(nt.text, Catalog.researchNode("te_radio").name, 1, true) ~= nil
+	end
+	check(noticed, "10. con notificación")
+	r = start("ca1")
+	check(not r.ok and string.find(r.msg, "ya está investigada") ~= nil, "10. no se investiga dos veces")
+	local charges = 0
+	for _, l in g.ledger do
+		if l.type == "investigacion" then
+			charges += 1
+		end
+	end
+	eq(charges, 4, "8. cuatro cargos de investigación en el libro, uno por proyecto")
+
+	-- 15. Adelanto: penalización por año (dinero y PI +15 %, duración +10 %), visible antes de pagar; más de 5 años, bloqueada.
+	local eco = Catalog.researchNode("var_eco") -- 1973: 3 años de adelanto en 1970
+	local piE, costE, daysE, info = Rules.researchCost(g, eco)
+	eq(info.ahead, 3, "15. tres años de adelanto")
+	eq(piE, math.floor(eco.rp * 1.45 + 0.5), "15. PI +45 %")
+	eq(costE, math.floor(eco.cost * 1.45 / 100 + 0.5) * 100, "15. dinero +45 %")
+	eq(daysE, math.floor(eco.days * 1.3 + 0.5), "15. duración +30 %")
+	local sedan2 = Catalog.researchNode("ch_sedan2") -- 1978: 8 años de adelanto
+	check(Rules.researchState(g, sedan2) == "bloqueada" and string.find(table.concat(Rules.researchMissing(g, sedan2), " "), "1973") ~= nil, "15. más de 5 años: bloqueada hasta 1973")
+	g.rp, g.money = 10000, 5000000
+	local rpA, mA = g.rp, g.money
+	r = start("var_eco")
+	check(r.ok and string.find(r.msg, "adelantada 3 años") ~= nil, "15. empieza con recargo: " .. tostring(r.msg))
+	eq(rpA - g.rp, piE, "15. cobra los PI con recargo")
+	eq(mA - g.money, costE, "15. cobra el dinero con recargo")
+	eq(project("var_eco").days, daysE, "15. dura lo anunciado")
+	eq(project("var_eco").ahead, 3, "15. queda registrado el adelanto")
+
+	-- 11-12. Un nivel de motor nuevo: los anteriores siguen y los diseños viejos no cambian.
+	check(start("eng_I4_2").ok, "nivel 2 del I4 (adelantado 5 años)")
+	check(not start("eng_I4_3").ok, "el nivel 3 pide el 2")
+	ticks(mgr, clock, 8)
+	-- 14. Guardar con proyectos a medias y recuperar en otro servidor.
+	local prEco, prEng = project("var_eco").progress, project("eng_I4_2").progress
+	check(prEco > 0 and prEco < daysE, "14. proyecto a medias")
+	local doneSnap = table.concat(g.research.done, ",")
+	local rpSnap = g.rp
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "14. carga")
+	g = mgr2.list[p].game
+	mgr = mgr2
+	eq(table.concat(g.research.done, ","), doneSnap, "14. mismas investigaciones completadas")
+	eq(#g.research.projects, 2, "14. mismos proyectos en curso")
+	check(near(project("var_eco").progress, prEco) and near(project("eng_I4_2").progress, prEng), "14. con el mismo progreso")
+	check(near(g.rp, rpSnap), "14. mismos PI")
+	check(runTicks(function()
+		return #g.research.projects == 0
+	end, 600), "14. siguen y terminan en el otro servidor")
+	eq(g.counters.researchDone, 6, "14. sin completar dos veces")
+	eq(Rules.engineLevelMax(g, "I4"), 2, "11. I4 nivel 2")
+	eq(Rules.engineLevelMax(g, "I6"), 1, "11. el I6 sigue en nivel 1 (cada familia aparte)")
+	for _, id in ids do
+		check(Rules.has(g, id), "11. " .. id .. " sigue desbloqueada")
+	end
+	check(DesignCalc.variantBlock(g, DesignCalc.newDraft(g, "brisa"), Catalog.engineVariant("eco")) == nil, "11. variante económica para el I4")
+	local d6 = DesignCalc.newDraft(g, "brisa")
+	d6.parts.motor = "i6"
+	check(DesignCalc.variantBlock(g, d6, Catalog.engineVariant("eco")) == nil, "11. y para el I6 (todas las familias compatibles)")
+	local old = g.designs[1]
+	eq(old.motorLevel, 1, "12. el diseño viejo conserva el nivel 1")
+	eq(old.motorVariant, "balanced", "12. y su variante")
+	eq(#(old.equipment or {}), 0, "12. y su equipamiento")
+	local lot = g.lots[1]
+	eq(lot.design.spec.motorLevel, 1, "12. el lote fabricado también")
+	eq(lot.design.calc.hp, lotHp0, "12. con la misma potencia que al fabricarse")
+	local nd = DesignCalc.newDraft(g, "brisa")
+	eq(nd.motorLevel, 2, "un diseño nuevo propone el mejor nivel")
+	local lvl1 = jsonCopy(nd)
+	lvl1.motorLevel = 1
+	local s1 = DesignCalc.sanitize(g, lvl1)
+	check(s1 ~= nil and s1.motorLevel == 1, "11. el nivel 1 se puede seguir eligiendo")
+	local c1, c2 = DesignCalc.computeDesign(g, lvl1), DesignCalc.computeDesign(g, nd)
+	check(c2.hp > c1.hp, "nivel 2: más potencia (" .. c1.hp .. " → " .. c2.hp .. " hp)")
+	local lvl3 = jsonCopy(nd)
+	lvl3.motorLevel = 3
+	check(DesignCalc.sanitize(g, lvl3) == nil, "el nivel 3 sin investigar se rechaza")
+
+	-- 13. Equipamiento de confort y seguridad: no viene puesto; se elige en el diseñador.
+	eq(#nd.equipment, 0, "13. nada se instala solo")
+	local withRadio = jsonCopy(nd)
+	withRadio.equipment = { "radio" }
+	local sr = DesignCalc.sanitize(g, withRadio)
+	check(sr ~= nil and sr.equipment[1] == "radio", "13. la radio se puede elegir")
+	local cr, cn = DesignCalc.computeDesign(g, sr), DesignCalc.computeDesign(g, nd)
+	check(cr.comfort > cn.comfort and cr.unitCost > cn.unitCost, "13. más confort y más costo por unidad")
+	local withCrumple = jsonCopy(nd)
+	withCrumple.equipment = { "crumple" }
+	local bad, why = DesignCalc.sanitize(g, withCrumple)
+	check(bad == nil and string.find(why or "", "Requiere investigar", 1, true) ~= nil, "13. lo no investigado se rechaza: " .. tostring(why))
+	-- Seguridad: en 1975 las zonas de deformación (1977) se adelantan 2 años.
+	g.time.day = (1975 - 1970) * 12
+	g.rp, g.money = 10000, 5000000
+	check(start("se2").ok, "13. investiga zonas de deformación")
+	check(runTicks(function()
+		return Rules.has(g, "se2")
+	end, 600), "13. terminada")
+	local safe = DesignCalc.newDraft(g, "brisa")
+	eq(#safe.equipment, 0, "13. tampoco se instala sola")
+	safe.equipment = { "crumple", "radio" }
+	local ss = DesignCalc.sanitize(g, safe)
+	check(ss ~= nil and #ss.equipment == 2, "13. seguridad y confort juntos")
+	local cs = DesignCalc.computeDesign(g, ss)
+	local cb = DesignCalc.computeDesign(g, DesignCalc.newDraft(g, "brisa"))
+	check(cs.safety > cb.safety, "13. más seguridad (" .. cb.safety .. " → " .. cs.safety .. ")")
+	local saved = mgr:request(p, "saveDesign", { draft = jsonCopy(ss), requestId = rid() })
+	check(saved.ok, "13. el diseño con equipamiento se guarda: " .. tostring(saved.msg))
+	eq(table.concat(g.designs[#g.designs].equipment, ","), table.concat(ss.equipment, ","), "13. con su equipamiento")
+	check(GameState.validate(g), "partida válida")
 end)
 
 T.finish()

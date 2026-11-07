@@ -53,14 +53,18 @@ local function realDesigns(g: any): number
 end
 Screen.realDesigns = realDesigns
 
+-- ¿Hay una investigación que se pueda empezar ya (requisitos, PI y dinero) y lugar para otra en curso?
 local function researchFree(g: any): boolean
-	if g.research.active then
+	if #(g.research.projects or {}) >= Catalog.RESEARCH_RULES.maxParallel then
 		return false
 	end
 	for _, cat in Catalog.RESEARCH_ORDER do
 		for _, n in Catalog.RESEARCH[cat].nodes do
 			if Rules.researchState(g, n) == "disponible" then
-				return true
+				local pi, cost = Rules.researchCost(g, n)
+				if g.rp >= pi and g.money >= cost then
+					return true
+				end
 			end
 		end
 	end
@@ -191,8 +195,8 @@ function Screen.topAlert(g: any): any
 	if #g.lots == 0 and realDesigns(g) > 0 then
 		return { title = "La fábrica está parada", text = "Lanzá un lote para empezar a vender.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5 }
 	end
-	if researchFree(g) and g.rp >= Rules.piCap(g) - 0.5 then
-		return { title = "Laboratorio sin proyecto", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados (máximo). Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
+	if #(g.research.projects or {}) == 0 and g.rp >= 30 and researchFree(g) then
+		return { title = "Investigación sin proyectos", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados. Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
 	end
 	return nil
 end

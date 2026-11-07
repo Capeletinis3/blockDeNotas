@@ -81,6 +81,7 @@ Catalog.ECON = {
 	reputationStep = 0.08, -- cuánto se acerca la reputación cada mes al nivel que justifican tus ventas
 	-- PI por jugar (bonificaciones). Todas comparten un tope mensual para que no se puedan farmear
 	-- repitiendo acciones baratas (por ejemplo, lotes de una unidad).
+	bonusPiEnabled = false, -- etapa 3: los PI salen del centro de investigación y de las líneas (no de las ventas)
 	salesPiPer = 50, -- +1 PI por cada 50 autos vendidos en el mes
 	soldOutPiMinutes = 1, -- lote agotado con ganancia (de al menos soldOutMinQty unidades): +1 min de generación
 	soldOutMinQty = 100,
@@ -188,7 +189,7 @@ Catalog.DEMAND = {
 --[[ Vehículos base. year = año desde el que existe la plataforma; research = tecnología que la habilita.
 	Costos por unidad en la escala del catálogo (se multiplican por ECON.unitCostScale). safety = seguridad de serie. ]]
 Catalog.BASES = {
-	{ id = "pixel", name = "Pixel C1", brand = "Nordia", type = "compacto", level = 1, year = 1972, research = nil, rarity = "Común",
+	{ id = "pixel", name = "Pixel C1", brand = "Nordia", type = "compacto", level = 1, year = 1972, research = "ch_compacto", rarity = "Común",
 		dev = 12000, unit = 7800, weight = 1080, handling = 58, comfort = 60, durability = 80, quality = 55, safety = 40, drag = 0.33, build = 150,
 		tags = { "combustion" }, mats = { acero = 6, aluminio = 2, pintura = 1, electronica = 1 }, pop = 1.2,
 		defaults = { motor = "i4", turbo = "none", transmision = "man4", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
@@ -196,12 +197,24 @@ Catalog.BASES = {
 		dev = 16000, unit = 10500, weight = 1350, handling = 60, comfort = 72, durability = 82, quality = 60, safety = 45, drag = 0.29, build = 180,
 		tags = { "combustion" }, mats = { acero = 8, aluminio = 3, pintura = 1, electronica = 1 }, pop = 1.1,
 		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
-	{ id = "toro", name = "Toro Pickup", brand = "Kodiak", type = "pickup", level = 1, year = 1973, research = nil, rarity = "Común",
+	{ id = "toro", name = "Toro Pickup", brand = "Kodiak", type = "pickup", level = 1, year = 1973, research = "ch_pickup", rarity = "Común",
 		dev = 14000, unit = 9800, weight = 1750, handling = 46, comfort = 52, durability = 92, quality = 56, safety = 38, drag = 0.40, build = 230,
 		tags = { "combustion", "offroad" }, mats = { acero = 13, aluminio = 2, pintura = 2, electronica = 1 }, pop = 0.95,
 		defaults = { motor = "i6", turbo = "none", transmision = "man4", traccion = "x4", frenos = "std", suspension = "offroad", neumaticos = "at", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
 	{ id = "duna", name = "Coupé básico 1970", brand = "Halcón", type = "clasico", level = 1, year = 1970, research = nil, rarity = "Rara",
 		dev = 22000, unit = 12500, weight = 1320, handling = 62, comfort = 64, durability = 72, quality = 64, safety = 40, drag = 0.36, build = 260,
+		tags = { "combustion" }, mats = { acero = 9, aluminio = 2, pintura = 2, electronica = 1, cuero = 2 }, pop = 0.9,
+		defaults = { motor = "i6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
+	{ id = "brisa2", name = "Sedán 1978", brand = "Vortex", type = "sedan", level = 1, year = 1978, research = "ch_sedan2", rarity = "Común",
+		dev = 22000, unit = 11800, weight = 1280, handling = 64, comfort = 76, durability = 85, quality = 64, safety = 52, drag = 0.27, build = 180,
+		tags = { "combustion" }, mats = { acero = 8, aluminio = 3, pintura = 1, electronica = 1 }, pop = 1.1,
+		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
+	{ id = "brisa3", name = "Sedán 1988", brand = "Vortex", type = "sedan", level = 1, year = 1988, research = "ch_sedan3", rarity = "Común",
+		dev = 30000, unit = 13500, weight = 1240, handling = 68, comfort = 80, durability = 88, quality = 68, safety = 60, drag = 0.25, build = 180,
+		tags = { "combustion" }, mats = { acero = 8, aluminio = 3, pintura = 1, electronica = 1 }, pop = 1.1,
+		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
+	{ id = "duna2", name = "Coupé 1978", brand = "Halcón", type = "clasico", level = 1, year = 1978, research = "ch_coupe2", rarity = "Rara",
+		dev = 26000, unit = 13600, weight = 1290, handling = 68, comfort = 66, durability = 75, quality = 67, safety = 46, drag = 0.33, build = 260,
 		tags = { "combustion" }, mats = { acero = 9, aluminio = 2, pintura = 2, electronica = 1, cuero = 2 }, pop = 0.9,
 		defaults = { motor = "i6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
 	{ id = "aurora", name = "Aurora GT", brand = "Vortex", type = "deportivo", level = 1, year = 1975, research = "ca2", rarity = "Rara",
@@ -528,21 +541,119 @@ Catalog.FIRST = { "Sofía", "Mateo", "Lara", "Julián", "Carla", "Ramiro", "Elen
 Catalog.LAST = { "Arce", "Ruiz", "Sosa", "Paz", "Vega", "Gil", "Bruno", "Mora", "Núñez", "Ortiz", "Ríos", "Pereyra", "Luna", "Ferrari", "Medina", "Romero" }
 
 Catalog.DEPARTMENTS = {
-	{ "laboratorio", "Laboratorio", "Ingeniero", "Suma PI por minuto (secundario: la sede es la fuente principal)" },
+	{ "laboratorio", "Laboratorio", "Ingeniero", "Preparado para I+D: en una etapa próxima reducirá costos y tiempos de investigación (hoy sin efecto)" },
 	{ "ventas", "Ventas", "Vendedor", "Más atractivo comercial" },
 	{ "marketing", "Marketing", "Marketing", "Más demanda" },
 	{ "diseno", "Estudio de diseño", "Diseñador", "Baja el costo de desarrollo" },
 }
 
---[[ Árbol tecnológico 1970–2030. Cada nodo:
-	year = primer año en que se puede investigar · tier = s/n/i/b (pequeña, normal, importante, gran avance)
-	req = tecnologías previas · fx = efectos reales (se suman con Rules.tech):
-	  hpPct, consPct, comfort, quality, safety, handling, durability, topPct, kgPct, brake,
-	  prodSpeed (%), unitCostPct (%), demand (%), devCostPct (%), repGain (%), spoilerGrip, campaign (habilita)
-	Las piezas, bases y opciones que nombran el id del nodo en `research` se desbloquean al completarlo.
-	rp (PI) y cost ($) se calculan con el año y el nivel (ver al final del módulo). ]]
-Catalog.RESEARCH_ORDER = { "motores", "carrocerias", "transmisiones", "seguridad", "confort", "produccion", "electronica", "materiales", "marketing" }
+--[[ Investigación y desarrollo (I+D). Cuatro categorías del departamento de I+D: Chasis, Motores,
+	Seguridad y Tecnología. «Empresa (provisorio)» conserva las mejoras de producción y marketing de versiones
+	anteriores hasta que pasen a Instalaciones y Marketing. Cada nodo:
+	year = año en que aparece (se puede investigar hasta RESEARCH_RULES.aheadMaxYears antes, con recargo)
+	tier = complejidad s/n/i/b (o `complexity` 1–5): define el costo base en PI, dinero y días
+	req = tecnologías previas · fx = efectos automáticos de la empresa (fabricación, marketing, motores)
+	Las piezas, bases, opciones y equipamiento que nombran el id del nodo en `research` se desbloquean al
+	completarlo; el equipamiento NO se instala solo: se elige en cada diseño. Los niveles de motor
+	(eng_<familia>_<n>) se generan al final del módulo. ]]
+--[[ Reglas de I+D (valores provisionales, centralizados acá):
+	- Costo base según la COMPLEJIDAD (1–5) de cada tecnología: PI, dinero y días. El año agrega un ajuste
+	  menor a los PI (piEraGrowth) y el dinero sigue a la economía de la época (moneyEra).
+	- Adelanto: se puede investigar hasta aheadMaxYears antes del año de la tecnología; cada año de adelanto
+	  suma aheadMoney al dinero, aheadPi a los PI y aheadDays a la duración.
+	- PI: el centro de investigación genera los PI de la sede (Catalog.SEDES[n].pi) por minuto real a 1×; cada
+	  línea que está fabricando suma linePi. Sin tope de acumulación.
+	- maxParallel: investigaciones simultáneas como máximo. ]]
+Catalog.RESEARCH_RULES = {
+	complexityOfTier = { s = 1, n = 2, i = 3, b = 4 },
+	complexityLabel = { "Mejora menor", "Mejora", "Tecnología importante", "Gran avance", "Hito tecnológico" },
+	pi = { 10, 30, 80, 200, 450 },
+	piEraGrowth = 0.03,
+	money = { 5000, 15000, 45000, 120000, 300000 },
+	moneyEra = { { 1970, 1 }, { 1980, 2.5 }, { 1990, 6.5 }, { 2000, 13 }, { 2010, 20 }, { 2030, 27 } },
+	days = { 30, 60, 120, 200, 300 },
+	aheadMaxYears = 5,
+	aheadMoney = 0.15,
+	aheadPi = 0.15,
+	aheadDays = 0.10,
+	linePi = 2,
+	maxParallel = 6,
+	engineMaxLevel = 10,
+	advancedEngineTuning = false, -- modo avanzado de personalización de motores (etapa futura; no se muestra)
+}
+
+-- Familias de motores: cada una tiene 10 niveles (el 1 viene con el motor). first = año del nivel 1;
+-- req = tecnología necesaria para empezar a mejorarla.
+Catalog.ENGINE_FAMILIES = {
+	{ id = "I4", name = "I4", first = 1970 },
+	{ id = "I6", name = "I6", first = 1970 },
+	{ id = "V6", name = "V6", first = 1975 },
+	{ id = "V8", name = "V8", first = 1970, req = "mo2" },
+	{ id = "I3", name = "I3 turbo", first = 2012, req = "mo8" },
+	{ id = "EV", name = "Eléctrico", first = 2010, req = "el5" },
+}
+-- Efecto de cada nivel por encima del 1 (acumulativo): potencia, consumo, costo del motor y calidad.
+Catalog.ENGINE_LEVEL_FX = { hp = 0.06, cons = -0.03, cost = 0.07, q = 0.4 }
+-- Variantes: la equilibrada viene de fábrica; la económica y la deportiva se investigan una vez y sirven para
+-- todos los motores a combustión.
+Catalog.ENGINE_VARIANTS = {
+	{ id = "balanced", name = "Equilibrada", hp = 1, cons = 1, cost = 1, q = 0 },
+	{ id = "eco", name = "Económica", research = "var_eco", hp = 0.88, cons = 0.85, cost = 0.97, q = 0, need = "combustion" },
+	{ id = "sport", name = "Deportiva", research = "var_sport", hp = 1.15, cons = 1.12, cost = 1.1, q = 1, need = "combustion" },
+}
+function Catalog.engineVariant(id: any): any
+	for _, v in Catalog.ENGINE_VARIANTS do
+		if v.id == id then
+			return v
+		end
+	end
+	return nil
+end
+
+--[[ Equipamiento (seguridad y tecnología/confort): cada elemento se investiga y después se ELIGE en cada
+	diseño (no se instala solo). unit = costo por unidad (escala del catálogo); fx = efectos sobre el auto. ]]
+Catalog.EQUIPMENT = {
+	{ id = "crumple", name = "Estructura con zonas de deformación", group = "seguridad", research = "se2", unit = 300, fx = { safety = 10 } },
+	{ id = "radio", name = "Radio AM/FM", group = "tecnologia", research = "te_radio", unit = 180, fx = { comfort = 3 } },
+	{ id = "ac", name = "Aire acondicionado", group = "tecnologia", research = "co1", unit = 650, fx = { comfort = 7, kg = 15 } },
+	{ id = "windows", name = "Ventanillas eléctricas", group = "tecnologia", research = "te_win", unit = 300, fx = { comfort = 3, q = 1 } },
+	{ id = "steering", name = "Dirección asistida", group = "tecnologia", research = "co3", unit = 400, fx = { comfort = 4, grip = 2 } },
+	{ id = "tripcomp", name = "Computadora de a bordo", group = "tecnologia", research = "el2", unit = 350, fx = { q = 2, eff = 2 } },
+	{ id = "nav", name = "Navegador satelital", group = "tecnologia", research = "te_nav", unit = 900, fx = { comfort = 3, q = 2 } },
+	{ id = "pdc", name = "Sensores de estacionamiento", group = "tecnologia", research = "te_pdc", unit = 250, fx = { safety = 2, comfort = 2 } },
+	{ id = "camera", name = "Cámara de retroceso", group = "tecnologia", research = "te_cam", unit = 350, fx = { safety = 3, q = 1 } },
+	{ id = "touch", name = "Pantalla táctil y conectividad", group = "tecnologia", research = "te_touch", unit = 600, fx = { comfort = 4, q = 2 } },
+}
+function Catalog.equipment(id: any): any
+	for _, e in Catalog.EQUIPMENT do
+		if e.id == id then
+			return e
+		end
+	end
+	return nil
+end
+
+Catalog.RESEARCH_ORDER = { "chasis", "motores", "seguridad", "tecnologia", "empresa" }
 Catalog.RESEARCH = {
+	chasis = { label = "Chasis", nodes = {
+		{ id = "ca1", name = "Carrocería reforzada", year = 1970, tier = "s", req = {}, fx = { durability = 4, safety = 2 }, gain = "+4 de durabilidad y +2 de seguridad" },
+		{ id = "ca2", name = "Plataforma de coupé deportivo", year = 1975, tier = "n", req = {}, fx = {}, gain = "Habilita el Aurora GT (deportivo)" },
+		{ id = "ca3", name = "Plataforma SUV", year = 1983, tier = "i", req = { "ca1" }, fx = {}, gain = "Habilita el Titán SUV" },
+		{ id = "ca4", name = "Superdeportivo de motor central", year = 1986, tier = "b", req = { "mo2", "ca2" }, fx = {}, gain = "Habilita el Halcón Vento SS" },
+		{ id = "ca5", name = "Plataforma modular", year = 2002, tier = "i", req = { "ca3" }, fx = { unitCostPct = -6, quality = 2 }, gain = "−6 % de costo por unidad y +2 de calidad" },
+		{ id = "ma1", name = "Túnel de viento", year = 1972, tier = "n", req = {}, fx = { topPct = 4, consPct = -3 }, gain = "+4 % de velocidad máxima y −3 % de consumo" },
+		{ id = "ma2", name = "Refrigeración de competición", year = 1978, tier = "n", req = { "ma1" }, fx = {}, gain = "Habilita la refrigeración de competición" },
+		{ id = "ma3", name = "Paneles de aluminio", year = 1985, tier = "n", req = {}, fx = {}, gain = "Habilita paneles de aluminio (−40 kg)" },
+		{ id = "ma4", name = "Escape de titanio", year = 1997, tier = "n", req = { "ma3" }, fx = {}, gain = "Habilita el escape de titanio" },
+		{ id = "ma5", name = "Fibra de carbono", year = 2000, tier = "i", req = { "ma3" }, fx = {}, gain = "Habilita fibra de carbono, capó y difusor de carbono" },
+		{ id = "ma6", name = "Frenos carbono-cerámicos", year = 2003, tier = "i", req = { "ma5" }, fx = {}, gain = "Habilita frenos carbono-cerámicos" },
+		{ id = "ma7", name = "Aerodinámica activa", year = 2012, tier = "n", req = { "ma1" }, fx = { spoilerGrip = 4 }, gain = "+4 de manejo con alerón instalado" },
+		{ id = "ch_compacto", name = "Plataforma compacta 1972", year = 1972, tier = "n", req = {}, fx = {}, gain = "Habilita el chasis compacto Pixel C1" },
+		{ id = "ch_pickup", name = "Plataforma pickup 1973", year = 1973, tier = "n", req = {}, fx = {}, gain = "Habilita el chasis pickup Toro" },
+		{ id = "ch_sedan2", name = "Sedán 2.ª generación (1978)", year = 1978, tier = "i", req = { "ca1" }, fx = {}, gain = "Habilita el chasis «Sedán 1978»: más liviano, cómodo y seguro que el de 1970" },
+		{ id = "ch_coupe2", name = "Coupé 2.ª generación (1978)", year = 1978, tier = "i", req = { "ca1" }, fx = {}, gain = "Habilita el chasis «Coupé 1978»: mejor manejo y más prestaciones" },
+		{ id = "ch_sedan3", name = "Sedán 3.ª generación (1988)", year = 1988, tier = "b", req = { "ch_sedan2" }, fx = {}, gain = "Habilita el chasis «Sedán 1988»: aerodinámico y con estructura moderna" },
+	} },
 	motores = { label = "Motores", nodes = {
 		{ id = "mo1", name = "Carburador de doble cuerpo", year = 1970, tier = "s", req = {}, fx = { hpPct = 5 }, gain = "+5 % de potencia en motores a combustión" },
 		{ id = "mo2", name = "V8 de gran cilindrada", year = 1970, tier = "i", req = {}, fx = {}, gain = "Habilita el motor V8 5.0" },
@@ -552,65 +663,51 @@ Catalog.RESEARCH = {
 		{ id = "mo6", name = "Distribución variable", year = 1993, tier = "n", req = { "mo4" }, fx = { hpPct = 5, consPct = -5 }, gain = "+5 % de potencia y −5 % de consumo" },
 		{ id = "mo7", name = "Turbo twin-scroll", year = 1996, tier = "n", req = { "mo3" }, fx = {}, gain = "Habilita el turbo twin-scroll" },
 		{ id = "mo8", name = "Inyección directa", year = 2006, tier = "i", req = { "mo6" }, fx = { hpPct = 5, consPct = -8 }, gain = "+5 % de potencia y −8 % de consumo" },
-	} },
-	carrocerias = { label = "Carrocerías", nodes = {
-		{ id = "ca1", name = "Carrocería reforzada", year = 1970, tier = "s", req = {}, fx = { durability = 4, safety = 2 }, gain = "+4 de durabilidad y +2 de seguridad" },
-		{ id = "ca2", name = "Plataforma de coupé deportivo", year = 1975, tier = "n", req = {}, fx = {}, gain = "Habilita el Aurora GT (deportivo)" },
-		{ id = "ca3", name = "Plataforma SUV", year = 1983, tier = "i", req = { "ca1" }, fx = {}, gain = "Habilita el Titán SUV" },
-		{ id = "ca4", name = "Superdeportivo de motor central", year = 1986, tier = "b", req = { "mo2", "ca2" }, fx = {}, gain = "Habilita el Halcón Vento SS" },
-		{ id = "ca5", name = "Plataforma modular", year = 2002, tier = "i", req = { "ca3" }, fx = { unitCostPct = -6, quality = 2 }, gain = "−6 % de costo por unidad y +2 de calidad" },
-	} },
-	transmisiones = { label = "Transmisiones y tracción", nodes = {
+		{ id = "el1", name = "Encendido electrónico", year = 1975, tier = "s", req = {}, fx = { durability = 3, consPct = -3 }, gain = "+3 de durabilidad y −3 % de consumo" },
 		{ id = "tr1", name = "Caja manual de 5 velocidades", year = 1977, tier = "s", req = {}, fx = {}, gain = "Habilita la caja manual de 5 velocidades" },
 		{ id = "tr2", name = "Tracción integral permanente", year = 1982, tier = "i", req = {}, fx = {}, gain = "Habilita la tracción integral" },
 		{ id = "tr3", name = "Automática con overdrive", year = 1984, tier = "n", req = { "tr1" }, fx = {}, gain = "Habilita la automática de 4 velocidades" },
 		{ id = "tr4", name = "Doble embrague", year = 2003, tier = "i", req = { "tr3" }, fx = {}, gain = "Habilita la caja de doble embrague" },
 		{ id = "tr5", name = "Automática de 8 velocidades", year = 2008, tier = "n", req = { "tr3" }, fx = {}, gain = "Habilita la automática de 8 velocidades" },
+		{ id = "el4", name = "Sistema híbrido", year = 2006, tier = "i", req = { "el2" }, fx = {}, gain = "Habilita el sistema híbrido" },
+		{ id = "el5", name = "Baterías de iones de litio", year = 2010, tier = "b", req = { "el4" }, fx = {}, gain = "Habilita el Rayo E, el motor eléctrico y la batería de 60 kWh" },
+		{ id = "el6", name = "Baterías de alta densidad", year = 2016, tier = "i", req = { "el5" }, fx = {}, gain = "Habilita la batería de 80 kWh y el motor de 350 kW" },
+		{ id = "el7", name = "Baterías de estado sólido", year = 2024, tier = "b", req = { "el6" }, fx = {}, gain = "Habilita la batería de estado sólido" },
+		{ id = "var_eco", name = "Variante de motor económica", year = 1973, tier = "n", req = {}, fx = {}, gain = "Variante «Económica» para todos los motores a combustión: −15 % de consumo, −12 % de potencia y un poco más barata" },
+		{ id = "var_sport", name = "Variante de motor deportiva", year = 1974, tier = "n", req = {}, fx = {}, gain = "Variante «Deportiva» para todos los motores a combustión: +15 % de potencia, +12 % de consumo y +10 % de costo del motor" },
 	} },
 	seguridad = { label = "Seguridad", nodes = {
 		{ id = "se1", name = "Cinturones de tres puntos", year = 1970, tier = "s", req = {}, fx = {}, gain = "Habilita el paquete «Cinturones de tres puntos» (+8 de seguridad)" },
-		{ id = "se2", name = "Zonas de deformación", year = 1977, tier = "n", req = { "se1" }, fx = { safety = 10 }, gain = "+10 de seguridad" },
+		{ id = "se2", name = "Zonas de deformación", year = 1977, tier = "n", req = { "se1" }, fx = {}, gain = "Habilita «Estructura con zonas de deformación» en el equipamiento de seguridad (+10 de seguridad)" },
 		{ id = "se3", name = "Frenos ABS", year = 1986, tier = "i", req = { "se2" }, fx = {}, gain = "Habilita frenos con ABS" },
 		{ id = "se4", name = "Bolsas de aire", year = 1989, tier = "i", req = { "se2" }, fx = {}, gain = "Habilita el paquete «Bolsas de aire frontales» (+18 de seguridad)" },
-		{ id = "se5", name = "Control de estabilidad", year = 1998, tier = "n", req = { "se3", "se4" }, fx = { handling = 4 }, gain = "+4 de manejo y habilita el paquete de seis bolsas de aire y estabilidad (+24 de seguridad)" },
-		{ id = "se6", name = "Asistentes de conducción", year = 2014, tier = "b", req = { "se5" }, fx = { quality = 2 }, gain = "+2 de calidad y habilita el paquete de asistentes de conducción (+32 de seguridad)" },
+		{ id = "se5", name = "Control de estabilidad", year = 1998, tier = "n", req = { "se3", "se4" }, fx = {}, gain = "Habilita el paquete de seis bolsas de aire y control de estabilidad (+24 de seguridad, +4 de manejo)" },
+		{ id = "se6", name = "Asistentes de conducción", year = 2014, tier = "b", req = { "se5" }, fx = {}, gain = "Habilita el paquete de asistentes de conducción (+32 de seguridad, +2 de calidad)" },
 	} },
-	confort = { label = "Comodidad e interiores", nodes = {
-		{ id = "co1", name = "Aire acondicionado", year = 1972, tier = "s", req = {}, fx = { comfort = 6 }, gain = "+6 de comodidad" },
+	tecnologia = { label = "Tecnología y confort", nodes = {
+		{ id = "co1", name = "Aire acondicionado", year = 1972, tier = "s", req = {}, fx = {}, gain = "Habilita el «Aire acondicionado» en el equipamiento (+7 de comodidad)" },
 		{ id = "co2", name = "Butacas deportivas", year = 1976, tier = "s", req = {}, fx = {}, gain = "Habilita butacas deportivas" },
-		{ id = "co3", name = "Dirección asistida", year = 1979, tier = "n", req = { "co1" }, fx = { comfort = 4, handling = 2 }, gain = "+4 de comodidad y +2 de manejo" },
-		{ id = "co4", name = "Tapizados premium", year = 1990, tier = "n", req = { "co3" }, fx = { quality = 1 }, gain = "Habilita Alcántara y +1 de calidad" },
+		{ id = "co3", name = "Dirección asistida", year = 1979, tier = "n", req = { "co1" }, fx = {}, gain = "Habilita la «Dirección asistida» en el equipamiento (+4 de comodidad y +2 de manejo)" },
+		{ id = "co4", name = "Tapizados premium", year = 1990, tier = "n", req = { "co3" }, fx = {}, gain = "Habilita el tapizado de Alcántara" },
 		{ id = "co5", name = "Suspensión neumática", year = 1994, tier = "i", req = { "co3" }, fx = {}, gain = "Habilita la suspensión neumática" },
 		{ id = "co6", name = "Asientos con masaje", year = 2001, tier = "n", req = { "co4" }, fx = {}, gain = "Habilita asientos con masaje" },
-		{ id = "co7", name = "Tablero digital", year = 2010, tier = "i", req = { "co6" }, fx = { quality = 2 }, gain = "Habilita tablero digital y luz ambiental; +2 de calidad" },
+		{ id = "co7", name = "Tablero digital", year = 2010, tier = "i", req = { "co6" }, fx = {}, gain = "Habilita el tablero digital y la luz ambiental" },
+		{ id = "el2", name = "Computadora de a bordo", year = 1985, tier = "n", req = { "el1" }, fx = {}, gain = "Habilita la «Computadora de a bordo» en el equipamiento (+2 de calidad, −3 % de consumo)" },
+		{ id = "el3", name = "Faros LED", year = 2004, tier = "n", req = { "el2" }, fx = {}, gain = "Habilita faros LED" },
+		{ id = "te_radio", name = "Radio AM/FM", year = 1970, tier = "s", req = {}, fx = {}, gain = "Habilita la «Radio AM/FM» en el equipamiento (+3 de comodidad)" },
+		{ id = "te_win", name = "Ventanillas eléctricas", year = 1976, tier = "s", req = { "te_radio" }, fx = {}, gain = "Habilita las «Ventanillas eléctricas» en el equipamiento (+3 de comodidad, +1 de calidad)" },
+		{ id = "te_nav", name = "Navegador satelital", year = 1995, tier = "i", req = { "el2" }, fx = {}, gain = "Habilita el «Navegador satelital» en el equipamiento (+3 de comodidad, +2 de calidad)" },
+		{ id = "te_pdc", name = "Sensores de estacionamiento", year = 1998, tier = "n", req = { "el2" }, fx = {}, gain = "Habilita los «Sensores de estacionamiento» en el equipamiento (+2 de seguridad, +2 de comodidad)" },
+		{ id = "te_cam", name = "Cámara de retroceso", year = 2005, tier = "n", req = { "te_pdc" }, fx = {}, gain = "Habilita la «Cámara de retroceso» en el equipamiento (+3 de seguridad, +1 de calidad)" },
+		{ id = "te_touch", name = "Pantalla táctil y conectividad", year = 2012, tier = "i", req = { "te_nav" }, fx = {}, gain = "Habilita la «Pantalla táctil» en el equipamiento (+4 de comodidad, +2 de calidad)" },
 	} },
-	produccion = { label = "Producción industrial", nodes = {
+	empresa = { label = "Empresa (provisorio)", nodes = {
 		{ id = "pr1", name = "Línea de montaje optimizada", year = 1970, tier = "s", req = {}, fx = { prodSpeed = 10 }, gain = "+10 % de velocidad de producción" },
 		{ id = "pr2", name = "Control de calidad estadístico", year = 1974, tier = "n", req = { "pr1" }, fx = { quality = 3 }, gain = "+3 de calidad en los autos nuevos" },
 		{ id = "pr3", name = "Robots de soldadura", year = 1982, tier = "i", req = { "pr1" }, fx = { prodSpeed = 20, unitCostPct = -4 }, gain = "+20 % de producción y −4 % de costo por unidad" },
 		{ id = "pr4", name = "Producción justo a tiempo", year = 1990, tier = "i", req = { "pr3" }, fx = { unitCostPct = -6 }, gain = "−6 % de costo por unidad" },
 		{ id = "pr5", name = "Pintura robotizada", year = 1993, tier = "n", req = { "pr3" }, fx = { quality = 1 }, gain = "Habilita acabados perlado y cromado; +1 de calidad" },
 		{ id = "pr6", name = "Fábrica digital", year = 2012, tier = "b", req = { "pr4" }, fx = { prodSpeed = 30, unitCostPct = -5 }, gain = "+30 % de producción y −5 % de costo por unidad" },
-	} },
-	electronica = { label = "Electrónica y eléctricos", nodes = {
-		{ id = "el1", name = "Encendido electrónico", year = 1975, tier = "s", req = {}, fx = { durability = 3, consPct = -3 }, gain = "+3 de durabilidad y −3 % de consumo" },
-		{ id = "el2", name = "Computadora de a bordo", year = 1985, tier = "n", req = { "el1" }, fx = { quality = 2, consPct = -3 }, gain = "+2 de calidad y −3 % de consumo" },
-		{ id = "el3", name = "Faros LED", year = 2004, tier = "n", req = { "el2" }, fx = {}, gain = "Habilita faros LED" },
-		{ id = "el4", name = "Sistema híbrido", year = 2006, tier = "i", req = { "el2" }, fx = {}, gain = "Habilita el sistema híbrido" },
-		{ id = "el5", name = "Baterías de iones de litio", year = 2010, tier = "b", req = { "el4" }, fx = {}, gain = "Habilita el Rayo E, el motor eléctrico y la batería de 60 kWh" },
-		{ id = "el6", name = "Baterías de alta densidad", year = 2016, tier = "i", req = { "el5" }, fx = {}, gain = "Habilita la batería de 80 kWh y el motor de 350 kW" },
-		{ id = "el7", name = "Baterías de estado sólido", year = 2024, tier = "b", req = { "el6" }, fx = {}, gain = "Habilita la batería de estado sólido" },
-	} },
-	materiales = { label = "Materiales y aerodinámica", nodes = {
-		{ id = "ma1", name = "Túnel de viento", year = 1972, tier = "n", req = {}, fx = { topPct = 4, consPct = -3 }, gain = "+4 % de velocidad máxima y −3 % de consumo" },
-		{ id = "ma2", name = "Refrigeración de competición", year = 1978, tier = "n", req = { "ma1" }, fx = {}, gain = "Habilita la refrigeración de competición" },
-		{ id = "ma3", name = "Paneles de aluminio", year = 1985, tier = "n", req = {}, fx = {}, gain = "Habilita paneles de aluminio (−40 kg)" },
-		{ id = "ma4", name = "Escape de titanio", year = 1997, tier = "n", req = { "ma3" }, fx = {}, gain = "Habilita el escape de titanio" },
-		{ id = "ma5", name = "Fibra de carbono", year = 2000, tier = "i", req = { "ma3" }, fx = {}, gain = "Habilita fibra de carbono, capó y difusor de carbono" },
-		{ id = "ma6", name = "Frenos carbono-cerámicos", year = 2003, tier = "i", req = { "ma5" }, fx = {}, gain = "Habilita frenos carbono-cerámicos" },
-		{ id = "ma7", name = "Aerodinámica activa", year = 2012, tier = "n", req = { "ma1" }, fx = { spoilerGrip = 4 }, gain = "+4 de manejo con alerón instalado" },
-	} },
-	marketing = { label = "Marketing", nodes = {
 		{ id = "mk1", name = "Publicidad en radio y TV", year = 1970, tier = "s", req = {}, fx = { demand = 5, campaign = 1 }, gain = "+5 % de demanda y habilita campañas de radio y prensa (+15 % de atractivo)" },
 		{ id = "mk2", name = "Red de concesionarios", year = 1981, tier = "n", req = { "mk1" }, fx = { demand = 10 }, gain = "+10 % de demanda y habilita campañas de televisión nacional (+30 %)" },
 		{ id = "mk3", name = "Garantía extendida", year = 1987, tier = "n", req = { "mk2" }, fx = { repGain = 50 }, gain = "La reputación sube 50 % más rápido" },
@@ -618,6 +715,38 @@ Catalog.RESEARCH = {
 		{ id = "mk5", name = "Redes sociales", year = 2009, tier = "i", req = { "mk4" }, fx = { demand = 15 }, gain = "+15 % de demanda" },
 	} },
 }
+
+-- Niveles de motor (2 a 10 por familia): se generan acá para no escribirlos a mano. Cada nivel pide el
+-- anterior; el año se reparte entre el nivel 1 y 2030 (o 45 años) y la complejidad crece con el nivel.
+do
+	local R = Catalog.RESEARCH_RULES
+	local F = Catalog.ENGINE_LEVEL_FX
+	for _, fam in Catalog.ENGINE_FAMILIES do
+		local span = math.min(45, 2030 - fam.first)
+		for lvl = 2, R.engineMaxLevel do
+			local req = {}
+			if lvl == 2 then
+				if fam.req then
+					table.insert(req, fam.req)
+				end
+			else
+				table.insert(req, "eng_" .. fam.id .. "_" .. (lvl - 1))
+			end
+			local k = lvl - 1
+			table.insert(Catalog.RESEARCH.motores.nodes, {
+				id = "eng_" .. fam.id .. "_" .. lvl,
+				name = fam.name .. " · nivel " .. lvl,
+				year = fam.first + math.floor(k * span / (R.engineMaxLevel - 1) + 0.5),
+				complexity = math.min(5, 1 + math.floor((lvl - 2) / 2)),
+				req = req,
+				fx = {},
+				family = fam.id,
+				level = lvl,
+				gain = string.format("Motores %s de nivel %d: +%d %% de potencia, %d %% de consumo y +%d %% de costo del motor frente al nivel 1", fam.name, lvl, math.floor(F.hp * k * 100 + 0.5), math.floor(F.cons * k * 100 - 0.5), math.floor(F.cost * k * 100 + 0.5)),
+			})
+		end
+	end
+end
 
 --[[ Marcas rivales controladas por el juego. Cada una vende en ciertos tipos desde cierto año. offset =
 	atractivo respecto de lo que espera el mercado (puede cambiar con los años: { año, valor }). ]]
@@ -735,23 +864,21 @@ for _, b in Catalog.BASES do
 	baseIndex[b.id] = b
 end
 local partIndex: { [string]: any } = {}
---[[ Motores por familia y nivel (para generaciones futuras: un nivel nuevo de la misma familia reemplaza al
-	anterior en los diseños NUEVOS; los diseños existentes conservan su pieza original). ]]
-Catalog.ENGINE_LEVELS = {
-	i4e = { "I4", 1 }, i4 = { "I4", 1 }, i4v = { "I4", 2 }, i3t = { "I3", 1 }, i6 = { "I6", 1 },
-	v6 = { "V6", 1 }, v6i = { "V6", 2 }, v8 = { "V8", 1 }, v8d = { "V8", 2 }, em200 = { "Eléctrico", 1 }, em350 = { "Eléctrico", 2 },
+-- Familia de cada motor (los niveles 1–10 se investigan por familia; ver Catalog.ENGINE_FAMILIES).
+Catalog.ENGINE_FAMILY_OF = {
+	i4e = "I4", i4 = "I4", i4v = "I4", i3t = "I3", i6 = "I6", v6 = "V6", v6i = "V6", v8 = "V8", v8d = "V8", em200 = "EV", em350 = "EV",
 }
 --[[ Chasis por familia y generación: cada base es un chasis de una época (gen 1 = el de 1970). Las
 	generaciones siguientes se agregan como bases nuevas con la misma familia y gen + 1. ]]
 Catalog.CHASSIS_GEN = {
-	brisa = { "Sedán", 1 }, duna = { "Coupé", 1 }, pixel = { "Compacto", 1 }, toro = { "Pickup", 1 },
+	brisa = { "Sedán", 1 }, brisa2 = { "Sedán", 2 }, brisa3 = { "Sedán", 3 }, duna = { "Coupé", 1 }, duna2 = { "Coupé", 2 },
+	pixel = { "Compacto", 1 }, toro = { "Pickup", 1 },
 	aurora = { "Deportivo", 1 }, titan = { "SUV", 1 }, vento = { "Superdeportivo", 1 }, rayo = { "Eléctrico", 1 },
 }
 for _, p in Catalog.PARTS do
 	partIndex[p.cat .. ":" .. p.id] = p
-	local lv = p.cat == "motor" and Catalog.ENGINE_LEVELS[p.id]
-	if lv then
-		p.family, p.level = lv[1], lv[2]
+	if p.cat == "motor" then
+		p.family = Catalog.ENGINE_FAMILY_OF[p.id]
 	end
 end
 for _, b in Catalog.BASES do
@@ -846,14 +973,32 @@ local researchIndex: { [string]: any } = {}
 for _, key in Catalog.RESEARCH_ORDER do
 	for _, n in Catalog.RESEARCH[key].nodes do
 		n.cat = key
-		local tier = Catalog.RESEARCH_TIERS[n.tier]
-		-- PI = minutos objetivo × PI/min que se espera tener en ese año (más importante = más largo;
-		-- una sede más grande lo termina más rápido). El dinero acompaña al PI.
-		n.rp = math.max(3, math.floor(tier.minutes * Catalog.interp(Catalog.EXPECTED_PI, n.year) + 0.5))
-		n.cost = math.floor(n.rp * Catalog.interp(Catalog.ECON.researchMoneyPerPi, n.year) / 100 + 0.5) * 100
+		-- Costo base según la complejidad (Catalog.RESEARCH_RULES); el año ajusta un poco los PI y el dinero
+		-- sigue a la economía de la época.
+		local R = Catalog.RESEARCH_RULES
+		local c = n.complexity or R.complexityOfTier[n.tier] or 2
+		n.complexity = c
+		n.category = key
+		n.rp = math.max(1, math.floor(R.pi[c] * (1 + R.piEraGrowth * (n.year - 1970)) + 0.5))
+		n.cost = math.floor(R.money[c] * Catalog.interp(R.moneyEra, n.year) / 100 + 0.5) * 100
+		n.days = R.days[c]
 		n.lab = 1
 		researchIndex[n.id] = n
 		Catalog.RESEARCH_NAMES[n.id] = n.name
+	end
+end
+-- La misión «Completá todas las investigaciones» sigue al tamaño real del árbol.
+do
+	local total = 0
+	for _, key in Catalog.RESEARCH_ORDER do
+		total += #Catalog.RESEARCH[key].nodes
+	end
+	Catalog.RESEARCH_TOTAL = total
+	for _, m in Catalog.MISSIONS do
+		if m.id == "s12" then
+			m.goal = total
+			m.desc = "Las " .. total .. " tecnologías del departamento de I+D."
+		end
 	end
 end
 function Catalog.researchNode(id: any): any

@@ -91,6 +91,29 @@ function Bot.bestDesign(g: any, baseId: string, name: string, money: number): an
 		end
 		d.quality = bq
 	end
+	-- Motor: el nivel más alto investigado y la variante que más suma; equipamiento que mejora el puntaje.
+	d.motorLevel = DesignCalc.maxEngineLevel(g, d)
+	local bv, bvs = d.motorVariant, score(g, d)
+	for _, v in Catalog.ENGINE_VARIANTS do
+		if DesignCalc.variantBlock(g, d, v) == nil then
+			d.motorVariant = v.id
+			local sc = score(g, d)
+			if sc > bvs then
+				bv, bvs = v.id, sc
+			end
+		end
+	end
+	d.motorVariant = bv
+	d.equipment = {}
+	for _, eq in Catalog.EQUIPMENT do
+		if DesignCalc.equipmentBlock(g, eq) == nil then
+			local before = score(g, d)
+			table.insert(d.equipment, eq.id)
+			if score(g, d) <= before * 1.005 then
+				table.remove(d.equipment)
+			end
+		end
+	end
 	return d
 end
 
@@ -269,20 +292,30 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 			end
 		end
 	end
+	-- Investigación: varias a la vez (hasta el máximo), siempre la más barata en PI que se pueda pagar sin
+	-- comprometer la fabricación; primero las que no son adelantadas.
 	local function research()
-		if g.research.active then
-			return
-		end
-		local best = nil
-		for _, key in Catalog.RESEARCH_ORDER do
-			for _, n in Catalog.RESEARCH[key].nodes do
-				if Rules.researchState(g, n) == "disponible" and #g.lots > 0 and g.money >= select(2, Rules.researchCost(g, n)) * 3 and (not best or Rules.researchCost(g, n) < Rules.researchCost(g, best)) then
-					best = n
+		while #g.research.projects < Catalog.RESEARCH_RULES.maxParallel do
+			local best, bestPi, bestAhead = nil, math.huge, math.huge
+			for _, key in Catalog.RESEARCH_ORDER do
+				for _, n in Catalog.RESEARCH[key].nodes do
+					if Rules.researchState(g, n) == "disponible" and #g.lots > 0 then
+						local pi, cost, _, info = Rules.researchCost(g, n)
+						if pi <= g.rp and g.money >= cost * 3 and (info.ahead < bestAhead or (info.ahead == bestAhead and pi < bestPi)) then
+							best, bestPi, bestAhead = n, pi, info.ahead
+						end
+					end
 				end
 			end
-		end
-		if best and Actions.startResearch(g, ctx, { id = best.id }).ok then
-			table.insert(log.research, { start = t / 60, id = best.id, name = best.name, rp = g.research.active.rp, cost = g.research.active.paid, tier = best.tier, year = Rules.year(g), nodeYear = best.year })
+			if not best then
+				return
+			end
+			local r = Actions.startResearch(g, ctx, { id = best.id })
+			if not r.ok then
+				return
+			end
+			local proj = g.research.projects[#g.research.projects]
+			table.insert(log.research, { start = t / 60, id = best.id, name = best.name, rp = proj.paidPi, cost = proj.paidMoney, days = proj.days, tier = best.complexity, year = Rules.year(g), nodeYear = best.year })
 		end
 	end
 	local function upgrade()
@@ -467,10 +500,10 @@ if not _G.BALANCE_AS_MODULE then
 	local log = Bot.play(dif, minutes, { verbose = true, flat = flat, single = single, noExpansion = args[4] == "sinexp" })
 	local rs = Bot.researchSummary(log)
 	print(string.format("\nInvestigaciones terminadas: %d · una cada %.1f min en promedio · se investigan %.1f años después de aparecer", rs.done, rs.avgGap, rs.avgLag))
-	for _, k in { "s", "n", "i", "b" } do
+	for k = 1, 5 do
 		local bt = rs.byTier[k]
 		if bt then
-			print(string.format("  %-22s %2d · duración media %.1f min · máxima %.1f min", Catalog.RESEARCH_TIERS[k].label, bt.n, bt.total / bt.n, bt.max))
+			print(string.format("  %-22s %2d · desde que empieza: media %.1f min · máxima %.1f min", Catalog.RESEARCH_RULES.complexityLabel[k], bt.n, bt.total / bt.n, bt.max))
 		end
 	end
 	print("\nPor década (ingresos · fabricación · flujo neto · dinero al cerrar · sede · tecnologías):")
