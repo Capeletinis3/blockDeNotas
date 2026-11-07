@@ -155,7 +155,7 @@ function Screen.build(main: Frame, side: Frame)
 		}, 10, { wrap = true }),
 	}, { gap = 8, name = "Produccion" })
 	if #pending == 0 then
-		Ui.empty("factory", "No hay lotes en producción. Lanzá un lote: la fábrica produce exactamente esa cantidad y se detiene.", nil, { pad = 14 }).Parent = section
+		Ui.empty("factory", "No hay lotes en producción. Ordená un lote: la fábrica produce exactamente esa cantidad y se detiene.", nil, { pad = 14 }).Parent = section
 	end
 	for i, l in pending do
 		local row = lotRow(g, l, i, #pending)
@@ -224,7 +224,7 @@ function Screen.build(main: Frame, side: Frame)
 	}, { gap = 6, name = "Capacidad" }).Parent = side
 	Ui.card({
 		Ui.lbl("Cómo funciona"),
-		Ui.text("1. Lanzá un lote: elegís el diseño, la cantidad y el precio.\n2. Cada línea fabrica un lote; cada unidad se paga al terminarla (" .. "no hay pago por adelantado).\n3. Lo terminado se vende solo según la demanda.\n4. Al completar la cantidad la producción se detiene.\n5. Si falta dinero, la línea espera sin generar deuda.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
+		Ui.text("1. Ordená un lote: elegís el modelo y la cantidad; el costo total se paga al ordenarlo.\n2. Cada modelo tiene un solo lote: para volver a fabricar, creá un modelo nuevo o una nueva generación.\n3. Cada línea fabrica un lote; al completar la cantidad se detiene.\n4. Al terminar, cuatro críticos evalúan el auto.\n5. Elegís el precio y se vende solo según la demanda, las reseñas, el precio y la reputación.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
 	}, { gap = 4, name = "ComoFunciona" }).Parent = side
 	Ui.card({
 		Ui.lbl("Tiempo"),

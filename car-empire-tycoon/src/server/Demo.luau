@@ -115,6 +115,16 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 		l.revenue = sold * l.price
 		l.prodState = prodState
 		l.createdDay = g.time.day - 6
+		-- Con las reglas actuales un lote se fabrica completo antes de venderse: los terminados ya tienen
+		-- reseñas y están a la venta; los demás todavía no vendieron nada.
+		if prodState == "completado" or prodState == "cancelado" then
+			l.review = Rules.criticReviews(g, l.design)
+			l.saleState = "en venta"
+		else
+			l.sold = 0
+			l.revenue = 0
+		end
+		d.lotLaunched = true
 		return l
 	end
 	local scale = imperio and 160 or (avanz and 40 or 1)
@@ -196,7 +206,8 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 			lotMargin += l.sold * (l.price - l.unitCost)
 		end
 	end
-	g.counters.unitsSold = lotSold
+	-- Imperio: una empresa con décadas de ventas (más que las de los lotes visibles), como para expandirse.
+	g.counters.unitsSold = imperio and math.max(lotSold, 200000) or lotSold
 	g.counters.unitsProduced = lotMade
 	g.counters.revenueTotal = lotRev
 	g.counters.marginTotal = lotMargin

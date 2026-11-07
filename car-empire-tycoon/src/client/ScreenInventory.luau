@@ -92,7 +92,7 @@ function Screen.designRow(g: any, d: any): Frame
 		table.insert(actions, Ui.button("Lanzar lote", "p", function()
 			App.closeAllDialogs()
 			App.openDialog("lot", { designId = d.id, wide = true })
-		end, { small = true, name = "LanzarLote" }))
+		end, { small = true, name = "LanzarLote", disabled = d.lotLaunched == true, why = "Este modelo ya tuvo su lote: duplicalo o creá una nueva generación" }))
 		table.insert(actions, Ui.button("Editar", "default", function()
 			App.closeAllDialogs()
 			App.go("editor", { designId = d.id })

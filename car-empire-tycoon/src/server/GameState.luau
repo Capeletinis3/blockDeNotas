@@ -16,12 +16,14 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 6
+GameState.SCHEMA = 7
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
--- Comercialización: en venta / agotado / retirado.
+-- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
+-- / en venta / agotado / retirado. Los tres primeros son lotes activos (g.lots); los otros, historial.
 GameState.PROD_STATES = { cola = true, produciendo = true, ["sin fondos"] = true, pausado = true, completado = true, cancelado = true }
-GameState.SALE_STATES = { ["en venta"] = true, agotado = true, retirado = true }
+GameState.SALE_STATES = { produccion = true, ["por lanzar"] = true, ["en venta"] = true, agotado = true, retirado = true }
+GameState.ACTIVE_SALE = { produccion = true, ["por lanzar"] = true, ["en venta"] = true }
 GameState.DEFAULT_SETTINGS = { sound = true, reduceMotion = false, keyHints = true, textScale = 1, camSpeed = 1, tips = true, shadows = true }
 
 local function freshStations(): any
@@ -316,8 +318,15 @@ function GameState.validate(g: any): (boolean, string?)
 		if not GameState.PROD_STATES[l.prodState] or not GameState.SALE_STATES[l.saleState] then
 			return "El lote " .. l.id .. " tiene un estado desconocido."
 		end
-		if active ~= (l.saleState == "en venta") then
+		if active ~= (GameState.ACTIVE_SALE[l.saleState] == true) then
 			return "El lote " .. l.id .. " está en la lista equivocada."
+		end
+		if (l.saleState == "produccion" or l.saleState == "por lanzar") and l.sold > 0 then
+			return "El lote " .. l.id .. " vendió antes de salir a la venta."
+		end
+		local rv = l.review
+		if rv ~= nil and (type(rv) ~= "table" or not isFinite(rv.avg) or rv.avg < 1 or rv.avg > 10 or not isList(rv.scores)) then
+			return "Las reseñas del lote " .. l.id .. " están dañadas."
 		end
 		if not nonNeg(l.price) or l.price <= 0 or not nonNeg(l.unitCost) or not nonNeg(l.refPrice) or not isFinite(l.appeal) then
 			return "El lote " .. l.id .. " tiene precio o costo inválidos."
@@ -735,6 +744,25 @@ MIGRATIONS[5] = function(g: any, _now: number)
 		g.loans = {}
 	end
 	g.schema = 6
+end
+
+-- 6 → 7: un lote por modelo. Los diseños que ya fabricaron quedan marcados; los lotes que estaban a la
+-- venta siguen igual (sin reseñas: su demanda no cambia).
+MIGRATIONS[6] = function(g: any, _now: number)
+	local used = {}
+	for _, list in { g.lots or {}, g.lotHistory or {} } do
+		for _, l in list do
+			if type(l) == "table" and l.designId ~= nil then
+				used[l.designId] = true
+			end
+		end
+	end
+	for _, d in g.designs or {} do
+		if type(d) == "table" and used[d.id] then
+			d.lotLaunched = true
+		end
+	end
+	g.schema = 7
 end
 
 function GameState.migrate(g: any, now: number): (any?, string?)

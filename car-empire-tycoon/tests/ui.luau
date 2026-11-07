@@ -220,15 +220,16 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	clickN("LanzarLote")
 	eq(topKind(), "lot", "abre el diálogo de lote")
 	check(named("Cantidad_10000") ~= nil and named("Cantidad_50000") ~= nil, "atajos de 10.000 y 50.000")
-	M.type(named("Cantidad"), "40")
-	eq(App.ui.lotDraft and App.ui.lotDraft.qty, 40, "la cantidad escrita se conserva")
+	M.type(named("Cantidad"), "30")
+	eq(App.ui.lotDraft and App.ui.lotDraft.qty, 30, "la cantidad escrita se conserva")
 	check(find("Ventas estimadas") ~= nil, "muestra la estimación de ventas")
+	check(find("Costo total (se paga al ordenar)") ~= nil and find("Tiempo de producción") ~= nil, "muestra el costo total y la duración")
 	clickN("ConfirmarLote")
 	local designId = App.g.designs[1].id
 	check(waitFor(function()
 		return lotOf(designId) ~= nil
 	end), "el lote se crea")
-	eq(lotOf(designId).qty, 40, "con la cantidad elegida")
+	eq(lotOf(designId).qty, 30, "con la cantidad elegida")
 	check(not dialogOpen(), "el diálogo se cierra")
 	-- Con el panel de Producción abierto la empresa está en pausa: ni el calendario ni la fábrica avanzan.
 	local t0, p0 = App.g.time.minute + App.g.time.day * 10000, lotOf(designId).produced
@@ -237,10 +238,31 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	eq(lotOf(designId).produced, p0, "ni la fabricación")
 	App.go("juego")
 	M.task.wait()
-	-- Se fabrica y se vende solo, sin ninguna acción.
+	-- Se fabrica completo; al terminar se abren solas las reseñas de los cuatro críticos.
+	check(waitFor(function()
+		advance(1)
+		return topKind() == "reviews"
+	end, 400), "llegan las reseñas")
+	local lr = lotOf(designId)
+	eq(lr.saleState, "por lanzar", "terminado y sin vender todavía")
+	eq(lr.sold, 0, "no se vendió nada antes de fijar el precio")
+	check(named("Critico_familia") ~= nil and named("Critico_pista") == nil, "los críticos aparecen de a uno")
+	clickN("SaltarResenas")
+	for _, c in { "familia", "pista", "bolsillo", "tendencias" } do
+		check(named("Critico_" .. c) ~= nil, "reseña de " .. c)
+	end
+	check(named("NotaFinal") ~= nil, "nota final")
+	M.type(named("Precio"), tostring(lr.refPrice))
+	clickN("PonerALaVenta")
+	check(waitFor(function()
+		local x = lotOf(designId)
+		return x ~= nil and x.saleState == "en venta"
+	end), "a la venta con el precio elegido")
+	App.go("juego")
+	M.task.wait()
 	for _ = 1, 600 do
-		local l = lotOf(designId)
-		if l and l.sold >= 5 then
+		local x = lotOf(designId)
+		if x and x.sold >= 5 then
 			break
 		end
 		advance(1)
@@ -682,7 +704,9 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 		end
 	end
 	check(saved3d ~= nil and Catalog.resolveVehicleModel(saved3d) ~= nil and Catalog.resolveVehicleModel(saved3d).id == "pioneer70", "el diseño guardado usa el Pioneer 70")
-	local lot = App.request("createLot", { designId = id, qty = 40 })
+	-- El lote se paga al ordenarlo: tantas unidades como alcance (hasta 40).
+	local unit = DesignCalc.computeDesign(App.g, saved3d).unitCost
+	local lot = App.request("createLot", { designId = id, qty = math.min(40, math.floor(App.g.money / unit)) })
 	check(lot.ok, "lanzar lote: " .. tostring(lot.msg))
 	local function garageCars(): { any }
 		local out = {}
@@ -698,7 +722,9 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 		return out
 	end
 	local maxCars, seen3d = 0, false
+	App.go("juego")
 	for _ = 1, 40 do
+		App.closeAllDialogs() -- las reseñas se abren solas al terminar un lote (y pausan la empresa)
 		advance(1)
 		local cars = garageCars()
 		maxCars = math.max(maxCars, #cars)
@@ -759,9 +785,19 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 	clickN("Base_brisa")
 	M.task.wait()
 	eq(App.ui.editor.draft.baseId, "brisa", "eligió el sedán")
+	App.screens.editor.change(function(d)
+		d.name = "Rojo Recorrido"
+	end)
 	App.screens.editor.sync3d()
 	M.task.wait()
-	local inEditor = find3d(gui)
+	-- La vista principal (la de comparación «antes/después» también muestra el sedán de partida).
+	local inEditor = {}
+	for _, m in find3d(gui) do
+		local v = m:FindFirstAncestorWhichIsA("ViewportFrame")
+		if v and v.Name == "Vista" then
+			table.insert(inEditor, m)
+		end
+	end
 	check(#inEditor == 1, "la vista 3D del editor muestra el Pioneer 70 (" .. #inEditor .. ")")
 	local vp = inEditor[1] and inEditor[1]:FindFirstAncestorWhichIsA("ViewportFrame")
 	print("    editor: modelo «" .. tostring(inEditor[1] and inEditor[1].Name) .. "» dentro de " .. tostring(vp and vp:GetFullName()))
@@ -791,6 +827,15 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 	App.closeAllDialogs()
 	App.go("fabrica")
 	M.task.wait()
+	-- Capital de prueba en el servidor (las pruebas anteriores gastaron el de esta empresa).
+	local inst = Sessions.instance
+	local sess = inst and inst.list[player]
+	sess.game.money = 2000000
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 2000000
+	end)
+	App.ui.lotDraft = nil
 	App.openDialog("lot", { designId = saved.id })
 	M.task.wait()
 	clickN("ConfirmarLote")
@@ -812,6 +857,7 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 		if next(found) ~= nil and #App.g.lots > 0 and App.g.lots[#App.g.lots].produced >= 3 then
 			break
 		end
+		App.closeAllDialogs() -- las reseñas se abren solas al terminar un lote (y pausan la empresa)
 		advance(1)
 		for _, c in find3d(M.services.Workspace) do
 			local body = c:FindFirstChild("Body_Paint")

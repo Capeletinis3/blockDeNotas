@@ -744,6 +744,22 @@ function App.onState(payload: any)
 		for _, fn in dialogLive do
 			pcall(fn, App.g)
 		end
+		App.checkNewReviews()
+	end
+end
+
+-- Cuando un lote termina de fabricarse llegan las reseñas: se muestran una vez (fuera del editor).
+App.ui.reviewsSeen = App.ui.reviewsSeen or {}
+function App.checkNewReviews()
+	if not App.g or App.ui.route == "editor" or App.ui.route == "menu" or App.ui.route == "nueva" then
+		return
+	end
+	for _, l in App.g.lots do
+		if l.saleState == "por lanzar" and l.review and not App.ui.reviewsSeen[l.id] then
+			App.ui.reviewsSeen[l.id] = true
+			App.openDialog("reviews", { lotId = l.id })
+			return
+		end
 	end
 end
 

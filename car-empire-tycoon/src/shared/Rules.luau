@@ -305,6 +305,117 @@ function Rules.indices(calc: any): any
 	}
 end
 
+-- Reseñas de los críticos ---------------------------------------------------------------------
+
+-- Multiplicador de demanda por las reseñas (1 sin reseñas: lotes de versiones anteriores).
+function Rules.reviewFactor(lot: any): number
+	local rv = lot.review
+	if type(rv) ~= "table" or type(rv.avg) ~= "number" then
+		return 1
+	end
+	return Util.clamp(math.pow(rv.avg / 6, ECON.reviewElasticity), 0.3, 2)
+end
+
+-- Variación propia de cada crítico para cada modelo (−0,3 a +0,3), fija: depende solo del modelo y del crítico.
+local function criticOffset(key: string): number
+	local h = 7
+	for i = 1, #key do
+		h = (h * 31 + string.byte(key, i)) % 1000003
+	end
+	return ((h % 7) - 3) / 10
+end
+
+local REVIEW_TEXT = {
+	familia = {
+		"Un acierto para las familias: %s está entre lo mejor de %d.",
+		"Cumple como auto familiar, aunque %s podría estar mejor.",
+		"Cuesta recomendarlo para la familia: %s queda muy atrás.",
+	},
+	pista = {
+		"Pura emoción: %s deja atrás a la competencia de %d.",
+		"Correcto en la ruta, pero %s no entusiasma.",
+		"Sin chispa: %s decepciona a cualquier conductor.",
+	},
+	bolsillo = {
+		"Una compra inteligente: %s cuida el bolsillo como pocos en %d.",
+		"Razonable, aunque %s pesa en el presupuesto.",
+		"Difícil de justificar: %s no convence.",
+	},
+	tendencias = {
+		"Bien terminado y moderno: %s marca tendencia en %d.",
+		"Prolijo, aunque %s ya se ve de otra época.",
+		"Se nota anticuado: %s no está a la altura.",
+	},
+}
+
+--[[ Reseñas de un auto terminado: { avg, scores = { { critic, name, outlet, score, text }… }, year }.
+	Dependen de las estadísticas reales del diseño (calc), su nivel tecnológico frente al año y la calidad;
+	no hay azar. Se calculan una vez (Simulation.reviewLot) y se guardan en el lote y en el historial. ]]
+function Rules.criticReviews(g: any, design: any): any
+	local calc, spec = design.calc, design.spec
+	local yf = Rules.yearFrac(g)
+	local year = Rules.year(g)
+	local idx = Rules.indices(calc)
+	-- Diferencia de cada aspecto con lo que se espera de un auto de la época (positivo = mejor).
+	local dev = {}
+	for k, curve in Catalog.CRITIC_EXPECT do
+		dev[k] = (idx[k] or 50) - Catalog.interp(curve, yf)
+	end
+	-- Tecnología: cuántos años atrás quedó cada pieza frente a la más nueva que la empresa YA podía usar en esa
+	-- categoría (existente en el año, investigada y compatible con la base). Elegir lo último suma; quedarse con
+	-- piezas viejas teniendo mejores, resta.
+	local base = Catalog.base(spec.baseId)
+	local lag, n = 0, 0
+	for cat, id in spec.parts or {} do
+		local p = Catalog.part(cat, id)
+		if p then
+			local top = p.year or year
+			for _, x in Catalog.partsOf(cat) do
+				local usable = (x.year or 1970) <= year and (x.research == nil or Rules.has(g, x.research))
+					and (x.need == nil or (base ~= nil and Util.contains(base.tags, x.need)))
+				if usable and x.year > top then
+					top = x.year
+				end
+			end
+			lag += math.min(15, top - (p.year or year))
+			n += 1
+		end
+	end
+	dev.tech = 6 - 1.5 * (n > 0 and lag / n or 0)
+	-- Relación entre lo que ofrece y lo que cuesta fabricarlo, frente al precio habitual del tipo.
+	local fair = Rules.fairPrice(design.type, yf, 0)
+	dev.value = -(calc.unitCost / math.max(1, fair) - 0.65) * 50 + (dev.quality or 0) * 0.3
+	local scores = {}
+	local sum = 0
+	for _, c in Catalog.CRITICS do
+		local raw, best, worst, bv, wv = 0, nil, nil, -math.huge, math.huge
+		for k, w in c.weights do
+			local v = dev[k] or 0
+			raw += v * w
+			if v > bv then
+				best, bv = k, v
+			end
+			if v < wv then
+				worst, wv = k, v
+			end
+		end
+		local score = Util.clamp(6 + raw / ECON.reviewScale + criticOffset(tostring(design.id) .. ":" .. c.id), 1, 10)
+		score = math.floor(score * 10 + 0.5) / 10
+		local t = REVIEW_TEXT[c.id] or REVIEW_TEXT.familia
+		local text
+		if score >= 7.5 then
+			text = string.format(t[1], Catalog.CRITIC_ASPECTS[best :: string], year)
+		elseif score >= 5 then
+			text = string.format(t[2], Catalog.CRITIC_ASPECTS[worst :: string])
+		else
+			text = string.format(t[3], Catalog.CRITIC_ASPECTS[worst :: string])
+		end
+		table.insert(scores, { critic = c.id, name = c.name, outlet = c.outlet, score = score, text = text })
+		sum += score
+	end
+	return { avg = math.floor(sum / #scores * 10 + 0.5) / 10, scores = scores, year = year }
+end
+
 -- Atractivo (0–100) de un auto para sus compradores: 40 % calidad + 60 % lo que pide su objetivo.
 function Rules.appeal(calc: any, spec: any): (number, any)
 	local idx = Rules.indices(calc)
@@ -429,7 +540,7 @@ end
 function Rules.lotWeight(g: any, lot: any, yearFrac: number): number
 	local baseline = Rules.eraBaseline(yearFrac)
 	local seg = Catalog.SEGMENTS[lot.design.spec.segment] or Catalog.SEGMENTS.Masivo
-	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop
+	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop * Rules.reviewFactor(lot)
 end
 
 --[[ Reparto de la demanda de un tipo entre: el resto del mercado (peso fijo), los modelos rivales y los

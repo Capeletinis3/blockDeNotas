@@ -187,6 +187,7 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 		return pick
 	end
 	local current: { [string]: any } = {} -- tipo → diseño vigente
+	local serial = 0
 	local function save(d: any, newGenOf: string?): any
 		local r = Actions.saveDesign(g, ctx, { draft = Util.deepCopy(d), newGenOf = newGenOf })
 		if r.ok then
@@ -211,28 +212,54 @@ function Bot.play(difficulty: string, minutes: number, opts: any?): any
 						current[typeId] = x
 						mark("diseño " .. typeId, x.name .. " " .. x.generation)
 					end
-				elseif not flat and Rules.year(g) >= (cur.modelYear or 1970) + 6 then
-					local d = Bot.bestDesign(g, baseId, cur.name, g.money)
-					local x = save(d, cur.id)
-					if x then
-						log.generations += 1
-						current[typeId] = x
-						if verbose then
-							print(string.format("  %6.1f min  %-8s nueva generación %s %s", t / 60, Util.gameDate(g.time.day), x.name, x.generation))
+				elseif (not flat and Rules.year(g) >= (cur.modelYear or 1970) + 6) or (cur.lotLaunched and not lotOf(cur.id)) then
+					local old = cur
+					-- Un lote por modelo: para volver a fabricar, nueva generación (si ya se puede) o modelo nuevo.
+					if not flat and Rules.canNewGeneration(g, cur) then
+						local d = Bot.bestDesign(g, baseId, cur.name, g.money)
+						local x = save(d, cur.id)
+						if x then
+							log.generations += 1
+							current[typeId] = x
+							if verbose then
+								print(string.format("  %6.1f min  %-8s nueva generación %s %s", t / 60, Util.gameDate(g.time.day), x.name, x.generation))
+							end
 						end
+					elseif cur.lotLaunched and not lotOf(cur.id) then
+						serial += 1
+						local d = flat and Util.deepCopy(cur) or Bot.bestDesign(g, baseId, cur.name, g.money)
+						d.id, d.lineage, d.gen, d.lotLaunched, d.template = nil, nil, 1, nil, nil
+						d.name = Util.truncateChars(Catalog.TYPES[typeId], 14) .. " Bot " .. serial
+						local x = save(d)
+						if x then
+							current[typeId] = x
+						end
+					end
+					-- El modelo anterior ya vendió su lote: se borra (su historia queda en el historial).
+					if current[typeId] ~= old and old.lotLaunched and not lotOf(old.id) then
+						Actions.delDesign(g, ctx, { designId = old.id })
 					end
 				end
 			end
 		end
 	end
 	local function launch()
+		-- Lotes terminados con reseñas: salen a la venta al mejor precio estimado.
+		for _, l in g.lots do
+			if l.saleState == "por lanzar" then
+				local p = Bot.bestPrice(g, l.design.spec)
+				local lo, hi = Rules.priceRange(l.unitCost, l.refPrice)
+				Actions.launchSale(g, ctx, { lotId = l.id, price = math.clamp(p, lo, hi) })
+			end
+		end
 		for _, x in current do
-			if not lotOf(x.id) and #g.lots < Catalog.RULES.maxActiveLots then
+			if not x.lotLaunched and not lotOf(x.id) and #g.lots < Catalog.RULES.maxActiveLots then
 				local c = DesignCalc.computeDesign(g, x)
 				local price = Bot.bestPrice(g, x)
 				local est = Rules.designSalesEstimate(g, c, x, price)
 				local share = #g.lots == 0 and 0.8 or 0.5
-				local qty = math.floor(math.min(math.min(est.rate, Rules.lineRate(g) * 1.5) * 10, g.money * share / c.unitCost))
+				-- Un lote por modelo: lotes de ≈ 20 minutos de ventas (la ingeniería se paga por modelo).
+				local qty = math.floor(math.min(math.min(est.rate, Rules.lineRate(g) * 1.5) * 20, g.money * share / c.unitCost))
 				if qty >= 10 then
 					local r = Actions.createLot(g, ctx, { designId = x.id, qty = qty, price = price })
 					if r.ok then

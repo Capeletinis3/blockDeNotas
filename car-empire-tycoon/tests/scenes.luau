@@ -336,6 +336,26 @@ function Scenes.list(_ctx: any): { any }
 			c.M.click(b)
 		end
 	end)
+	dlg("dlg-resenas", "Reseñas y precio de lanzamiento", function(c)
+		demo(c, "operacion")
+		local inst = c.Sessions.instance
+		local s = inst and inst.list[c.player]
+		local lotId = nil
+		if s and s.game then
+			for _, l in s.game.lots do
+				if l.review and not lotId then
+					lotId = l.id
+					l.sold, l.revenue, l.saleState = 0, 0, "por lanzar"
+				end
+			end
+			inst:push(s)
+			c.M.task.wait()
+		end
+		c.App.ui.reviewShown = { [lotId] = 4 }
+		go(c, "juego")
+		c.App.closeAllDialogs()
+		c.App.openDialog("reviews", { lotId = lotId })
+	end)
 	dlg("dlg-ampliar", "Ampliar sede", function(c)
 		demo(c, "operacion")
 		-- Como la V3: se cumplen los requisitos de la próxima sede.

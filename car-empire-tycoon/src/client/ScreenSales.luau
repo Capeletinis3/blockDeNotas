@@ -27,6 +27,8 @@ local Screen = {
 
 -- Estados comerciales: { texto, chip }
 Screen.SALE = {
+	produccion = { "En fabricación", "cy" },
+	["por lanzar"] = { "Por lanzar · elegí el precio", "cv" },
 	["en venta"] = { "En venta", "cg" },
 	agotado = { "Agotado", "cb" },
 	retirado = { "Retirado", "cn" },
@@ -155,7 +157,11 @@ local function lotCard(g: any, l: any): Frame
 			Ui.grow(Ui.col({
 				Ui.text(l.design.name, { size = 16, weight = W.bold }),
 				Ui.text((spec.generation or (tostring(l.design.modelYear) .. " · " .. tostring(l.design.gen) .. ".ª gen.")) .. " · " .. (Catalog.TYPES[l.design.type] or l.design.type), { size = Ui.S.xs, color = T.mut }),
-				Ui.row({ Ui.chip(st[1], st[2]), Ui.chip(ps[1], ps[2]) }, 6, { wrap = true }),
+				Ui.row({
+					Ui.chip(st[1], st[2]),
+					Ui.chip(ps[1], ps[2]),
+					l.review and Ui.chip("Críticos " .. Util.num(l.review.avg, 1) .. "/10", l.review.avg >= 7 and "cg" or (l.review.avg >= 5 and "cy" or "cr")) or nil,
+				}, 6, { wrap = true }),
 			}, 4)),
 			Ui.col({
 				Ui.inline("Precio", { size = Ui.S.xs, color = T.mut }),
@@ -166,10 +172,17 @@ local function lotCard(g: any, l: any): Frame
 		Ui.grid({ cQty, cProd, cPend, cAvail, cSold, cRate, cRev, cCost, cRes }, App.isPhone() and 3 or (App.layout == "desktop" and 9 or 5), nil, 10),
 		Ui.row({ Ui.grow(bar), barText }, 10),
 		l.price < l.unitCost and Ui.note("r", "El precio está por debajo del costo: cada venta pierde " .. Util.money(l.unitCost - l.price) .. ".") or nil,
+		l.saleState == "produccion" and Ui.note("b", "Se vende cuando termina de fabricarse: llegan las reseñas y elegís el precio.") or nil,
 		Ui.row({
-			Ui.button("Modificar precio", "default", function()
+			l.saleState == "por lanzar" and Ui.button("Ver reseñas y poner a la venta", "p", function()
+				App.openDialog("reviews", { lotId = l.id })
+			end, { small = true, icon = "tag", iconSize = 14, name = "PonerVenta" }) or nil,
+			(l.review and l.saleState ~= "por lanzar") and Ui.button("Reseñas", "default", function()
+				App.openDialog("reviews", { lotId = l.id })
+			end, { small = true, name = "VerResenas" }) or nil,
+			l.saleState == "en venta" and Ui.button("Modificar precio", "default", function()
 				App.openDialog("price", { lotId = l.id })
-			end, { small = true, icon = "tag", iconSize = 14, name = "ModificarPrecio" }),
+			end, { small = true, icon = "tag", iconSize = 14, name = "ModificarPrecio" }) or nil,
 			Ui.spacer(),
 			Ui.button("Cerrar venta", "d", function()
 				Screen.askClose(l)
@@ -211,7 +224,7 @@ function Screen.build(main: Frame, side: Frame)
 	tabs.Parent = main
 	if tab == "venta" then
 		if #selling == 0 then
-			Ui.empty("tag", "No hay modelos a la venta. Lanzá un lote en Producción: cada auto terminado se vende solo.", Ui.button("Lanzar lote", "p", function()
+			Ui.empty("tag", "No hay modelos a la venta. Ordená un lote en Producción: al terminar llegan las reseñas, elegís el precio y se vende solo.", Ui.button("Lanzar lote", "p", function()
 				App.openDialog("lot", { wide = true })
 			end, { small = true, name = "LanzarLote" })).Parent = main
 		end

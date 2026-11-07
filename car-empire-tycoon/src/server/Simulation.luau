@@ -174,7 +174,8 @@ function Simulation.makeLot(g: any, snap: any, qty: number, price: number): any
 		prodProgress = 0,
 		saleAcc = 0,
 		prodState = "cola",
-		saleState = "en venta",
+		-- Se fabrica completo antes de vender: al terminar llegan las reseñas y el jugador lo pone a la venta.
+		saleState = "produccion",
 		createdDay = g.time.day,
 		monthSold = 0,
 		lastMonthSold = 0,
@@ -214,6 +215,9 @@ function Simulation.archiveLot(g: any, lot: any)
 	e.bestMonth = math.max(e.bestMonth, lot.bestMonth)
 	e.lastDay = g.time.day
 	e.name = lot.design.name
+	if lot.review then
+		e.review = lot.review.avg
+	end
 	GameState.noteRecords(g, e, { name = lot.design.name, gen = lot.design.gen, sold = lot.sold, profit = profit, bestMonth = lot.bestMonth, day = g.time.day })
 	table.insert(g.lotHistory, 1, GameState.slimLot(lot))
 	GameState.trim(g, e.key)
@@ -228,18 +232,21 @@ function Simulation.stepProduction(g: any, ctx: any, minutes: number)
 		local pending = lot.qty - lot.produced
 		lot.prodProgress += rate
 		local n = math.min(math.floor(lot.prodProgress), pending)
-		if n > 0 then
-			-- Se cobra cada unidad al terminarla; si no alcanza, se fabrican solo las que se pueden pagar.
+		if n > 0 and not lot.prepaid then
+			-- Lotes de versiones anteriores: se cobra cada unidad al terminarla; si no alcanza, se fabrican
+			-- solo las que se pueden pagar. (Los lotes nuevos se pagan completos al ordenarlos.)
 			local affordable = lot.unitCost > 0 and math.floor(g.money / lot.unitCost) or n
 			if affordable < n then
 				n = affordable
 			end
 		end
 		if n > 0 then
-			local cost = n * lot.unitCost
-			g.money -= cost
-			flow(g, "fabricacion", -cost)
-			lot.costSpent += cost
+			if not lot.prepaid then
+				local cost = n * lot.unitCost
+				g.money -= cost
+				flow(g, "fabricacion", -cost)
+				lot.costSpent += cost
+			end
 			lot.produced += n
 			lot.prodProgress -= n
 			lot.prodState = "produciendo"
@@ -250,7 +257,7 @@ function Simulation.stepProduction(g: any, ctx: any, minutes: number)
 				lot.prodState = "completado"
 				lot.prodProgress = 0
 				Simulation.addXp(g, ctx, 40)
-				Simulation.notify(g, ctx, "ok", "Lote terminado: " .. Util.num(lot.qty) .. " × " .. lot.design.name .. ". La producción se detuvo.", "fabrica")
+				Simulation.reviewLot(g, ctx, lot)
 			end
 		elseif pending > 0 and lot.prodProgress >= 1 then
 			-- Hay unidades listas para terminar pero no hay dinero: se pausa sin acumular más avance.
@@ -268,6 +275,21 @@ function Simulation.stepProduction(g: any, ctx: any, minutes: number)
 		if not busy[lot.id] and Rules.lotProducing(lot) and lot.prodState ~= "pausado" then
 			lot.prodState = "cola"
 		end
+	end
+end
+
+--[[ Fin de la fabricación: los cuatro críticos evalúan el auto (una sola vez; queda guardado) y el lote pasa a
+	«por lanzar» hasta que el jugador fija el precio (Actions.launchSale). Un lote que ya estaba a la venta
+	(partidas anteriores) no cambia de estado. ]]
+function Simulation.reviewLot(g: any, ctx: any, lot: any)
+	if lot.review == nil then
+		lot.review = Rules.criticReviews(g, lot.design)
+	end
+	if lot.saleState == "produccion" then
+		lot.saleState = "por lanzar"
+		Simulation.notify(g, ctx, "ok", "Lote terminado: " .. Util.num(lot.produced) .. " × " .. lot.design.name .. ". Llegaron las reseñas (" .. Util.num(lot.review.avg, 1) .. "/10): elegí el precio y ponelo a la venta.", "ventas")
+	else
+		Simulation.notify(g, ctx, "ok", "Lote terminado: " .. Util.num(lot.qty) .. " × " .. lot.design.name .. ". La producción se detuvo.", "fabrica")
 	end
 end
 

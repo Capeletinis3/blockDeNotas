@@ -287,6 +287,12 @@ function DesignCalc.engineeringCost(g: any, d: any, kind: string?): number
 	if kind == "version" then
 		base *= Catalog.ECON.engineeringVersion
 	end
+	-- Programa modesto: con poco dinero, la ingeniería no supera engineeringCashShare del dinero disponible
+	-- (con un piso de engineeringFloor del costo normal). Evita que una empresa sin modelos fabricables
+	-- quede trabada (cada modelo tiene un solo lote).
+	if g and type(g.money) == "number" then
+		base = math.min(base, math.max(base * Catalog.ECON.engineeringFloor, g.money * Catalog.ECON.engineeringCashShare))
+	end
 	return round(base * (1 - DesignCalc.designDiscount(g)) / 100) * 100
 end
 

@@ -62,6 +62,11 @@ Catalog.RULES = {
 	unitCostScale: los costos por unidad del catálogo (heredados de la V3) se multiplican por este factor
 	para que fabricar cientos o miles de autos tenga sentido con el capital inicial. ]]
 Catalog.ECON = {
+	-- Reseñas: la nota media de los críticos multiplica la demanda del modelo por (nota / 6) ^ reviewElasticity
+	-- (un 6 es neutro; un 9 vende ≈ 1,6 veces más y un 3, la mitad). reviewScale: cuántos puntos de índice
+	-- (0–100) por encima de lo que espera la época valen un punto de nota.
+	reviewElasticity = 1.2,
+	reviewScale = 5.5, -- puntos de índice por encima de lo esperado en la época que valen un punto de nota
 	unitCostScale = 0.12,
 	priceMarkup = 1.3, -- precio de referencia = costo × 1,3 + prima de calidad y prestaciones
 	priceElasticity = 2.8, -- cuánto cambian las ventas con el precio respecto de la referencia
@@ -87,6 +92,8 @@ Catalog.ECON = {
 	-- estéticos (pintura, llantas, interior, nombre) no pagan ingeniería.
 	engineering = { { 1970, 3000 }, { 1980, 30000 }, { 1990, 300000 }, { 2000, 2000000 }, { 2010, 6000000 }, { 2030, 12000000 } },
 	engineeringVersion = 0.25,
+	engineeringCashShare = 0.25, -- con poco dinero, la ingeniería no supera este porcentaje del dinero disponible
+	engineeringFloor = 0.1, -- … pero nunca baja del 10 % del costo normal
 	-- Costo en dinero de una investigación: $ por PI según la época (los ingresos crecen con los años).
 	researchMoneyPerPi = { { 1970, 600 }, { 1980, 1500 }, { 1990, 4000 }, { 2000, 8000 }, { 2010, 12000 }, { 2030, 16000 } },
 }
@@ -114,7 +121,7 @@ Catalog.EXPECTED_PI = { { 1970, 3 }, { 1972, 8 }, { 1975, 20 }, { 1982, 45 }, { 
 Catalog.DIFFICULTIES = {
 	facil = { id = "facil", label = "Relajado", money = 150000, desc = "Más capital inicial y 15 % más de demanda.", demand = 1.15, dots = 1 },
 	normal = { id = "normal", label = "Normal", money = 90000, desc = "Capital y demanda de referencia. La experiencia recomendada.", demand = 1, dots = 2 },
-	dificil = { id = "dificil", label = "Magnate", money = 50000, desc = "Menos capital y 15 % menos de demanda. El primer lote tiene que ser chico.", demand = 0.85, dots = 3 },
+	dificil = { id = "dificil", label = "Magnate", money = 65000, desc = "Menos capital y 15 % menos de demanda. El primer lote tiene que ser chico.", demand = 0.85, dots = 3 },
 }
 Catalog.DIFFICULTY_ORDER = { "facil", "normal", "dificil" }
 
@@ -181,22 +188,22 @@ Catalog.DEMAND = {
 --[[ Vehículos base. year = año desde el que existe la plataforma; research = tecnología que la habilita.
 	Costos por unidad en la escala del catálogo (se multiplican por ECON.unitCostScale). safety = seguridad de serie. ]]
 Catalog.BASES = {
-	{ id = "pixel", name = "Pixel C1", brand = "Nordia", type = "compacto", level = 1, year = 1970, research = nil, rarity = "Común",
+	{ id = "pixel", name = "Pixel C1", brand = "Nordia", type = "compacto", level = 1, year = 1972, research = nil, rarity = "Común",
 		dev = 12000, unit = 7800, weight = 1080, handling = 58, comfort = 60, durability = 80, quality = 55, safety = 40, drag = 0.33, build = 150,
 		tags = { "combustion" }, mats = { acero = 6, aluminio = 2, pintura = 1, electronica = 1 }, pop = 1.2,
 		defaults = { motor = "i4", turbo = "none", transmision = "man4", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
-	{ id = "brisa", name = "Brisa Sedán", brand = "Vortex", type = "sedan", level = 1, year = 1970, research = nil, rarity = "Común",
+	{ id = "brisa", name = "Sedán básico 1970", brand = "Vortex", type = "sedan", level = 1, year = 1970, research = nil, rarity = "Común",
 		dev = 16000, unit = 10500, weight = 1350, handling = 60, comfort = 72, durability = 82, quality = 60, safety = 45, drag = 0.29, build = 180,
 		tags = { "combustion" }, mats = { acero = 8, aluminio = 3, pintura = 1, electronica = 1 }, pop = 1.1,
 		defaults = { motor = "i4", turbo = "none", transmision = "auto3", traccion = "fwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
-	{ id = "toro", name = "Toro Pickup", brand = "Kodiak", type = "pickup", level = 1, year = 1970, research = nil, rarity = "Común",
+	{ id = "toro", name = "Toro Pickup", brand = "Kodiak", type = "pickup", level = 1, year = 1973, research = nil, rarity = "Común",
 		dev = 14000, unit = 9800, weight = 1750, handling = 46, comfort = 52, durability = 92, quality = 56, safety = 38, drag = 0.40, build = 230,
 		tags = { "combustion", "offroad" }, mats = { acero = 13, aluminio = 2, pintura = 2, electronica = 1 }, pop = 0.95,
-		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "x4", frenos = "std", suspension = "offroad", neumaticos = "at", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
-	{ id = "duna", name = "Duna Coupé", brand = "Halcón", type = "clasico", level = 1, year = 1970, research = nil, rarity = "Rara",
+		defaults = { motor = "i6", turbo = "none", transmision = "man4", traccion = "x4", frenos = "std", suspension = "offroad", neumaticos = "at", bateria = "b12", refrigeracion = "std", escape = "std", peso = "none", seguridad = "basica" } },
+	{ id = "duna", name = "Coupé básico 1970", brand = "Halcón", type = "clasico", level = 1, year = 1970, research = nil, rarity = "Rara",
 		dev = 22000, unit = 12500, weight = 1320, handling = 62, comfort = 64, durability = 72, quality = 64, safety = 40, drag = 0.36, build = 260,
 		tags = { "combustion" }, mats = { acero = 9, aluminio = 2, pintura = 2, electronica = 1, cuero = 2 }, pop = 0.9,
-		defaults = { motor = "v6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
+		defaults = { motor = "i6", turbo = "none", transmision = "man4", traccion = "rwd", frenos = "std", suspension = "confort", neumaticos = "touring", bateria = "b12", refrigeracion = "std", escape = "sport", peso = "none", seguridad = "basica" } },
 	{ id = "aurora", name = "Aurora GT", brand = "Vortex", type = "deportivo", level = 1, year = 1975, research = "ca2", rarity = "Rara",
 		dev = 30000, unit = 16500, weight = 1380, handling = 74, comfort = 55, durability = 74, quality = 66, safety = 42, drag = 0.30, build = 240,
 		tags = { "combustion" }, mats = { acero = 7, aluminio = 5, pintura = 1, electronica = 2 }, pop = 1.0,
@@ -304,11 +311,12 @@ end
 
 Catalog.PARTS = {
 	-- Motor
-	P("i4e", "motor", "4 cilindros 1.3", "Común", 1970, nil, 0, 1700, "combustion", { hp = 68, kg = -25, eff = 9, dur = 5 }, "El más económico: gasta poco y casi no se rompe."),
-	P("i4", "motor", "4 cilindros 1.6", "Común", 1970, nil, 0, 2200, "combustion", { hp = 95, kg = 0, eff = 4, dur = 4 }, "Económico y confiable."),
+	P("i4e", "motor", "4 cilindros 1.3 económico", "Común", 1973, nil, 0, 1700, "combustion", { hp = 68, kg = -25, eff = 9, dur = 5 }, "El más económico: gasta poco y casi no se rompe."),
+	P("i4", "motor", "I4 1.6 · nivel 1", "Común", 1970, nil, 0, 2200, "combustion", { hp = 95, kg = 0, eff = 4, dur = 4 }, "Cuatro cilindros en línea: económico y confiable."),
+	P("i6", "motor", "I6 2.5 · nivel 1", "Común", 1970, nil, 2500, 3200, "combustion", { hp = 125, kg = 45, eff = -1, dur = 5, q = 1 }, "Seis cilindros en línea: suave, robusto y con más fuerza que el I4."),
 	P("i4v", "motor", "4 cilindros 2.0 16V", "Rara", 1984, "mo4", 7000, 3300, "combustion", { hp = 140, kg = 10, eff = 5, dur = 3, q = 2 }, "Inyección electrónica y cuatro válvulas por cilindro."),
 	P("i3t", "motor", "3 cilindros 1.0 turbo", "Rara", 2012, "mo8", 9000, 3000, "combustion", { hp = 120, kg = -30, eff = 13, dur = 2, q = 2 }, "Pequeño, con inyección directa y turbo integrado."),
-	P("v6", "motor", "V6 2.8", "Rara", 1970, nil, 6000, 4800, "combustion", { hp = 150, kg = 60, eff = -4, q = 2 }, "Más fuerza para sedanes y pickups."),
+	P("v6", "motor", "V6 2.8", "Rara", 1975, nil, 6000, 4800, "combustion", { hp = 150, kg = 60, eff = -4, q = 2 }, "Más fuerza para sedanes y pickups."),
 	P("v6i", "motor", "V6 3.5 de distribución variable", "Rara", 1993, "mo6", 12000, 6200, "combustion", { hp = 235, kg = 55, eff = -1, q = 4, dur = 2 }, "Potente y eficiente a la vez."),
 	P("v8", "motor", "V8 5.0", "Épica", 1970, "mo2", 18000, 9500, "combustion", { hp = 230, kg = 110, eff = -10, q = 4, dur = -3 }, "Gran cilindrada para deportivos."),
 	P("v8d", "motor", "V8 6.2 de inyección directa", "Épica", 2006, "mo8", 26000, 12500, "combustion", { hp = 430, kg = 120, eff = -6, q = 6 }, "Mucha potencia con un consumo razonable."),
@@ -486,6 +494,36 @@ Catalog.STATIONS = {
 Catalog.STATION_SPEED = 0.06 -- +6 % de producción por nivel de cada estación por encima del 1
 -- Departamentos: { id, nombre, rol ideal, efecto }. El personal es una ayuda secundaria: nunca obligatorio.
 Catalog.ROLES = { "Mecánico", "Ingeniero", "Diseñador", "Inspector", "Vendedor", "Marketing", "Gerente" }
+--[[ Críticos especializados: cada uno pondera distintos aspectos del auto (índices 0–100 de Rules.indices más
+	«tech», el nivel tecnológico frente a la época). La nota (1–10) compara eso con lo que espera el mercado
+	ese año: un auto promedio de su época saca ≈ 5,5. Las reseñas se calculan UNA vez, al terminar el lote, y
+	se guardan. ]]
+Catalog.CRITICS = {
+	{ id = "familia", name = "Marta Ríos", outlet = "Revista Ruta & Familia", style = "Piensa en la familia: comodidad, seguridad y que no se rompa.",
+		weights = { comfort = 0.35, safety = 0.35, dur = 0.3 } },
+	{ id = "pista", name = "Tomás Vega", outlet = "Pista Libre", style = "Fanático de las prestaciones: aceleración, velocidad y manejo.",
+		weights = { power = 0.55, hand = 0.35, quality = 0.1 } },
+	{ id = "bolsillo", name = "Elena Duarte", outlet = "El Bolsillo Motor", style = "Cuida cada peso: consumo, confiabilidad y lo que cuesta fabricarlo.",
+		weights = { eco = 0.45, dur = 0.3, value = 0.25 } },
+	{ id = "tendencias", name = "Héctor Lanz", outlet = "Clásicos y Tendencias", style = "Mira la terminación y si el auto está a la altura de su época.",
+		weights = { quality = 0.5, tech = 0.5 } },
+}
+-- Lo que espera un crítico de un auto promedio de cada época (índices 0–100 de Rules.indices). Un auto justo
+-- en lo esperado saca 6; cada `reviewScale` puntos de diferencia ponderada suman o restan uno.
+Catalog.CRITIC_EXPECT = {
+	power = { { 1970, 15 }, { 1990, 45 }, { 2010, 60 }, { 2030, 65 } },
+	eco = { { 1970, 80 }, { 2030, 80 } },
+	comfort = { { 1970, 78 }, { 1990, 80 }, { 2010, 85 }, { 2030, 88 } },
+	safety = { { 1970, 50 }, { 1990, 70 }, { 2010, 75 }, { 2030, 80 } },
+	dur = { { 1970, 85 }, { 1990, 90 }, { 2030, 93 } },
+	hand = { { 1970, 60 }, { 1990, 70 }, { 2030, 75 } },
+	quality = { { 1970, 70 }, { 1990, 78 }, { 2010, 85 }, { 2030, 88 } },
+}
+Catalog.CRITIC_ASPECTS = {
+	comfort = "la comodidad", safety = "la seguridad", dur = "la confiabilidad", power = "las prestaciones", hand = "el manejo",
+	eco = "el consumo", quality = "la terminación", tech = "la tecnología", value = "la relación entre lo que ofrece y lo que cuesta",
+}
+
 Catalog.FIRST = { "Sofía", "Mateo", "Lara", "Julián", "Carla", "Ramiro", "Elena", "Diego", "Ana", "Pablo", "Inés", "Tomás", "Valentina", "Bruno", "Camila", "Martina", "Lucía", "Joaquín", "Abril", "Nicolás" }
 Catalog.LAST = { "Arce", "Ruiz", "Sosa", "Paz", "Vega", "Gil", "Bruno", "Mora", "Núñez", "Ortiz", "Ríos", "Pereyra", "Luna", "Ferrari", "Medina", "Romero" }
 
@@ -619,8 +657,8 @@ Catalog.RIVALS = {
 -- reward.pi = puntos de investigación.
 Catalog.MISSIONS = {
 	{ id = "t1", kind = "tutorial", title = "Diseñá y guardá tu primer auto", desc = "Abrí Diseño, elegí una base y guardá el proyecto en Revisión.", counter = "designsSaved", goal = 1, reward = { money = 15000, pi = 2, xp = 200 }, go = "editor" },
-	{ id = "t2", kind = "tutorial", title = "Lanzá tu primer lote", desc = "En Producción, elegí el diseño y cuántas unidades fabricar.", counter = "lotsLaunched", goal = 1, reward = { money = 10000, xp = 150 }, go = "fabrica" },
-	{ id = "t3", kind = "tutorial", title = "Vendé tus primeros 25 autos", desc = "Los autos terminados se venden solos. Mirá el ritmo en Ventas.", counter = "unitsSold", goal = 25, reward = { money = 20000, pi = 3, xp = 300 }, go = "ventas" },
+	{ id = "t2", kind = "tutorial", title = "Ordená tu primer lote", desc = "En Producción, elegí el modelo y cuántas unidades fabricar (cada modelo tiene un solo lote).", counter = "lotsLaunched", goal = 1, reward = { money = 10000, xp = 150 }, go = "fabrica" },
+	{ id = "t3", kind = "tutorial", title = "Vendé tus primeros 25 autos", desc = "Cuando termina el lote llegan las reseñas: elegí el precio y los autos se venden solos.", counter = "unitsSold", goal = 25, reward = { money = 20000, pi = 3, xp = 300 }, go = "ventas" },
 	{ id = "t4", kind = "tutorial", title = "Mejorá la fábrica", desc = "Subí de nivel una estación en Producción › Estaciones.", counter = "stationUpgrades", goal = 1, reward = { money = 8000, xp = 120 }, go = "fabrica" },
 	{ id = "t5", kind = "tutorial", title = "Investigá una tecnología", desc = "Elegí una tecnología disponible de tu época en Investigación.", counter = "researchDone", goal = 1, reward = { money = 10000, pi = 3, xp = 200 }, go = "investigacion" },
 	{ id = "t6", kind = "tutorial", title = "Diseñá un segundo modelo", desc = "Un segundo auto de otro tipo vende en otro segmento sin competir con el primero.", counter = "designsSaved", goal = 2, reward = { money = 20000, pi = 3, xp = 300 }, go = "editor" },
@@ -697,8 +735,30 @@ for _, b in Catalog.BASES do
 	baseIndex[b.id] = b
 end
 local partIndex: { [string]: any } = {}
+--[[ Motores por familia y nivel (para generaciones futuras: un nivel nuevo de la misma familia reemplaza al
+	anterior en los diseños NUEVOS; los diseños existentes conservan su pieza original). ]]
+Catalog.ENGINE_LEVELS = {
+	i4e = { "I4", 1 }, i4 = { "I4", 1 }, i4v = { "I4", 2 }, i3t = { "I3", 1 }, i6 = { "I6", 1 },
+	v6 = { "V6", 1 }, v6i = { "V6", 2 }, v8 = { "V8", 1 }, v8d = { "V8", 2 }, em200 = { "Eléctrico", 1 }, em350 = { "Eléctrico", 2 },
+}
+--[[ Chasis por familia y generación: cada base es un chasis de una época (gen 1 = el de 1970). Las
+	generaciones siguientes se agregan como bases nuevas con la misma familia y gen + 1. ]]
+Catalog.CHASSIS_GEN = {
+	brisa = { "Sedán", 1 }, duna = { "Coupé", 1 }, pixel = { "Compacto", 1 }, toro = { "Pickup", 1 },
+	aurora = { "Deportivo", 1 }, titan = { "SUV", 1 }, vento = { "Superdeportivo", 1 }, rayo = { "Eléctrico", 1 },
+}
 for _, p in Catalog.PARTS do
 	partIndex[p.cat .. ":" .. p.id] = p
+	local lv = p.cat == "motor" and Catalog.ENGINE_LEVELS[p.id]
+	if lv then
+		p.family, p.level = lv[1], lv[2]
+	end
+end
+for _, b in Catalog.BASES do
+	local c = Catalog.CHASSIS_GEN[b.id]
+	if c then
+		b.family, b.gen = c[1], c[2]
+	end
 end
 local matIndex: { [string]: any } = {}
 for _, m in Catalog.MATERIALS do

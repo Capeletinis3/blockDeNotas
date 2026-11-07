@@ -107,6 +107,12 @@ function Screen.nextAction(g: any): any
 	if ed and ed.dirty then
 		return { label = "Continuar diseño", sub = ed.draft.name .. " tiene cambios sin guardar", go = "editor", key = "1" }
 	end
+	-- Un lote terminado espera el precio: es lo más urgente (sin precio no se vende).
+	for _, l in g.lots do
+		if l.saleState == "por lanzar" then
+			return { label = "Poner a la venta", sub = l.design.name .. " · reseñas " .. Util.num(l.review and l.review.avg or 0, 1) .. "/10", dialog = "reviews", params = { lotId = l.id }, key = "4" }
+		end
+	end
 	-- Tutorial: el botón principal lleva al paso actual (en el orden diseñar → lote → ventas → mejora →
 	-- investigación → segundo modelo).
 	local tut = Rules.currentTutorial(g)
@@ -115,8 +121,8 @@ function Screen.nextAction(g: any): any
 			return { label = "Reclamar recompensa", sub = tut.title, go = "misiones", key = "↵" }
 		end
 		local STEP = {
-			t2 = { label = "Lanzar un lote", sub = "Elegí cuántas unidades fabricar", dialog = "lot", key = "3" },
-			t3 = { label = "Mirar las ventas", sub = "Los autos terminados se venden solos", go = "ventas", key = "4" },
+			t2 = { label = "Ordenar un lote", sub = "Elegí cuántas unidades fabricar", dialog = "lot", key = "3" },
+			t3 = { label = "Mirar las ventas", sub = "Terminado el lote, fijá el precio y se vende solo", go = "ventas", key = "4" },
 			t4 = { label = "Mejorar la fábrica", sub = "Subí de nivel una estación", go = "fabrica", key = "3" },
 			t5 = { label = "Investigar", sub = "Elegí tu primera tecnología", go = "investigacion", key = "6" },
 			t6 = { label = "Diseñar otro modelo", sub = "Otro tipo de auto vende en otro segmento", go = "editor", params = { fresh = true }, key = "1" },
@@ -167,7 +173,9 @@ end
 function Screen.runNext(g: any)
 	local cta = Screen.nextAction(g)
 	if cta.dialog then
-		App.openDialog(cta.dialog, { wide = true })
+		local params = cta.params and table.clone(cta.params) or {}
+		params.wide = true
+		App.openDialog(cta.dialog, params)
 	else
 		App.go(cta.go, cta.params)
 	end
@@ -879,7 +887,7 @@ local function saleCards(list: { any }): { Instance }
 			Ui.col({
 				Ui.icon("car", 22, T.mut),
 				Ui.text("Todavía no tenés autos a la venta", { size = Ui.S.sm, weight = W.bold, align = "C" }),
-				Ui.text("Lanzá un lote en Producción: cada unidad terminada se vende sola.", { size = Ui.S.xs, color = T.mut, align = "C" }),
+				Ui.text("Ordená un lote en Producción: al terminar llegan las reseñas, elegís el precio y se vende solo.", { size = Ui.S.xs, color = T.mut, align = "C" }),
 			}, 8, { h = "C", Pad = 22 }),
 		}))
 		return out

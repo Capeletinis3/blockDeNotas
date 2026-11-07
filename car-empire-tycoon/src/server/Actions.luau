@@ -286,6 +286,8 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 	else
 		d.id = source.id
 		d.version = (source.version or 1) + 1
+		-- Una versión sigue siendo el mismo modelo: si ya tuvo su lote, no puede fabricar otro.
+		d.lotLaunched = source.lotLaunched
 		d.createdDay = source.createdDay
 		local _, i = findById(g.designs, source.id)
 		g.designs[i :: number] = d
@@ -331,6 +333,7 @@ function Actions.dupDesign(g: any, _ctx: any, payload: any): any
 	copy.modelYear = Rules.year(g)
 	copy.generation = DesignCalc.generationLabel(copy.modelYear, 1)
 	copy.createdDay = g.time.day
+	copy.lotLaunched = nil -- un modelo nuevo puede tener su propio lote
 	table.insert(g.designs, copy)
 	return { ok = true, msg = "Duplicado: «" .. name .. "»" .. (eng > 0 and (" · ingeniería " .. money(eng)) or "") .. ". La licencia y los prototipos ya estaban pagados.", designId = copy.id }
 end
@@ -362,9 +365,12 @@ local function priceRange(lot: any): (number, number)
 end
 Actions.priceRange = priceRange
 
---[[ Lanza un lote: el jugador elige cuántas unidades fabricar (hasta Catalog.RULES.maxLotQty) y el precio
-	de venta (por defecto, el de referencia). No se cobra nada por adelantado: cada unidad se paga al
-	fabricarla. payload = { designId, qty, price? } ]]
+--[[ Ordena el lote de un modelo: el jugador elige cuántas unidades fabricar (hasta Catalog.RULES.maxLotQty).
+	Cada modelo tiene UN solo lote: para volver a fabricar hace falta un modelo nuevo (Duplicar) o una nueva
+	generación. El lote se paga COMPLETO al ordenarlo (qty × costo por unidad; si no alcanza, no se ordena), así
+	nunca queda un lote a medio fabricar por falta de dinero. El lote no se vende
+	mientras se fabrica: al terminar llegan las reseñas y el jugador fija el precio (Actions.launchSale).
+	payload = { designId, qty, price? } (price = precio previsto; se puede cambiar al lanzar) ]]
 function Actions.createLot(g: any, ctx: any, payload: any): any
 	local d = findById(g.designs, arg(payload, "designId"))
 	if not d then
@@ -372,6 +378,9 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	end
 	if d.template then
 		return fail("Las plantillas no se fabrican: usala para crear un diseño.")
+	end
+	if d.lotLaunched then
+		return fail("«" .. d.name .. "» ya tuvo su lote: cada modelo se fabrica una sola vez. Para volver a producir, creá un modelo nuevo (Duplicar) o una nueva generación.")
 	end
 	local qty = arg(payload, "qty")
 	if not isInt(qty, 1, Catalog.RULES.maxLotQty) then
@@ -382,6 +391,10 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	end
 	local snap = Simulation.designSnapshot(g, d)
 	local lot = Simulation.makeLot(g, snap, qty, snap.calc.price)
+	local total = qty * lot.unitCost
+	if not Simulation.canAfford(g, total) then
+		return fail("Fondos insuficientes: el lote cuesta " .. money(total) .. " (" .. Util.num(qty) .. " × " .. money(lot.unitCost) .. ") y tenés " .. money(g.money) .. ".")
+	end
 	local price = arg(payload, "price")
 	if price ~= nil then
 		if not Util.isFiniteNumber(price) then
@@ -394,7 +407,11 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 		end
 		lot.price = p
 	end
+	Simulation.spend(g, total, "fabricacion", "Lote de " .. Util.num(qty) .. " × " .. d.name)
+	lot.prepaid = true
+	lot.costSpent = total
 	table.insert(g.lots, lot)
+	d.lotLaunched = true
 	Simulation.registerModel(g, lot)
 	g.counters.lotsLaunched = (g.counters.lotsLaunched or 0) + 1
 	Simulation.addXp(g, ctx, 60)
@@ -403,9 +420,33 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	return {
 		ok = true,
 		lotId = lot.id,
-		msg = "Lote lanzado: " .. Util.num(qty) .. " × «" .. d.name .. "» a " .. money(lot.price) .. ". Cada unidad cuesta " .. money(lot.unitCost)
-			.. " y se paga al fabricarla." .. (waiting and " Espera una línea libre." or " Se vende sola a medida que se termina."),
+		msg = "Lote ordenado: " .. Util.num(qty) .. " × «" .. d.name .. "» · pagaste " .. money(total) .. " (" .. money(lot.unitCost) .. " por unidad)." .. (waiting and " Espera una línea libre." or " Al terminar llegan las reseñas y lo ponés a la venta."),
 	}
+end
+
+-- Pone a la venta un lote terminado y con reseñas, al precio elegido. payload = { lotId, price }
+function Actions.launchSale(g: any, ctx: any, payload: any): any
+	local lot = findLot(g, payload)
+	if not lot then
+		return fail("Ese lote ya no existe.")
+	end
+	if lot.saleState ~= "por lanzar" then
+		return fail(lot.saleState == "produccion" and "El lote todavía se está fabricando." or "Ese lote ya está a la venta.")
+	end
+	local price = arg(payload, "price")
+	if not Util.isFiniteNumber(price) then
+		return fail("Precio inválido.")
+	end
+	local lo, hi = priceRange(lot)
+	local p = round(price / 10) * 10
+	if p < lo or p > hi then
+		return fail("El precio tiene que estar entre " .. money(lo) .. " y " .. money(hi) .. ".")
+	end
+	lot.price = p
+	lot.saleState = "en venta"
+	lot.launchDay = g.time.day
+	Simulation.addXp(g, ctx, 40)
+	return { ok = true, msg = "«" .. lot.design.name .. "» salió a la venta a " .. money(p) .. ". Se vende solo según la demanda." .. (p < lot.unitCost and " Ojo: por debajo del costo, cada venta pierde dinero." or "") }
 end
 
 -- Cambia el precio de venta de un lote activo (afecta las ventas desde ese momento).
@@ -438,7 +479,7 @@ function Actions.toggleLotPause(g: any, _ctx: any, payload: any): any
 		return { ok = true, msg = "Producción de " .. lot.design.name .. " reanudada.", quiet = true }
 	end
 	lot.prodState = "pausado"
-	return { ok = true, msg = "Producción de " .. lot.design.name .. " pausada. Lo fabricado se sigue vendiendo.", quiet = true }
+	return { ok = true, msg = "Producción de " .. lot.design.name .. " pausada.", quiet = true }
 end
 
 -- Mueve un lote en la cola de producción (las líneas toman los primeros lotes pendientes).
@@ -469,6 +510,12 @@ function Actions.closeSale(g: any, ctx: any, payload: any): any
 	end
 	local unsold = Rules.lotAvailable(lot)
 	local pending = Rules.lotPending(lot)
+	-- Lotes pagados por adelantado: las unidades que no se llegaron a fabricar se reintegran.
+	local refund = (lot.prepaid and pending > 0) and pending * lot.unitCost or 0
+	if refund > 0 then
+		Simulation.earn(g, refund, "fabricacion", "Reintegro: " .. Util.num(pending) .. " × " .. lot.design.name .. " sin fabricar")
+		lot.costSpent -= refund
+	end
 	lot.discarded += unsold
 	lot.qty = lot.produced
 	if pending > 0 then
@@ -488,7 +535,7 @@ function Actions.closeSale(g: any, ctx: any, payload: any): any
 	Simulation.notify(g, ctx, "info", "Venta cerrada de " .. lot.design.name .. ": " .. Util.num(lot.sold) .. " vendidos, " .. Util.num(unsold) .. " descartados" .. (pending > 0 and (", " .. Util.num(pending) .. " sin fabricar cancelados") or "") .. ".", "ventas")
 	return {
 		ok = true,
-		msg = "Venta cerrada: " .. lot.design.name .. " quedó retirado. " .. Util.num(unsold) .. " unidades descartadas" .. (unsold > 0 and (" (costo perdido " .. money(lot.lossDiscarded) .. ")") or "") .. (pending > 0 and (" y " .. Util.num(pending) .. " sin fabricar canceladas sin costo") or "") .. ".",
+		msg = "Venta cerrada: " .. lot.design.name .. " quedó retirado. " .. Util.num(unsold) .. " unidades descartadas" .. (unsold > 0 and (" (costo perdido " .. money(lot.lossDiscarded) .. ")") or "") .. (pending > 0 and (" y " .. Util.num(pending) .. " sin fabricar canceladas" .. (refund > 0 and (" (se reintegraron " .. money(refund) .. ")") or " sin costo")) or "") .. ".",
 	}
 end
 
@@ -739,7 +786,7 @@ end
 Actions.handlers = {
 	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
-	createLot = Actions.createLot, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
+	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
 	hire = Actions.hire, moreCandidates = Actions.moreCandidates, fire = Actions.fire, assign = Actions.assign,
@@ -752,7 +799,7 @@ Actions.readOnly = { saveNow = true }
 
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
-	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, setLotPrice = true, closeSale = true,
+	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
 	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
 }
