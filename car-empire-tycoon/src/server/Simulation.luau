@@ -67,6 +67,11 @@ function Simulation.spend(g: any, amount: number, kind: string, note: string): b
 	return true
 end
 
+-- ¿Alcanza el dinero para un gasto? (consulta; no descuenta nada)
+function Simulation.canAfford(g: any, amount: number): boolean
+	return type(amount) == "number" and amount == amount and amount >= 0 and g.money >= round(amount)
+end
+
 function Simulation.earn(g: any, amount: number, kind: string, note: string)
 	amount = round(amount)
 	if amount <= 0 then
@@ -485,8 +490,9 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		local step = math.min(left, 10)
 		left -= step
 		g.time.minute += step
-		if g.time.minute >= Catalog.RULES.dayMinutes then
-			g.time.minute -= Catalog.RULES.dayMinutes
+		local monthLen = Rules.monthMinutes(g.time.day)
+		if g.time.minute >= monthLen then
+			g.time.minute -= monthLen
 			g.time.day += 1
 			Simulation.monthRollover(g, ctx)
 		end

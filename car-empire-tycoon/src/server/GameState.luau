@@ -4,7 +4,8 @@
 	y la vista que se envía al cliente. Módulo puro (sin servicios de Roblox), probado con Lune.
 
 	Perfil guardado (un registro por jugador):
-	  { slots = { ["1"] = partida, ["2"] = …, ["3"] = … }, active = "1" | nil, settings = {…}, processed = { ids } }
+	  { slots = { ["1"] = partida, … ["4"] = … }, active = "1" | nil, settings = {…}, processed = { ids },
+	    unlocked = { ["3"] = true } }   -- ranuras 3 y 4: se habilitan una por una (por ahora no hay compra)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +16,7 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 5
+GameState.SCHEMA = 6
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en venta / agotado / retirado.
@@ -45,7 +46,8 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		lastPlayed = opts.now,
 		playedSeconds = 0,
 		nextId = 1,
-		company = { name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
+		-- id: identificador estable de la empresa (no cambia al renombrarla ni al moverla de ranura).
+		company = { id = opts.id or ("c" .. tostring(opts.now)), name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
 		sede = 1,
 		expansion = 0, -- regiones abiertas de la expansión global (después del Imperio automotriz)
 		money = dif.money,
@@ -80,6 +82,9 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		tutorial = { skipped = false, tips = true },
 		daily = { last = "", streak = 0 },
 		promo = 0, -- nivel de campaña publicitaria (0 = sin campaña; Catalog.CAMPAIGNS)
+		-- Deudas: préstamos { id, principal, balance, monthlyRate, takenDay }. Base para un sistema de
+		-- préstamos futuro; hoy ninguna acción los crea (Rules.debt los suma).
+		loans = {},
 		notifications = {},
 	}
 end
@@ -207,7 +212,7 @@ function GameState.validate(g: any): (boolean, string?)
 	if type(co) ~= "table" or type(co.name) ~= "string" or Util.charCount(co.name) < 3 or Util.charCount(co.name) > 24 then
 		return fail("El nombre de la empresa no es válido.")
 	end
-	if not Util.isHexColor(co.color) or not Catalog.isLogo(co.logo) or not Catalog.DIFFICULTIES[co.difficulty] then
+	if type(co.id) ~= "string" or #co.id < 1 or #co.id > 64 or not Util.isHexColor(co.color) or not Catalog.isLogo(co.logo) or not Catalog.DIFFICULTIES[co.difficulty] then
 		return fail("La identidad de la empresa está dañada.")
 	end
 	if not nonNeg(g.money) or not isInt(g.gems, 0) or not nonNeg(g.rp) or not nonNeg(g.xp) then
@@ -220,7 +225,7 @@ function GameState.validate(g: any): (boolean, string?)
 		return fail("Sede o contador de identificadores inválidos.")
 	end
 	local t = g.time
-	if type(t) ~= "table" or not isInt(t.day, 0) or not isFinite(t.minute) or t.minute < 0 or t.minute >= Catalog.RULES.dayMinutes or not Util.contains(Catalog.RULES.speeds, t.speed) then
+	if type(t) ~= "table" or not isInt(t.day, 0) or not isFinite(t.minute) or t.minute < 0 or t.minute >= Rules.monthMinutes(t.day) or not Util.contains(Catalog.RULES.speeds, t.speed) then
 		return fail("El reloj de la partida está dañado.")
 	end
 	-- Sin tope por el año final: después de endYear el juego sigue en años comerciales extra. Solo se
@@ -383,6 +388,14 @@ function GameState.validate(g: any): (boolean, string?)
 	end
 	if not isInt(g.promo, 0, #Catalog.CAMPAIGNS) then
 		return fail("La campaña publicitaria está dañada.")
+	end
+	if not isList(g.loans) then
+		return fail("Las deudas están dañadas.")
+	end
+	for _, l in g.loans do
+		if type(l) ~= "table" or not nonNeg(l.balance) or not nonNeg(l.principal) or not nonNeg(l.monthlyRate) then
+			return fail("Hay un préstamo dañado.")
+		end
 	end
 	if not isInt(g.expansion, 0, #Catalog.EXPANSION.regions) or (g.expansion > 0 and g.sede < #Catalog.SEDES) then
 		return fail("La expansión global está dañada.")
@@ -566,8 +579,8 @@ MIGRATIONS[2] = function(g: any, _now: number)
 
 	-- Calendario: cada día anterior pasa a ser un mes desde enero de 1970.
 	local t = g.time
-	t.minute = math.floor((t.minute or 0) * Catalog.RULES.dayMinutes / 1440)
-	if t.minute >= Catalog.RULES.dayMinutes then
+	t.minute = math.floor((t.minute or 0) * Catalog.RULES.legacyMonthMinutes / 1440)
+	if t.minute >= Catalog.RULES.legacyMonthMinutes then
 		t.minute = 0
 	end
 	local year = Catalog.CALENDAR.startYear + math.floor((t.day or 0) / 12)
@@ -703,6 +716,27 @@ MIGRATIONS[4] = function(g: any, _now: number)
 	g.schema = 5
 end
 
+-- 5 → 6: calendario diario (1 día = 2 s reales, meses de 28 a 31 días), velocidades 1×/2×/3×,
+-- identificador de empresa y deudas. La fecha se conserva: se mantiene la misma fracción del mes.
+MIGRATIONS[5] = function(g: any, _now: number)
+	local t = g.time
+	if type(t) == "table" and isFinite(t.minute) and isInt(t.day, 0) then
+		local frac = math.clamp(t.minute / Catalog.RULES.legacyMonthMinutes, 0, 0.999)
+		local len = Rules.monthMinutes(t.day)
+		t.minute = math.min(len - Catalog.RULES.gameDayMinutes, math.floor(frac * len / 10) * 10)
+		if t.speed == 4 then
+			t.speed = 3
+		end
+	end
+	if type(g.company) == "table" and type(g.company.id) ~= "string" then
+		g.company.id = "c" .. tostring(g.createdAt or 0) .. "-" .. tostring(g.nextId or 0)
+	end
+	if type(g.loans) ~= "table" then
+		g.loans = {}
+	end
+	g.schema = 6
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -731,7 +765,17 @@ end
 -- Perfil (varias empresas por jugador) ---------------------------------------------------
 
 function GameState.newProfile(): any
-	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {} }
+	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {}, unlocked = {} }
+end
+
+-- ¿Se puede usar la ranura? Las dos primeras son gratuitas; la 3 y la 4 solo si se habilitaron
+-- (profile.unlocked) o si ya tienen una empresa (partidas de versiones con 3 ranuras: no se pierde nada).
+function GameState.slotUsable(profile: any, key: string): boolean
+	local n = tonumber(key)
+	if not n or n < 1 or n > Catalog.RULES.slots or n ~= math.floor(n) then
+		return false
+	end
+	return n <= Catalog.RULES.slotsFree or (profile.unlocked and profile.unlocked[key] == true) or profile.slots[key] ~= nil
 end
 
 function GameState.slotKeys(): { string }
@@ -783,6 +827,9 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	if not isList(profile.processed) then
 		profile.processed = {}
 	end
+	if type(profile.unlocked) ~= "table" then
+		profile.unlocked = {}
+	end
 	local damaged = {}
 	for key, raw in profile.slots do
 		if not tonumber(key) or tonumber(key) > Catalog.RULES.slots then
@@ -799,6 +846,13 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 			else
 				damaged[key] = why or "Partida dañada."
 			end
+		end
+	end
+	-- Una ranura de pago que ya tenía empresa queda habilitada para siempre (aunque después se borre).
+	for key in profile.slots do
+		local n = tonumber(key)
+		if n and n > Catalog.RULES.slotsFree and n <= Catalog.RULES.slots then
+			profile.unlocked[key] = true
 		end
 	end
 	if profile.active ~= nil and (profile.slots[profile.active] == nil or damaged[profile.active]) then
@@ -1051,6 +1105,7 @@ function GameState.summary(g: any): any
 		level = g.level,
 		money = g.money,
 		day = g.time.day,
+		date = Rules.date(g),
 		year = Rules.year(g),
 		sede = Rules.sede(g).name,
 		sold = g.counters.unitsSold,

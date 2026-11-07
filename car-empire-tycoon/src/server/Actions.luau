@@ -748,7 +748,7 @@ Actions.handlers = {
 }
 
 -- Consultas sin efectos: no marcan la partida como modificada ni requieren identificador único.
-Actions.readOnly = {}
+Actions.readOnly = { saveNow = true }
 
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {

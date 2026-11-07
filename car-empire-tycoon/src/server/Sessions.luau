@@ -72,8 +72,10 @@ end
 -- Estado que se envía al cliente -----------------------------------------------------------
 function Sessions:payload(s: any): any
 	local slots = {}
+	local usable = {}
 	if s.profile then
 		for _, key in GameState.slotKeys() do
+			usable[key] = GameState.slotUsable(s.profile, key)
 			local g = s.profile.slots[key]
 			if s.damaged[key] then
 				slots[key] = { damaged = true, reason = s.damaged[key] }
@@ -93,8 +95,9 @@ function Sessions:payload(s: any): any
 		today = utcDate(self.deps.now()),
 		yesterday = utcDate(self.deps.now() - 86400),
 		dirty = s.dirty,
-		profile = s.profile and { slots = slots, active = s.activeKey, last = s.profile.active, settings = s.profile.settings } or nil,
+		profile = s.profile and { slots = slots, usable = usable, active = s.activeKey, last = s.profile.active, settings = s.profile.settings } or nil,
 		demo = s.demo,
+		menuPaused = s.uiPaused == true,
 		game = s.game and GameState.view(s.game) or nil,
 	}
 end
@@ -276,6 +279,7 @@ function Sessions:activate(s: any, key: string, demoGame: any?)
 end
 
 function Sessions:deactivate(s: any)
+	s.uiPaused = false
 	s.game = nil
 	s.activeKey = nil
 	s.demo = nil
@@ -390,6 +394,9 @@ function Sessions:createCompany(s: any, payload: any): any
 	if type(key) ~= "string" or not Util.contains(GameState.slotKeys(), key) then
 		return { ok = false, msg = "Ranura inválida." }
 	end
+	if not GameState.slotUsable(s.profile, key) then
+		return { ok = false, msg = "La ranura " .. key .. " todavía no está disponible." }
+	end
 	if s.profile.slots[key] ~= nil then
 		return { ok = false, msg = "Esa ranura ya está ocupada." }
 	end
@@ -412,7 +419,7 @@ function Sessions:createCompany(s: any, payload: any): any
 	if s.game then
 		self:deactivate(s)
 	end
-	local g = GameState.newGame({ name = name, color = clean.color, logo = clean.logo, difficulty = clean.difficulty, now = self.deps.now() })
+	local g = GameState.newGame({ id = "c" .. tostring(self.deps.now()) .. "-" .. key, name = name, color = clean.color, logo = clean.logo, difficulty = clean.difficulty, now = self.deps.now() })
 	s.profile.slots[key] = g
 	Simulation.notify(g, nil, "ok", "¡" .. name .. " fue fundada!", "juego")
 	self:activate(s, key)
@@ -450,10 +457,20 @@ function Sessions:menuAction(s: any, action: string, payload: any): any?
 		self:activate(s, "demo", g)
 		return { ok = true, msg = "Demostración: los cambios no se guardan y no afectan tus empresas." }
 	elseif action == "leaveCompany" then
+		-- «Guardar y volver al menú»: se guarda en el momento (sin salir del servidor).
+		local wasDemo = s.demo ~= nil
 		if s.game then
 			self:deactivate(s)
 		end
-		return { ok = true, quiet = true }
+		if wasDemo then
+			return { ok = true, quiet = true }
+		end
+		return self:saveNow(s, "Partida guardada. Volviste al menú de empresas.")
+	elseif action == "saveNow" then
+		if s.demo then
+			return { ok = false, msg = "Las demostraciones no se guardan (tus empresas sí)." }
+		end
+		return self:saveNow(s, "Partida guardada.")
 	elseif action == "renameCompany" then
 		local g = type(key) == "string" and s.profile.slots[key] or nil
 		if not g or s.damaged[key] then
@@ -521,10 +538,34 @@ function Sessions:menuAction(s: any, action: string, payload: any): any?
 	return nil
 end
 
+-- Guardado pedido por el jugador. Respeta el intervalo mínimo entre escrituras del DataStore: si se acaba de
+-- guardar, queda programado para dentro de unos segundos.
+function Sessions:saveNow(s: any, okMsg: string): any
+	if not s.canSave then
+		return { ok = false, msg = s.saveWarning or "El guardado no está disponible en este momento." }
+	end
+	if s.saving or self.deps.clock() - s.lastSave < Sessions.MIN_SAVE_GAP then
+		s.pendingSave = true
+		return { ok = true, msg = "Se guarda en unos segundos." }
+	end
+	s.lastAutosave = self.deps.clock()
+	self:save(s)
+	if s.saveWarning then
+		return { ok = false, msg = "No se pudo guardar: " .. s.saveWarning }
+	end
+	return { ok = true, msg = okMsg }
+end
+
 function Sessions:request(player: any, action: any, payload: any): any
 	local s = self.list[player]
 	if not s or type(action) ~= "string" then
 		return { ok = false, msg = "Sesión no disponible." }
+	end
+	-- Pausa individual: mientras el jugador tiene abierto un menú de gestión, SU empresa no avanza (las de
+	-- otros jugadores siguen). No cambia la partida ni cuenta para el límite de acciones.
+	if action == "setUiPause" then
+		s.uiPaused = s.game ~= nil and type(payload) == "table" and payload.paused == true
+		return { ok = true, quiet = true }
 	end
 	if rateLimited(self, s) then
 		return { ok = false, msg = "Demasiadas acciones seguidas. Esperá un momento." }
@@ -648,7 +689,7 @@ function Sessions:tick()
 			if g and not g.demo then
 				g.playedSeconds = (g.playedSeconds or 0) + 1
 			end
-			if g and not s.blocked and g.time.speed > 0 then
+			if g and not s.blocked and g.time.speed > 0 and not s.uiPaused then
 				local ok, err = pcall(Simulation.simulate, g, s.ctx, Catalog.RULES.minutesPerRealSecond * g.time.speed)
 				if not ok then
 					self.deps.log("Error de simulación: " .. tostring(err))

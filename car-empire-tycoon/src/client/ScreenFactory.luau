@@ -228,7 +228,7 @@ function Screen.build(main: Frame, side: Frame)
 	}, { gap = 4, name = "ComoFunciona" }).Parent = side
 	Ui.card({
 		Ui.lbl("Tiempo"),
-		Ui.text("A 1×, un año de juego dura " .. Util.round(Catalog.CALENDAR.realSecondsPerYear / 60) .. " minutos reales. Los ritmos se muestran en autos por minuto real; a 2× y 4× todo va más rápido. En pausa no se fabrica ni se vende.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+		Ui.text("A 1×, un año de juego dura " .. Util.round(Catalog.CALENDAR.realSecondsPerYear / 60) .. " minutos reales. Los ritmos se muestran en autos por minuto real; a 2× y 3× todo va más rápido. En pausa (o con un menú abierto) no se fabrica ni se vende.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 	}, { gap = 4 }).Parent = side
 end
 

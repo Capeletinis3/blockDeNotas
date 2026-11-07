@@ -176,8 +176,8 @@ end
 test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lote → venta automática → precio → cerrar venta", function()
 	local g0 = App.g
 	local money0 = g0.money
-	eq(Util.gameDate(g0.time.day), "Ene 1970", "la empresa empieza en enero de 1970")
-	check(find("Ene 1970") ~= nil, "el HUD muestra la fecha")
+	eq(Util.fullDate(g0.time.day, g0.time.minute), "01/01/1970", "la empresa empieza el 01/01/1970")
+	check(find("01/01/1970") ~= nil, "el HUD muestra la fecha completa")
 	check(named("Nav_editor") and named("Nav_editor"):FindFirstChild("Resaltado") ~= nil, "el tutorial resalta Diseño")
 	App.go("editor", { new = true })
 	M.task.wait()
@@ -230,6 +230,13 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	end), "el lote se crea")
 	eq(lotOf(designId).qty, 40, "con la cantidad elegida")
 	check(not dialogOpen(), "el diálogo se cierra")
+	-- Con el panel de Producción abierto la empresa está en pausa: ni el calendario ni la fábrica avanzan.
+	local t0, p0 = App.g.time.minute + App.g.time.day * 10000, lotOf(designId).produced
+	advance(10)
+	eq(App.g.time.minute + App.g.time.day * 10000, t0, "con un menú abierto el calendario no avanza")
+	eq(lotOf(designId).produced, p0, "ni la fabricación")
+	App.go("juego")
+	M.task.wait()
 	-- Se fabrica y se vende solo, sin ninguna acción.
 	for _ = 1, 600 do
 		local l = lotOf(designId)
@@ -795,6 +802,9 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 		end
 		return false
 	end), "lote lanzado")
+	-- Volver a la vista de la sede: con el panel abierto la empresa estaría en pausa.
+	App.go("juego")
+	M.task.wait()
 	-- 4) El garaje muestra el auto fabricado con el Pioneer 70, pintado y apoyado en el piso.
 	-- Con una sola línea, el lote espera en cola a que termine el anterior (como en el juego real).
 	local found = {}
@@ -872,6 +882,56 @@ test("Fin de partida: expansión global, récords y años extra en las cuatro re
 	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
 	M.task.wait()
 	noErrors("Fin de partida")
+end)
+
+test("Etapa 1 en la interfaz: pausa con diálogos, guardar ahora, guardar y volver, ranuras bloqueadas", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.go("juego")
+	M.task.wait()
+	App.request("setSpeed", { speed = 1 })
+	local function stamp(): number
+		return App.g.time.day * 100000 + App.g.time.minute
+	end
+	local t0 = stamp()
+	advance(4)
+	check(stamp() > t0, "en la sede el tiempo avanza")
+	App.openDialog("settings", {})
+	M.task.wait()
+	check(App.menuPaused(), "un diálogo abierto pausa la empresa")
+	t0 = stamp()
+	advance(6)
+	eq(stamp(), t0, "con el diálogo abierto no avanza")
+	App.closeAllDialogs()
+	M.task.wait()
+	advance(4)
+	check(stamp() > t0, "al cerrarlo continúa")
+	check(find("PAUSA") == nil, "sin menú no figura en pausa")
+	-- Compañía: guardar ahora y guardar y volver.
+	App.go("compania")
+	M.task.wait()
+	check(named("GuardarAhora") ~= nil and find("Guardar y volver al menú") ~= nil, "botones de guardado")
+	check(find("Deudas") ~= nil, "las deudas figuran en el resumen")
+	clickN("GuardarAhora")
+	M.task.wait()
+	local date = Util.fullDate(App.g.time.day, App.g.time.minute)
+	clickN("VolverMenu")
+	check(waitFor(function()
+		return App.g == nil and App.ui.route == "menu"
+	end), "vuelve al menú sin salir del servidor")
+	check(named("Bloqueada_3") ~= nil and named("Bloqueada_4") ~= nil, "las ranuras 3 y 4 se ven bloqueadas")
+	check(named("Crear_3") == nil and named("Crear_4") == nil, "y no se pueden usar")
+	check(find("Robux") == nil and find("Comprar") == nil, "sin compras ni precios")
+	App.request("selectSlot", { slot = "1" })
+	check(waitFor(function()
+		return App.g ~= nil
+	end), "vuelve a abrir la empresa")
+	eq(Util.fullDate(App.g.time.day, App.g.time.minute), date, "con la misma fecha")
+	noErrors("Etapa 1")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

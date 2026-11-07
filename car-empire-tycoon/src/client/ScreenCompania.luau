@@ -188,7 +188,7 @@ function Screen.build(main: Frame, side: Frame)
 	local summary: { Instance? } = { Ui.lbl("Resumen de la empresa") }
 	for _, r in {
 		{ "Dificultad", dif.label },
-		{ "Fecha", Util.gameDate(g.time.day) .. (Rules.extraYears(g) > 0 and (" · año comercial extra " .. Rules.extraYears(g)) or "") },
+		{ "Fecha", Util.fullDate(g.time.day, g.time.minute) .. (Rules.extraYears(g) > 0 and (" · año comercial extra " .. Rules.extraYears(g)) or "") },
 		{ "Nivel", g.level .. " (" .. g.xp .. "/" .. g.derived.xpNext .. " XP)" },
 		{ "Reputación", Util.num(g.reputation, 2) .. " / 5" },
 		{ "Diseños", tostring(#g.designs) },
@@ -198,15 +198,21 @@ function Screen.build(main: Frame, side: Frame)
 		{ "Investigaciones", tostring(#g.research.done) },
 		{ "Ingresos por ventas (total)", Util.money(g.counters.revenueTotal or tot.revenue) },
 		{ "Margen de lo vendido (total)", Util.money(g.counters.marginTotal or tot.margin) },
+		{ "Deudas", Util.money(Rules.debt(g)) },
 	} do
 		table.insert(summary, Ui.between(r[1], r[2]))
 	end
 	Ui.card(summary, { gap = 6 }).Parent = side
+	local saveBtn: TextButton
+	saveBtn = Ui.button("Guardar ahora", "default", function()
+		App.request("saveNow", nil, { button = saveBtn })
+	end, { small = true, fill = true, name = "GuardarAhora" })
 	Ui.card({
 		Ui.lbl("Datos"),
 		g.demo and Ui.text("Demostración: no se guarda ni se exporta.", { size = Ui.S.xs, color = T.ye })
-			or Ui.text("Se guarda automáticamente en tu cuenta de Roblox.", { size = Ui.S.xs, color = T.mut }),
-		Ui.button("Volver al menú de empresas", "default", function()
+			or Ui.text("Se guarda automáticamente en tu cuenta de Roblox (cada 45 s, al salir y al volver al menú)." .. (App.payload and App.payload.lastSaved and (" Último guardado: hace " .. math.max(0, os.time() - App.payload.lastSaved) .. " s.") or ""), { size = Ui.S.xs, color = T.mut }),
+		(not g.demo) and saveBtn or nil,
+		Ui.button(g.demo and "Volver al menú de empresas" or "Guardar y volver al menú", "default", function()
 			App.leaveToMenu()
 		end, { small = true, fill = true, name = "VolverMenu" }),
 	}, { gap = 8 }).Parent = side

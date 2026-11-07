@@ -11,19 +11,23 @@
 
 local Catalog = {}
 
--- Calendario (parámetro central de equilibrio): un año de juego dura `realSecondsPerYear` segundos reales
--- a velocidad 1×. La simulación avanza en minutos de juego (10 por segundo real); un «período» interno
--- (g.time.day) es un MES del calendario.
+-- Calendario (parámetro central de equilibrio): un DÍA de juego dura `realSecondsPerDay` segundos reales a
+-- velocidad 1× (2 s: un año de 365 días ≈ 12 min reales). La simulación avanza en minutos de juego (10 por
+-- segundo real, así que un día son 20). g.time.day cuenta MESES desde enero de 1970 y g.time.minute los
+-- minutos de juego dentro del mes; cada mes dura sus días reales (28 a 31). Es la única referencia de tiempo:
+-- fabricación, ventas, investigación, campañas y salarios avanzan desde Simulation.simulate.
 -- endYear = último año con contenido histórico (tecnologías, demanda, rivales). Al llegar, el año visible
 -- queda en endYear y el juego sigue en «años comerciales extra» (g.time.day sigue contando meses). Para
 -- ampliar la historia basta con subir endYear y agregar contenido de esos años.
-Catalog.CALENDAR = { startYear = 1970, endYear = 2030, realSecondsPerYear = 660, months = 12 }
+Catalog.CALENDAR = { startYear = 1970, endYear = 2030, realSecondsPerDay = 2, realSecondsPerYear = 730, months = 12 }
 
 Catalog.RULES = {
-	version = 5,
+	version = 6,
 	minutesPerRealSecond = 10, -- a velocidad 1×, 1 s real = 10 min de juego
-	-- Minutos de juego de un mes: 660 s/año × 10 min/s ÷ 12 = 550.
-	dayMinutes = Catalog.CALENDAR.realSecondsPerYear * 10 / Catalog.CALENDAR.months,
+	-- Minutos de juego de un día: 2 s reales × 10 min/s = 20. Un mes dura sus días × 20 (Rules.monthMinutes).
+	gameDayMinutes = Catalog.CALENDAR.realSecondsPerDay * 10,
+	-- Partidas de versiones anteriores (esquema ≤ 5): todos los meses duraban 550 minutos de juego.
+	legacyMonthMinutes = 550,
 	-- Banco de PI: la generación de la sede se acumula hasta este equivalente en minutos aunque no haya
 	-- investigación activa (las bonificaciones y misiones se suman aunque el banco esté lleno).
 	piBankMinutes = 20,
@@ -47,11 +51,11 @@ Catalog.RULES = {
 	maxDesigns = 60,
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
-	slots = 3, -- empresas por cuenta
-	slotsLocked = 2, -- ranuras visibles pero no habilitadas (función futura)
+	slots = 4, -- empresas por cuenta (ranuras "1".."4")
+	slotsFree = 2, -- las dos primeras son gratuitas; la 3 y la 4 se desbloquearán más adelante (no hay compra todavía)
 	moreCandidatesCost = 1000,
 	assignMax = { station = 2, dept = 4 },
-	speeds = { 0, 1, 2, 4 },
+	speeds = { 0, 1, 2, 3 }, -- 0 = pausa manual; 1×, 2× y 3× (sin avance instantáneo)
 }
 
 --[[ Economía (parámetros de equilibrio). Unidades: dinero en $, velocidades por MINUTO REAL a 1×.

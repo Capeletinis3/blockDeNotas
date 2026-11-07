@@ -151,7 +151,8 @@ test("[P1] Una empresa nueva comienza en enero de 1970 y el calendario avanza so
 	local ctx = makeCtx(1)
 	eq(Rules.year(g), 1970, "año inicial")
 	eq(Util.gameDate(g.time.day), "Ene 1970", "fecha que muestra el HUD")
-	check(Catalog.CALENDAR.realSecondsPerYear >= 600 and Catalog.CALENDAR.realSecondsPerYear <= 720, "un año cada 10–12 minutos reales")
+	eq(Catalog.CALENDAR.realSecondsPerDay, 2, "un día de juego cada 2 segundos reales a 1×")
+	check(Catalog.CALENDAR.realSecondsPerYear >= 720 and Catalog.CALENDAR.realSecondsPerYear <= 740, "un año de 365 días ≈ 12 minutos reales")
 	runReal(g, ctx, Catalog.CALENDAR.realSecondsPerYear / 60)
 	eq(Rules.year(g), 1971, "un año después, a 1×")
 	eq(Util.gameDate(g.time.day), "Ene 1971", "mes y año")
@@ -1685,7 +1686,7 @@ end)
 local longLog = nil
 local function longGame(): any
 	if not longLog then
-		longLog = Bot.play("normal", 780)
+		longLog = Bot.play("normal", 860) -- hasta 2030 (≈ 730 min) y dos horas de años extra
 	end
 	return longLog
 end
@@ -1740,7 +1741,7 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 	local day0 = g.time.day
 	-- Tres horas reales después del final del calendario.
 	runReal(g, ctx, 180)
-	check(g.time.day - day0 >= 12 * 15, "pasaron más de 15 años comerciales (" .. (g.time.day - day0) .. " meses)")
+	check(g.time.day - day0 >= 12 * 14, "pasaron más de 14 años comerciales (" .. (g.time.day - day0) .. " meses)")
 	eq(Rules.year(g), 2030, "el año visible sigue en 2030")
 	check(g.counters.unitsProduced > produced0, "sigue fabricando")
 	check(g.counters.unitsSold > sold0, "sigue vendiendo")
@@ -1848,7 +1849,7 @@ test("[F6] Tiempos reales de investigación (bot): cerca de los objetivos", func
 	end
 	check(rs.avgLag <= 0.5, "el optimizador investiga apenas aparece cada tecnología (" .. Util.num(rs.avgLag, 1) .. " años)")
 	-- Estrategia simple (sin ampliar más allá de la sede 3 hasta 2009): más lenta, pero sin esperas eternas.
-	local flat = Bot.researchSummary(Bot.play("normal", 660, { flat = true }))
+	local flat = Bot.researchSummary(Bot.play("normal", 732, { flat = true }))
 	eq(flat.done, 56, "la estrategia simple también completa las 56")
 	for k, cap in { s = 2.2, n = 16, i = 21, b = 21 } do
 		check(flat.byTier[k].max <= cap, "simple · " .. Catalog.RESEARCH_TIERS[k].label .. ": máxima " .. Util.num(flat.byTier[k].max, 1) .. " min")
@@ -1857,8 +1858,8 @@ end)
 
 test("[F7] Comparar estrategias: diversificar rinde más que un solo tipo", function()
 	local best = longGame()
-	local one = Bot.play("normal", 660, { single = true })
-	local flat = Bot.play("normal", 660, { flat = true })
+	local one = Bot.play("normal", 732, { single = true })
+	local flat = Bot.play("normal", 732, { flat = true })
 	local function revenue(log: any): number
 		return log.g.counters.revenueTotal or 0
 	end
@@ -2085,6 +2086,203 @@ test("Pioneer 70: carrocería 3D predeterminada del sedán en los 70, elegible d
 	local gone = jsonCopy(g)
 	gone.designs[1].vehicleModel = "modelo_retirado"
 	check(GameState.validate(gone), "una carrocería que ya no existe no daña la partida")
+end)
+
+-- Etapa 1 (base del juego): calendario diario, velocidades, pausa individual, ranuras, economía y guardado.
+local function ticks(mgr: any, clock: any, n: number)
+	for _ = 1, n do
+		clock.t += 1
+		clock.c += 1
+		mgr:tick()
+	end
+end
+
+test("[E1] Calendario: empieza el 01/01/1970, un día cada 2 s a 1×, 2× y 3× proporcionales, meses y años correctos", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 501 }
+	mgr:add(p)
+	local g = playThrough(mgr, p).game
+	eq(Rules.date(g), "01/01/1970", "empresa nueva el 01/01/1970")
+	eq(Rules.absDay(g), 0, "día 0")
+	ticks(mgr, clock, 2)
+	eq(Rules.date(g), "02/01/1970", "a 1×, 2 segundos reales = 1 día")
+	ticks(mgr, clock, 58)
+	eq(Rules.absDay(g), 30, "60 s reales = 30 días")
+	eq(Rules.date(g), "31/01/1970", "último día de enero")
+	ticks(mgr, clock, 2)
+	eq(Rules.date(g), "01/02/1970", "pasa a febrero")
+	check(mgr:request(p, "setSpeed", { speed = 2, requestId = rid() }).ok, "velocidad 2×")
+	local d0 = Rules.absDay(g)
+	ticks(mgr, clock, 10)
+	eq(Rules.absDay(g) - d0, 10, "a 2×, 10 s = 10 días")
+	check(mgr:request(p, "setSpeed", { speed = 3, requestId = rid() }).ok, "velocidad 3×")
+	d0 = Rules.absDay(g)
+	ticks(mgr, clock, 10)
+	eq(Rules.absDay(g) - d0, 15, "a 3×, 10 s = 15 días")
+	check(not mgr:request(p, "setSpeed", { speed = 4, requestId = rid() }).ok, "no hay 4× ni avance instantáneo")
+	check(not mgr:request(p, "setSpeed", { speed = 100, requestId = rid() }).ok, "ni velocidades arbitrarias")
+	-- Años y bisiestos (simulación directa, mismo reloj que usa el servidor).
+	local h = newCompany("Calendario SA")
+	local ctx = makeCtx(502)
+	Simulation.simulate(h, ctx, 364 * Catalog.RULES.gameDayMinutes)
+	eq(Rules.date(h), "31/12/1970", "día 365 del año")
+	Simulation.simulate(h, ctx, Catalog.RULES.gameDayMinutes)
+	eq(Rules.date(h), "01/01/1971", "cambio de año")
+	Simulation.simulate(h, ctx, (365 + 31 + 28) * Catalog.RULES.gameDayMinutes)
+	eq(Rules.date(h), "29/02/1972", "1972 es bisiesto")
+	Simulation.simulate(h, ctx, Catalog.RULES.gameDayMinutes)
+	eq(Rules.date(h), "01/03/1972", "y sigue en marzo")
+	local ok = GameState.validate(jsonCopy(h))
+	check(ok, "la partida sigue válida")
+end)
+
+test("[E1] Pausa individual: un menú abierto pausa solo esa empresa (calendario, fábrica e investigación)", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local a, b = { UserId = 511 }, { UserId = 512 }
+	mgr:add(a)
+	mgr:add(b)
+	local ga = playThrough(mgr, a).game
+	local gb = playThrough(mgr, b).game
+	ga.money = 1000000
+	mgr:request(a, "saveDesign", { draft = draftFor(ga, "pixel"), requestId = rid() })
+	check(mgr:request(a, "createLot", { designId = ga.designs[1].id, qty = 500, requestId = rid() }).ok, "lote en fabricación")
+	check(mgr:request(a, "startResearch", { id = "mo1", requestId = rid() }).ok, "investigación en curso")
+	ticks(mgr, clock, 4)
+	check(mgr:request(a, "setUiPause", { paused = true }).ok, "A abre un menú")
+	local dayA, dayB = Rules.absDay(ga), Rules.absDay(gb)
+	local prodA, resA, moneyA = ga.lots[1].produced, ga.research.active.progress, ga.money
+	ticks(mgr, clock, 20)
+	eq(Rules.absDay(ga), dayA, "la empresa de A no avanza")
+	eq(ga.lots[1].produced, prodA, "ni fabrica")
+	eq(ga.research.active.progress, resA, "ni investiga")
+	eq(ga.money, moneyA, "ni cobra ni paga")
+	eq(Rules.absDay(gb) - dayB, 10, "la de B sigue normalmente")
+	check(mgr:request(a, "setUiPause", { paused = false }).ok, "A cierra el menú")
+	ticks(mgr, clock, 4)
+	eq(Rules.absDay(ga) - dayA, 2, "A continúa al cerrar el menú")
+	check(ga.lots[1].produced > prodA, "y vuelve a fabricar")
+	-- Volver al menú de empresas quita la pausa (la próxima empresa no arranca pausada).
+	mgr:request(a, "setUiPause", { paused = true })
+	mgr:request(a, "leaveCompany", {})
+	check(mgr:request(a, "selectSlot", { slot = "1" }).ok, "vuelve a abrir la empresa")
+	local d1 = Rules.absDay(ga)
+	ticks(mgr, clock, 2)
+	eq(Rules.absDay(ga) - d1, 1, "al volver a entrar no queda pausada")
+end)
+
+test("[E1] Economía: el dinero solo cambia en el servidor; no se gasta lo que no hay", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 521 }
+	mgr:add(p)
+	local g = playThrough(mgr, p).game
+	local m0 = g.money
+	check(not mgr:request(p, "setMoney", { money = 1e12, requestId = rid() }).ok, "acción inexistente rechazada")
+	check(not mgr:request(p, "earn", { amount = 1e9, requestId = rid() }).ok, "tampoco «earn»")
+	mgr:request(p, "setSpeed", { speed = 1, money = 1e12, requestId = rid() })
+	mgr:request(p, "setUiPause", { paused = false, money = 1e12 })
+	eq(g.money, m0, "ningún campo del cliente cambia el dinero")
+	check(not mgr:request(p, "createLot", { designId = "x", qty = -100, requestId = rid() }).ok, "cantidades negativas rechazadas")
+	check(Simulation.canAfford(g, m0) and not Simulation.canAfford(g, m0 + 1), "canAfford: alcanza justo, no un peso más")
+	check(not Simulation.canAfford(g, -5) and not Simulation.canAfford(g, 0 / 0), "montos inválidos")
+	check(not Simulation.spend(g, m0 + 1, "mejora", "prueba"), "no se gasta lo que no hay")
+	eq(g.money, m0, "sin cambios")
+	local n = #g.ledger
+	check(Simulation.spend(g, 1000, "mejora", "prueba"), "gasto posible")
+	Simulation.earn(g, 400, "venta", "prueba")
+	eq(g.money, m0 - 600, "gasto e ingreso aplicados")
+	eq(#g.ledger, n + 2, "ambos quedan registrados")
+	eq(g.ledger[#g.ledger].amount, 400, "con su monto")
+	eq(Rules.debt(g), 0, "sin deudas al empezar")
+end)
+
+test("[E1] Guardar, guardar y volver al menú, recargar en otro servidor y nada de progreso sin conexión", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 531 }
+	mgr:add(p)
+	local g = playThrough(mgr, p).game
+	ticks(mgr, clock, 30)
+	local r = mgr:request(p, "saveNow", { requestId = rid() })
+	check(r.ok, "guardado manual: " .. tostring(r.msg))
+	local saved = store.data["player_531"].profile.slots["1"]
+	eq(saved.time.day * 10000 + saved.time.minute, g.time.day * 10000 + g.time.minute, "el guardado tiene la fecha actual")
+	check(mgr:request(p, "saveNow", { requestId = rid() }).msg ~= nil, "un segundo guardado inmediato queda programado")
+	ticks(mgr, clock, 20) -- el guardado programado se hace solo (respetando 7 s entre escrituras)
+	saved = store.data["player_531"].profile.slots["1"]
+	check(saved.time.day * 10000 + saved.time.minute > 0, "el guardado programado se escribió")
+	local date, money, id = Rules.date(g), g.money, g.company.id
+	r = mgr:request(p, "leaveCompany", {})
+	check(r.ok and string.find(r.msg, "guardada", 1, true) ~= nil, "guardar y volver al menú: " .. tostring(r.msg))
+	check(mgr.list[p] ~= nil and mgr.list[p].game == nil, "sigue en el servidor, en el menú")
+	saved = store.data["player_531"].profile.slots["1"]
+	eq(Util.fullDate(saved.time.day, saved.time.minute), date, "lo guardado tiene la fecha al volver al menú")
+	ticks(mgr, clock, 30)
+	eq(Rules.date(g), date, "en el menú la empresa no avanza")
+	-- Salir del juego, pasar horas y entrar en otro servidor.
+	mgr:remove(p)
+	clock.t += 6 * 3600
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "carga la empresa")
+	local g2 = mgr2.list[p].game
+	eq(Rules.date(g2), date, "misma fecha: no avanzó sin conexión")
+	eq(g2.money, money, "mismo dinero")
+	eq(g2.company.id, id, "misma empresa (mismo identificador)")
+end)
+
+test("[E1] Ranuras: dos gratuitas, la 3 y la 4 bloqueadas (sin compras), y las que ya tenían empresa se conservan", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr, pushed = makeServer(store, "A", clock)
+	local p = { UserId = 541 }
+	mgr:add(p)
+	eq(Catalog.RULES.slots, 4, "cuatro ranuras por cuenta")
+	eq(Catalog.RULES.slotsFree, 2, "dos gratuitas")
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Uno SA" }).ok, "ranura 1")
+	mgr:request(p, "leaveCompany", {})
+	check(mgr:request(p, "createCompany", { slot = "2", name = "Dos SA" }).ok, "ranura 2")
+	mgr:request(p, "leaveCompany", {})
+	check(not mgr:request(p, "createCompany", { slot = "3", name = "Tres SA" }).ok, "la 3 está bloqueada")
+	check(not mgr:request(p, "createCompany", { slot = "4", name = "Cuatro SA" }).ok, "la 4 también")
+	check(not mgr:request(p, "createCompany", { slot = "5", name = "Cinco SA" }).ok, "no hay quinta")
+	local view = pushed[p].profile
+	check(view.usable["1"] and view.usable["2"] and not view.usable["3"] and not view.usable["4"], "el cliente sabe cuáles se pueden usar")
+	local s = mgr.list[p]
+	check(s.profile.slots["1"].company.id ~= s.profile.slots["2"].company.id, "cada empresa con su identificador")
+	-- Cuenta de la versión anterior con 3 empresas: la tercera se conserva y queda habilitada.
+	local legacy = jsonCopy(s.profile.slots["1"])
+	legacy.company.name = "Vieja Tres"
+	local record = { schema = 2, profile = { slots = { ["1"] = jsonCopy(s.profile.slots["1"]), ["3"] = legacy }, settings = {}, processed = {} } }
+	local prof, damaged = GameState.loadProfile(record, 1)
+	check(prof ~= nil and next(damaged) == nil, "carga sin dañar nada")
+	check(GameState.slotUsable(prof, "3") and prof.unlocked["3"] == true, "la ranura 3 con empresa sigue disponible")
+	check(not GameState.slotUsable(prof, "4"), "la 4 sigue bloqueada")
+end)
+
+test("[E1] Migración 5 → 6: fecha conservada, velocidad 4× → 3×, identificador y deudas", function()
+	local g = newCompany("Vieja SA")
+	local old = jsonCopy(g)
+	old.schema = 5
+	old.company.id = nil
+	old.loans = nil
+	old.time = { day = 13, minute = 549, speed = 4 } -- febrero de 1971, último tramo del mes (550 min por mes)
+	local m, err = GameState.migrate(old, 1)
+	check(m ~= nil, tostring(err))
+	eq(m.time.day, 13, "mismo mes")
+	check(m.time.minute < Rules.monthMinutes(13) and m.time.minute >= Rules.monthMinutes(13) - 2 * Catalog.RULES.gameDayMinutes, "mismo tramo del mes (" .. m.time.minute .. ")")
+	eq(Util.dayOfMonth(13, m.time.minute), 28, "fin de febrero")
+	eq(m.time.speed, 3, "4× pasa a 3×")
+	check(type(m.company.id) == "string", "con identificador")
+	check(type(m.loans) == "table", "con deudas")
+	local ok, verr = GameState.validate(m)
+	check(ok, tostring(verr))
 end)
 
 T.finish()

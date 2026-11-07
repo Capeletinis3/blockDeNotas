@@ -529,9 +529,30 @@ local function clearChildren(f: Instance)
 	end
 end
 
+--[[ Pausa individual: con un panel de gestión (editor, producción, ventas, mercado, investigación, personal,
+	compañía, misiones, estadísticas) o un diálogo abiertos, la empresa del jugador no avanza. El servidor
+	lleva la pausa de cada sesión por separado; acá solo se avisa cuando cambia. ]]
+local sentPause: boolean? = nil
+function App.menuPaused(): boolean
+	return App.g ~= nil and ((FULLSCREEN[App.ui.route] == true and App.ui.route ~= "menu" and App.ui.route ~= "nueva") or #App.ui.dialogs > 0)
+end
+function App.syncPause()
+	local want = App.menuPaused()
+	if want == sentPause then
+		return
+	end
+	sentPause = want
+	task.spawn(function()
+		pcall(function()
+			Request:InvokeServer("setUiPause", { paused = want })
+		end)
+	end)
+end
+
 function App.renderDialog()
 	clearChildren(App.dialogLayer)
 	table.clear(dialogLive)
+	App.syncPause()
 	local d = App.topDialog()
 	if not d then
 		return
@@ -640,6 +661,7 @@ function App.render()
 		App.renderError = err
 	end
 	status.banners(App.content, p)
+	App.syncPause()
 end
 
 -- Estado entrante -------------------------------------------------------------------------------

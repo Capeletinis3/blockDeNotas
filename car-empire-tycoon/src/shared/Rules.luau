@@ -12,7 +12,7 @@ local Util = require(script.Parent.Util)
 local Rules = {}
 
 local ECON = Catalog.ECON
-local MONTH = Catalog.RULES.dayMinutes -- minutos de juego de un mes
+local DAY = Catalog.RULES.gameDayMinutes -- minutos de juego de un día
 local GAME_MIN_PER_REAL_MIN = Catalog.RULES.minutesPerRealSecond * 60 -- 600
 
 function Rules.has(g: any, researchId: string?): boolean
@@ -22,7 +22,7 @@ function Rules.has(g: any, researchId: string?): boolean
 	return g ~= nil and g.research ~= nil and Util.contains(g.research.done, researchId)
 end
 
-Util.setCalendar(Catalog.CALENDAR.startYear, Catalog.CALENDAR.endYear)
+Util.setCalendar(Catalog.CALENDAR.startYear, Catalog.CALENDAR.endYear, DAY)
 
 -- Calendario ------------------------------------------------------------------------
 
@@ -34,7 +34,7 @@ end
 
 -- Año con decimales (para curvas de demanda y la expectativa del mercado), con el mismo tope.
 function Rules.yearFrac(g: any): number
-	return math.min(Catalog.CALENDAR.endYear + 0.99, Catalog.CALENDAR.startYear + (g.time.day + g.time.minute / MONTH) / 12)
+	return math.min(Catalog.CALENDAR.endYear + 0.99, Catalog.CALENDAR.startYear + (g.time.day + g.time.minute / Rules.monthMinutes(g.time.day)) / 12)
 end
 
 -- Año comercial interno (sin tope): numera los años para las misiones anuales también después de endYear.
@@ -56,13 +56,52 @@ function Rules.extraYears(g: any): number
 	return math.max(0, Rules.periodYear(g) - Catalog.CALENDAR.endYear)
 end
 
+-- Minutos de juego que dura el mes `month` (sus días reales × minutos por día).
+function Rules.monthMinutes(month: number): number
+	return Util.daysInMonth(month) * DAY
+end
+
+-- Días transcurridos desde el 1/1 del año inicial hasta el comienzo del mes `month`.
+function Rules.daysBeforeMonth(month: number): number
+	local years = month // 12
+	local y0 = Catalog.CALENDAR.startYear
+	local leaps = 0
+	for y = y0, y0 + years - 1 do
+		if Util.isLeapYear(y) then
+			leaps += 1
+		end
+	end
+	local days = years * 365 + leaps
+	for m = years * 12, month - 1 do
+		days += Util.daysInMonth(m)
+	end
+	return days
+end
+
+-- Día absoluto de la partida (0 = 01/01/1970) y fecha visible.
+function Rules.absDay(g: any): number
+	return Rules.daysBeforeMonth(g.time.day) + g.time.minute // DAY
+end
+function Rules.date(g: any): string
+	return Util.fullDate(g.time.day, g.time.minute)
+end
+
 function Rules.absMinute(g: any): number
-	return g.time.day * MONTH + g.time.minute
+	return Rules.daysBeforeMonth(g.time.day) * DAY + g.time.minute
 end
 
 -- Minutos de juego → minutos reales a velocidad 1×.
 function Rules.realMinutes(gameMinutes: number): number
 	return gameMinutes / GAME_MIN_PER_REAL_MIN
+end
+
+-- Deuda total de la empresa (suma de los saldos de sus préstamos).
+function Rules.debt(g: any): number
+	local n = 0
+	for _, l in g.loans or {} do
+		n += l.balance or 0
+	end
+	return n
 end
 
 -- Sede y capacidades ---------------------------------------------------------------------

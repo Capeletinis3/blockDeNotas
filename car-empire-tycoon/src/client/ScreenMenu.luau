@@ -189,12 +189,14 @@ local function emptySlot(key: string): Frame
 	}, { dir = "H", v = "C", gap = 16, bg = Ui.hex("#0E1016"), transparency = 0.25, radius = 16, stroke = Ui.hex("#3A3F4D"), pad = 18, name = "Ranura_" .. key })
 end
 
-local function lockedSlot(n: number, anyLevel10: boolean): Frame
+-- Ranuras 3 y 4: bloqueadas hasta que exista su desbloqueo (en una etapa posterior). No hay botón de
+-- compra ni precio: nada que pueda confundirse con una compra real.
+local function lockedSlot(n: number): Frame
 	return Ui.card({
 		Ui.ico("lock", T.ye, T.ye, 32, { alpha = 0.12, iconSize = 17 }),
 		Ui.grow(Ui.col({
-			Ui.text("Ranura " .. n .. (anyLevel10 and " · próximamente" or " bloqueada"), { size = Ui.S.sm, weight = W.bold }),
-			Ui.text(Catalog.RULES.slotUnlock or "Se habilitan al llegar al nivel 10 con cualquier empresa. No hay compras con dinero real.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
+			Ui.text("Ranura " .. n .. " · bloqueada", { size = Ui.S.sm, weight = W.bold }),
+			Ui.text("Ranura adicional: se podrá habilitar más adelante. Por ahora no está disponible.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
 		}, 2)),
 	}, { dir = "H", v = "C", gap = 10, bg = Ui.hex("#0E1016"), transparency = 0.08, radius = 16, stroke = { T.ye, 1, 0.65 }, pad = { 14, 16 }, name = "Bloqueada_" .. n })
 end
@@ -203,12 +205,9 @@ function Screen.build(parent: Instance)
 	local phone = App.isPhone()
 	local vw, vh = App.vw, App.vh
 	local slots = App.profile and App.profile.slots or {}
-	local used, anyLevel10 = 0, false
-	for _, s in slots do
+	local used = 0
+	for _ in slots do
 		used += 1
-		if not s.damaged and (s.level or 0) >= 10 then
-			anyLevel10 = true
-		end
 	end
 
 	-- .menu-wrap: degradado horizontal sobre la escena 3D
@@ -297,21 +296,35 @@ function Screen.build(parent: Instance)
 	local cards: { Instance? } = {
 		Ui.row({
 			Ui.grow(Ui.text("Tus empresas", { size = 20, weight = W.bold })),
-			Ui.inline(used .. " de " .. Catalog.RULES.slots .. " ranuras en uso", { size = Ui.S.sm, color = T.mut }),
+			Ui.inline(used .. " de " .. (function()
+				local n = 0
+				for i = 1, Catalog.RULES.slots do
+					if i <= Catalog.RULES.slotsFree or (App.profile and App.profile.usable and App.profile.usable[tostring(i)]) then
+						n += 1
+					end
+				end
+				return n
+			end)() .. " ranuras en uso", { size = Ui.S.sm, color = T.mut }),
 		}, 10),
 	}
 	if App.payload and App.payload.saveMode == "memory" then
 		table.insert(cards, Ui.note("y", "Studio sin acceso a la API de DataStore: las empresas se guardan solo mientras dure esta prueba."))
 	end
+	local usable = App.profile and App.profile.usable or {}
+	local locked = {}
 	for i = 1, Catalog.RULES.slots do
 		local key = tostring(i)
-		table.insert(cards, slots[key] and slotCard(key, slots[key]) or emptySlot(key))
+		if slots[key] then
+			table.insert(cards, slotCard(key, slots[key]))
+		elseif usable[key] or i <= Catalog.RULES.slotsFree then
+			table.insert(cards, emptySlot(key))
+		else
+			table.insert(locked, lockedSlot(i))
+		end
 	end
-	local locked = {}
-	for i = 1, Catalog.RULES.slotsLocked do
-		table.insert(locked, lockedSlot(Catalog.RULES.slots + i, anyLevel10))
+	if #locked > 0 then
+		table.insert(cards, Ui.grid(locked, phone and 1 or 2, nil, 10))
 	end
-	table.insert(cards, Ui.grid(locked, phone and 1 or 2, nil, 10))
 	table.insert(cards, Ui.text("Tus empresas se guardan en tu cuenta de Roblox y se validan al cargarse.", { size = Ui.S.xs, color = T.mut }))
 	local right = Ui.col(cards, 12, { Name = "Empresas", v = "C" })
 

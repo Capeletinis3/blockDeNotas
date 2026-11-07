@@ -116,15 +116,39 @@ function Util.clock(minute: number): string
 	return string.format("%02d:%02d", math.floor(mm / 60), mm % 60)
 end
 
--- Calendario: g.time.day cuenta MESES desde enero del año inicial (1970); ver Catalog.CALENDAR.
+-- Calendario: g.time.day cuenta MESES desde enero del año inicial (1970) y g.time.minute los minutos de juego
+-- dentro del mes (DAY_MINUTES por día); ver Catalog.CALENDAR.
 local START_YEAR = 1970
 local END_YEAR = 2030 -- último año histórico visible (Catalog.CALENDAR.endYear; ver Util.setCalendar)
+local DAY_MINUTES = 20
+local DAYS_IN_MONTH = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
 Util.MONTHS = { "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic" }
 function Util.setStartYear(y: number)
 	START_YEAR = y
 end
-function Util.setCalendar(startYear: number, endYear: number)
+function Util.setCalendar(startYear: number, endYear: number, dayMinutes: number?)
 	START_YEAR, END_YEAR = startYear, endYear
+	DAY_MINUTES = dayMinutes or DAY_MINUTES
+end
+function Util.isLeapYear(y: number): boolean
+	return (y % 4 == 0 and y % 100 ~= 0) or y % 400 == 0
+end
+-- Días del mes `month` (meses desde enero del año inicial), con años bisiestos reales.
+function Util.daysInMonth(month: number): number
+	local m = math.floor(month)
+	local mo = m % 12 + 1
+	if mo == 2 and Util.isLeapYear(START_YEAR + m // 12) then
+		return 29
+	end
+	return DAYS_IN_MONTH[mo]
+end
+-- Día del mes (1..31) que corresponde a `minute` minutos de juego dentro del mes.
+function Util.dayOfMonth(month: number, minute: number): number
+	return math.clamp(math.floor((minute or 0) / DAY_MINUTES) + 1, 1, Util.daysInMonth(month))
+end
+-- Fecha completa «dd/mm/aaaa» (el año visible no pasa del último año histórico).
+function Util.fullDate(month: number, minute: number): string
+	return string.format("%02d/%02d/%d", Util.dayOfMonth(month, minute), math.floor(month) % 12 + 1, Util.yearOf(month))
 end
 -- Año histórico visible: no pasa del último año con contenido.
 function Util.yearOf(month: number): number

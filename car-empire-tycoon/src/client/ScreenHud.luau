@@ -257,7 +257,7 @@ local function hbtn(icon: string, onClick: () -> (), badge: number?, name: strin
 end
 Screen.hbtn = hbtn
 
-local SPEEDS = { { 0, "❚❚", "Pausa" }, { 1, "1×", "Velocidad normal" }, { 2, "2×", "Velocidad doble" }, { 4, "4×", "Velocidad cuádruple" } }
+local SPEEDS = { { 0, "❚❚", "Pausa" }, { 1, "1×", "Velocidad normal" }, { 2, "2×", "Velocidad doble" }, { 3, "3×", "Velocidad triple" } }
 function Screen.speedGroup(g: any, compact: boolean?): Frame
 	local group = Ui.new("Frame", {
 		Name = "Velocidad",
@@ -271,7 +271,7 @@ function Screen.speedGroup(g: any, compact: boolean?): Frame
 		List = { dir = "H", gap = 2, v = "C" },
 	})
 	for _, sp in SPEEDS do
-		if compact and (sp[1] == 2 or sp[1] == 4) then
+		if compact and (sp[1] == 2 or sp[1] == 3) then
 			continue
 		end
 		local on = g.time.speed == sp[1]
@@ -332,12 +332,15 @@ local function hud1(g: any): Frame
 	local items: { Instance? } = { brand }
 	if deskOnly then
 		local function kicker(gg: any): string
+			if App.menuPaused() then
+				return "FECHA · EN PAUSA (MENÚ)"
+			end
 			local extra = Util.extraYears(gg.time.day)
 			return extra > 0 and ("FECHA · AÑO EXTRA " .. extra) or "FECHA"
 		end
-		local f, v, k = res("cal", T.bl2, T.bl, 0.16, kicker(g), Util.gameDate(g.time.day), { name = "Fecha" })
+		local f, v, k = res("cal", T.bl2, T.bl, 0.16, kicker(g), Util.fullDate(g.time.day, g.time.minute), { name = "Fecha" })
 		App.live(function(gg: any)
-			v.Text = Util.gameDate(gg.time.day)
+			v.Text = Util.fullDate(gg.time.day, gg.time.minute)
 			if k then
 				k.Text = kicker(gg)
 			end
