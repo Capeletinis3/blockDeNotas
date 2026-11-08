@@ -8,6 +8,7 @@
 
 local Catalog = require(script.Parent.Catalog)
 local Util = require(script.Parent.Util)
+local Staff = require(script.Parent.Staff)
 
 local Rules = {}
 
@@ -134,35 +135,18 @@ function Rules.tech(g: any, key: string): number
 	return n
 end
 
--- Aporte de un puesto: habilidad × afinidad (la mitad si no es el rol ideal).
-function Rules.staffBonus(g: any, area: string): number
-	local st = Catalog.station(area) or Catalog.department(area)
-	local want = st and st[3] or nil
-	local total = 0
-	for _, e in g.employees or {} do
-		if e.assign == area then
-			total += (e.skill / 100) * (e.role == want and 1 or 0.5)
-		end
-	end
-	return total
-end
-
-function Rules.assignedCount(g: any, area: string, exceptId: string?): number
-	local n = 0
-	for _, e in g.employees or {} do
-		if e.assign == area and e.id ~= exceptId then
-			n += 1
-		end
-	end
-	return n
+-- Bonificación de personal de una habilidad (Catalog.STAFF.skills), ya con su tope.
+function Rules.staff(g: any, skillId: string): number
+	return Staff.bonus(g, skillId)
 end
 
 function Rules.salaries(g: any): number
-	local n = 0
-	for _, e in g.employees or {} do
-		n += e.salary
-	end
-	return n
+	return Staff.salaries(g)
+end
+
+-- Costo por unidad de un lote nuevo: el del diseño menos la eficiencia de Producción.
+function Rules.lotUnitCost(g: any, unitCost: number): number
+	return math.max(1, Util.round(unitCost * (1 - Rules.staff(g, "eficiencia"))))
 end
 
 -- Nivel máximo de las estaciones: 2 por nivel de sede (hasta 10 con el Imperio automotriz).
@@ -174,15 +158,14 @@ function Rules.upgradeCost(s: any): number
 	return Util.round(5000 * math.pow(2.6, s.level - 1) / 100) * 100
 end
 
--- Multiplicador de la fábrica: mejoras de estaciones, tecnología y personal asignado a las estaciones.
+-- Multiplicador de la fábrica: mejoras de estaciones, tecnología y velocidad del personal de Producción
+-- (se aplica enseguida también a los lotes en curso).
 function Rules.factoryMult(g: any): number
 	local levels = 0
-	local staff = 0
 	for _, st in Catalog.STATIONS do
 		levels += (g.stations[st[1]].level - 1)
-		staff += Rules.staffBonus(g, st[1])
 	end
-	return (1 + Catalog.STATION_SPEED * levels) * (1 + Rules.tech(g, "prodSpeed") / 100) * (1 + math.min(0.3, staff * 0.05))
+	return (1 + Catalog.STATION_SPEED * levels) * (1 + Rules.tech(g, "prodSpeed") / 100) * (1 + Rules.staff(g, "velocidad"))
 end
 
 -- Expansión global (después de la sede máxima) ---------------------------------------------
@@ -542,14 +525,13 @@ function Rules.campaignCost(g: any, lvl: number): number
 	return c and Util.round(Rules.sede(g).campaign * c.cost * Rules.marketFactor(g) / 100) * 100 or 0
 end
 
--- Multiplicador comercial de la empresa: alcance de la sede × reputación × tecnologías × campaña × personal.
+-- Multiplicador comercial de la empresa: alcance de la sede × reputación × tecnologías × campaña.
 function Rules.playerMult(g: any): number
 	local rep = 0.6 + g.reputation * 0.14
 	local tech = 1 + Rules.tech(g, "demand") / 100
 	local c = Rules.campaign(g)
 	local campaign = c and (1 + c.boost) or 1
-	local staff = 1 + math.min(0.25, (Rules.staffBonus(g, "ventas") + Rules.staffBonus(g, "marketing")) * 0.05)
-	return Rules.reach(g) * rep * tech * campaign * staff
+	return Rules.reach(g) * rep * tech * campaign
 end
 
 -- Factor de precio: vender por encima del precio de referencia baja las ventas (y al revés). Cada tipo
@@ -626,10 +608,15 @@ end
 
 -- Investigación ---------------------------------------------------------------------------
 
---[[ Puntos de integración para el personal de I+D (etapa futura): conocimiento reduce los PI necesarios,
-	creatividad la duración y precisión el costo en dinero. Hoy no hay bonificaciones: devuelve 1. ]]
-function Rules.researchModifiers(_g: any): any
-	return { pi = 1, days = 1, money = 1 }
+--[[ Personal de Investigación: conocimiento reduce los PI, precisión el dinero (se aplican al empezar) y
+	creatividad acelera el avance de los proyectos en curso (Rules.researchSpeed, en vivo). Nunca suman PI/min. ]]
+function Rules.researchModifiers(g: any): any
+	return { pi = 1 - Rules.staff(g, "conocimiento"), days = 1, money = 1 - Rules.staff(g, "precision") }
+end
+
+-- Días de proyecto que avanza cada día de juego (creatividad del personal de Investigación).
+function Rules.researchSpeed(g: any): number
+	return 1 / (1 - Rules.staff(g, "creatividad"))
 end
 
 -- Años de adelanto de una tecnología respecto del año actual (0 si ya apareció).
@@ -689,8 +676,9 @@ function Rules.researchCost(g: any, n: any): (number, number, number, any)
 end
 
 -- Segundos reales que le faltan a un proyecto a la velocidad indicada (1 día = realSecondsPerDay a 1×).
-function Rules.projectSecondsLeft(p: any, speed: number?): number
-	return math.max(0, p.days - p.progress) * Catalog.CALENDAR.realSecondsPerDay / math.max(1, speed or 1)
+function Rules.projectSecondsLeft(p: any, speed: number?, g: any?): number
+	local rate = g and Rules.researchSpeed(g) or 1
+	return math.max(0, p.days - p.progress) / rate * Catalog.CALENDAR.realSecondsPerDay / math.max(1, speed or 1)
 end
 
 -- Motores: nivel máximo investigado de una familia (el 1 viene con el motor) y variantes disponibles.

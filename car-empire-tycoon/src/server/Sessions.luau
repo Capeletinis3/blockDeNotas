@@ -265,9 +265,7 @@ function Sessions:activate(s: any, key: string, demoGame: any?)
 		s.profile.active = key
 		s.game = s.profile.slots[key]
 	end
-	if #s.game.candidates == 0 then
-		s.game.candidates = Simulation.makeCandidates(s.game, s.ctx, 5)
-	end
+	Simulation.ensureMarket(s.game, s.ctx) -- candidatos del mes (8, se renuevan cada mes)
 	local garage = self.deps.garage
 	if garage then
 		local plot = garage.assign(s.player, s.game)

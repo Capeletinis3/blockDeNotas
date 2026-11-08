@@ -1805,7 +1805,7 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 		table.insert(g.research.done, "mk1")
 		check(Actions.setCampaign(g, ctx, { level = 1 }).ok, "campaña activada")
 	end
-	check(Actions.moreCandidates(g, ctx, {}).ok, "busca candidatos")
+	check(Actions.searchCandidates(g, ctx, { kind = "general" }).ok, "busca candidatos")
 	local cand = g.candidates[1]
 	check(cand ~= nil and Actions.hire(g, ctx, { candidateId = cand.id }).ok, "contrata")
 	local lot = Actions.createLot(g, ctx, { designId = id, qty = 2000 })
@@ -2854,6 +2854,201 @@ test("[I2] Empresas: mismas condiciones, identidad obligatoria, fecha inicial y 
 	check(GameState.slotUsable(mgr2.list[p].profile, "3"), "persistida")
 	check(table.find(mgr2.list[p].profile.receipts, "r-1") ~= nil, "con su recibo")
 	Catalog.PRODUCTS.slot3.id = saved
+end)
+
+test("[I3] Personal: departamentos, bonificaciones con tope propio, transferencias, salarios, deuda, despidos y mercado laboral", function()
+	local Staff = require("./.build/shared/Staff")
+	local g = bigCompany("Personal SA")
+	local ctx = makeCtx(301)
+	eq(#g.employees, 0, "empieza sin empleados")
+	Simulation.ensureMarket(g, ctx)
+	eq(#g.candidates, 8, "8 candidatos en el mes")
+	local function hireBest(dept: string, n: number?)
+		for _ = 1, n or 1 do
+			Simulation.ensureMarket(g, ctx)
+			local c = Simulation.makeCandidate(g, ctx, dept)
+			c.spec = dept
+			for _, k in Staff.dept(dept).skills do
+				c.skills[k], c.potential[k] = 90, 100
+			end
+			table.insert(g.candidates, c)
+			local r = Actions.hire(g, ctx, { candidateId = c.id, dept = dept })
+			assert(r.ok, r.msg)
+		end
+	end
+	-- Contratar no cuesta y empieza a cobrar el mes siguiente.
+	local c1 = g.candidates[1]
+	local m0 = g.money
+	check(Actions.hire(g, ctx, { candidateId = c1.id, dept = c1.spec }).ok, "contrata")
+	eq(g.money, m0, "sin costo de contratación")
+	eq(#g.candidates, 7, "sale del mercado")
+	local e1 = g.employees[1]
+	eq(e1.dept, c1.spec, "en el departamento elegido")
+	-- Bonificaciones: cada habilidad con su efecto y su propio tope.
+	g.employees = {}
+	local rate0 = Rules.lineRate(g)
+	hireBest("produccion")
+	check(Rules.lineRate(g) > rate0, "velocidad: la línea fabrica más rápido (" .. Util.num(rate0, 1) .. " → " .. Util.num(Rules.lineRate(g), 1) .. ")")
+	local unit = DesignCalc.computeDesign(g, DesignCalc.newDraft(g, "brisa")).unitCost
+	check(Rules.lotUnitCost(g, unit) < unit, "eficiencia: lotes nuevos más baratos")
+	hireBest("produccion", 9)
+	local v, raw, cap = Staff.bonusDetail(g, "velocidad")
+	check(raw > cap and v == cap, "velocidad llega a su tope (" .. Util.num(v * 100, 1) .. " % de " .. Util.num(cap * 100, 1) .. " %)")
+	local ve, rawE, capE = Staff.bonusDetail(g, "eficiencia")
+	check(capE ~= cap and ve == capE and rawE >= capE, "eficiencia tiene otro tope (" .. Util.num(capE * 100, 1) .. " %)")
+	local extra = Simulation.makeCandidate(g, ctx, "produccion")
+	extra.spec = "produccion"
+	for _, p in Staff.previewHire(g, extra, "produccion") do
+		if p.skill == "velocidad" then
+			check(p.gain == 0 and p.capped, "la vista previa avisa que en el tope no suma")
+		end
+	end
+	-- Investigación: menos PI, dinero y días; nunca más PI por minuto.
+	local n = Catalog.researchNode("ca1")
+	local pi0, money0 = Rules.researchCost(g, n)
+	local ppm = Rules.piPerMinute(g)
+	hireBest("investigacion", 3)
+	local pi1, money1 = Rules.researchCost(g, n)
+	check(pi1 < pi0 and money1 < money0, "conocimiento y precisión bajan PI y dinero (" .. pi0 .. " → " .. pi1 .. " PI)")
+	eq(Rules.piPerMinute(g), ppm, "los empleados no suman PI por minuto")
+	check(Rules.researchSpeed(g) > 1, "creatividad acelera los proyectos en curso")
+	-- Transferencia: penalización inicial, adaptación progresiva y habilidades conservadas.
+	local t = g.employees[1]
+	local skills = jsonCopy(t.skills)
+	check(Actions.setDept(g, ctx, { employeeId = t.id, dept = "marketing" }).ok, "transferido a Marketing")
+	eq(Staff.adaptation(t), Catalog.STAFF.adaptStart, "empieza al 50 %")
+	Simulation.stepStaff(g, Catalog.RULES.gameDayMinutes * 90)
+	check(math.abs(Staff.adaptation(t) - 0.75) < 1e-6, "a los 90 días, 75 %")
+	eq(serde.encode("json", t.skills), serde.encode("json", skills), "conserva sus habilidades")
+	check(Actions.setDept(g, ctx, { employeeId = t.id, dept = "produccion" }).ok and Staff.adaptation(t) == 1, "vuelve a su especialidad al 100 %")
+	check(Actions.setDept(g, ctx, { employeeId = t.id, dept = "marketing" }).ok and math.abs(Staff.adaptation(t) - 0.75) < 1e-6, "y conserva lo adaptado si vuelve a Marketing")
+	-- Límite global de empleados.
+	local limit = Rules.caps(g).staff
+	while #g.employees < limit do
+		hireBest("administracion")
+	end
+	Simulation.ensureMarket(g, ctx)
+	check(not Actions.hire(g, ctx, { candidateId = g.candidates[1].id }).ok, "límite global (" .. limit .. ")")
+	-- Salarios al empezar el mes; si no alcanza, deuda y productividad que baja.
+	local sal = Staff.salaries(g)
+	g.money = sal - 1000
+	Simulation.monthRollover(g, ctx)
+	eq(g.money, 0, "se pagó lo posible")
+	eq(g.payroll.debt, 1000, "el resto queda como deuda")
+	eq(#g.employees, limit, "nadie renuncia")
+	local p1 = Staff.productivity(g, g.employees[2])
+	g.money = 0
+	Simulation.monthRollover(g, ctx)
+	check(Staff.productivity(g, g.employees[2]) < p1, "la deuda prolongada baja la productividad")
+	local debt = g.payroll.debt
+	-- Ventas: 30 % a la deuda, 70 % a la empresa; si falta menos, solo lo necesario.
+	g.money = 0
+	Simulation.recoverSalaryDebt(g, ctx, 1000)
+	g.money += 1000 - 300 -- (stepSales suma la venta completa antes de descontar)
+	eq(g.payroll.debt, debt - 300, "30 % de la venta a la deuda")
+	g.payroll.debt = 100
+	local before = g.money
+	Simulation.recoverSalaryDebt(g, ctx, 1000)
+	eq(before - g.money, 100, "si queda menos que el 30 %, solo lo necesario")
+	eq(g.payroll.debt, 0, "deuda saldada")
+	eq(g.payroll.debtMonths, 0, "productividad normal otra vez")
+	Simulation.recoverSalaryDebt(g, ctx, 1000)
+	eq(before - g.money, 100, "sin pagos duplicados")
+	-- Indemnización: salario × años trabajados (proporcional).
+	local f = g.employees[1]
+	f.salary = 3000
+	f.hiredDay = Rules.absDay(g) - 365 / 2
+	eq(Staff.severance(f, Rules.absDay(g)), 1500, "$3.000 y seis meses → $1.500")
+	g.money = 1000
+	check(not Actions.fire(g, ctx, { employeeId = f.id }).ok, "sin dinero para la indemnización no se despide")
+	g.money = 5000
+	check(Actions.fire(g, ctx, { employeeId = f.id }).ok, "despedido")
+	eq(g.money, 3500, "pagó la indemnización")
+	-- Experiencia: cada 6 meses mejora su departamento, nunca por encima del potencial.
+	local x = g.employees[1]
+	local k = Staff.dept(x.dept).skills[1]
+	x.skills[k], x.potential[k], x.months = 50, 51, 5
+	g.money = 1e9
+	Simulation.monthRollover(g, ctx)
+	eq(x.skills[k], 51, "+1 a los 6 meses")
+	x.months = 11
+	Simulation.monthRollover(g, ctx)
+	eq(x.skills[k], 51, "no supera su potencial")
+	check(GameState.validate(g), "partida válida")
+	x.skills[k] = 60
+	check(not GameState.validate(g), "una habilidad por encima del potencial es un dato dañado")
+	x.skills[k] = 51
+end)
+
+test("[I3] Mercado laboral: 8 por mes que se reemplazan, búsquedas con precio creciente y reputación", function()
+	local Staff = require("./.build/shared/Staff")
+	local g = bigCompany("Mercado SA")
+	local ctx = makeCtx(302)
+	Simulation.ensureMarket(g, ctx)
+	local first = g.candidates[1].id
+	local base = Catalog.STAFF.searchBase * Staff.eraMult(1970)
+	-- Búsquedas: general, +50 % cada una del mes, especializada +50 % de base, contador compartido.
+	local costs = {}
+	local m = g.money
+	check(Actions.searchCandidates(g, ctx, { kind = "general" }).ok, "búsqueda general")
+	table.insert(costs, m - g.money)
+	eq(#g.candidates, 8, "reemplaza: siguen siendo 8")
+	check(g.candidates[1].id ~= first, "candidatos nuevos")
+	m = g.money
+	check(Actions.searchCandidates(g, ctx, { kind = "general" }).ok, "segunda")
+	table.insert(costs, m - g.money)
+	m = g.money
+	check(Actions.searchCandidates(g, ctx, { kind = "especializada", dept = "marketing" }).ok, "especializada")
+	table.insert(costs, m - g.money)
+	eq(costs[1], base, "primera: " .. Util.money(base))
+	eq(costs[2], base * 1.5, "segunda: +50 %")
+	eq(costs[3], base * 1.5 * 1.5 * 1.5, "especializada (+50 %) con el contador compartido (tercera del mes)")
+	check(not Actions.searchCandidates(g, ctx, { kind = "especializada" }).ok, "la especializada pide departamento")
+	-- Nuevo mes: 8 nuevos y el contador vuelve a cero.
+	Simulation.simulate(g, ctx, Rules.monthMinutes(g.time.day))
+	eq(g.market.searches, 0, "el contador se reinicia")
+	eq(#g.candidates, 8, "8 nuevos")
+	m = g.money
+	check(Actions.searchCandidates(g, ctx, { kind = "general" }).ok and m - g.money == base, "vuelve al precio base")
+	-- Especialidades al azar (sin cuotas) y especializada ≈ 50 % del departamento elegido.
+	local focus, total, specs = 0, 0, {}
+	for _ = 1, 300 do
+		local c = Simulation.makeCandidate(g, ctx, "investigacion")
+		total += 1
+		focus += c.spec == "investigacion" and 1 or 0
+		specs[c.spec] = true
+	end
+	check(focus / total > 0.4 and focus / total < 0.75, "especializada: " .. Util.round(focus / total * 100) .. " % del departamento elegido")
+	check(specs.produccion and specs.marketing and specs.administracion, "el resto se reparte entre los otros tres")
+	-- La reputación mejora la calidad promedio, pero una empresa nueva puede encontrar un extraordinario.
+	local function avg(rep: number): (number, number)
+		g.reputation = rep
+		local sum, exc = 0, 0
+		for _ = 1, 400 do
+			local c = Simulation.makeCandidate(g, ctx, nil)
+			sum += Staff.deptAverage(c, c.spec)
+			exc += c.exceptional and 1 or 0
+		end
+		return sum / 400, exc
+	end
+	local low, excLow = avg(1)
+	local high = avg(5)
+	check(high > low + 3, "más reputación, mejores candidatos (" .. Util.num(low, 1) .. " → " .. Util.num(high, 1) .. ")")
+	check(excLow > 0, "con reputación baja también aparecen extraordinarios (" .. excLow .. ")")
+	-- Migración 9 → 10 de empleados viejos.
+	local old = jsonCopy(newCompany("Vieja Staff SA"))
+	old.schema = 9
+	old.employees = { { id = "e5", name = "Ana Paz", role = "Ingeniero", level = 3, skill = 70, salary = 2000, assign = "laboratorio" } }
+	old.candidates = { { id = "c9", name = "X", role = "Mecánico", level = 1, skill = 40, salary = 900, fee = 3000 } }
+	old.market, old.payroll = nil, nil
+	local mg = GameState.migrate(jsonCopy(old), 5000)
+	check(mg ~= nil and GameState.validate(mg), "migra y valida")
+	local e = mg.employees[1]
+	eq(e.spec, "investigacion", "Ingeniero → Investigación")
+	eq(e.dept, "investigacion", "asignado al laboratorio → Investigación")
+	eq(e.skills.conocimiento, 70, "conserva su habilidad")
+	eq(e.salary, 2000, "y su salario")
+	eq(#mg.candidates, 0, "los candidatos viejos se reemplazan al abrir")
 end)
 
 T.finish()

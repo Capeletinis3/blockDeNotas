@@ -509,8 +509,8 @@ Catalog.STATIONS = {
 	{ "entrega", "Logística", "Mecánico" },
 }
 Catalog.STATION_SPEED = 0.06 -- +6 % de producción por nivel de cada estación por encima del 1
--- Departamentos: { id, nombre, rol ideal, efecto }. El personal es una ayuda secundaria: nunca obligatorio.
-Catalog.ROLES = { "Mecánico", "Ingeniero", "Diseñador", "Inspector", "Vendedor", "Marketing", "Gerente" }
+-- Roles de versiones anteriores (solo para migrar empleados viejos a los departamentos nuevos).
+Catalog.LEGACY_ROLES = { ["Mecánico"] = "produccion", ["Inspector"] = "produccion", ["Diseñador"] = "produccion", ["Ingeniero"] = "investigacion", ["Vendedor"] = "marketing", ["Marketing"] = "marketing", ["Gerente"] = "administracion" }
 --[[ Críticos especializados: cada uno pondera distintos aspectos del auto (índices 0–100 de Rules.indices más
 	«tech», el nivel tecnológico frente a la época). La nota (1–10) compara eso con lo que espera el mercado
 	ese año: un auto promedio de su época saca ≈ 5,5. Las reseñas se calculan UNA vez, al terminar el lote, y
@@ -544,11 +544,56 @@ Catalog.CRITIC_ASPECTS = {
 Catalog.FIRST = { "Sofía", "Mateo", "Lara", "Julián", "Carla", "Ramiro", "Elena", "Diego", "Ana", "Pablo", "Inés", "Tomás", "Valentina", "Bruno", "Camila", "Martina", "Lucía", "Joaquín", "Abril", "Nicolás" }
 Catalog.LAST = { "Arce", "Ruiz", "Sosa", "Paz", "Vega", "Gil", "Bruno", "Mora", "Núñez", "Ortiz", "Ríos", "Pereyra", "Luna", "Ferrari", "Medina", "Romero" }
 
-Catalog.DEPARTMENTS = {
-	{ "laboratorio", "Laboratorio", "Ingeniero", "Preparado para I+D: en una etapa próxima reducirá costos y tiempos de investigación (hoy sin efecto)" },
-	{ "ventas", "Ventas", "Vendedor", "Más atractivo comercial" },
-	{ "marketing", "Marketing", "Marketing", "Más demanda" },
-	{ "diseno", "Estudio de diseño", "Diseñador", "Baja el costo de desarrollo" },
+--[[ Personal (valores provisionales, centralizados acá para equilibrar).
+	Cuatro departamentos con tres habilidades cada uno. Cada habilidad (0–100) da un beneficio propio con su
+	LÍMITE propio: per = beneficio que aporta un empleado con 100 puntos y productividad plena; cap = máximo
+	de la empresa (los aportes se suman hasta ese tope). unit "pct" = porcentaje (0,10 = 10 %), "pts" = puntos.
+	Los empleados nunca suman PI por minuto: Investigación reduce PI, días y dinero de cada proyecto. ]]
+Catalog.STAFF = {
+	departments = {
+		{ id = "produccion", name = "Producción", color = "#FFA050", icon = "factory", skills = { "velocidad", "calidad", "eficiencia" } },
+		{ id = "investigacion", name = "Investigación", color = "#50D2E6", icon = "flask", skills = { "conocimiento", "creatividad", "precision" } },
+		{ id = "marketing", name = "Marketing", color = "#FF78AA", icon = "tag", skills = { "mk_creatividad", "analisis", "comunicacion" } },
+		{ id = "administracion", name = "Administración", color = "#C9CED8", icon = "building", skills = { "organizacion", "finanzas", "gestion" } },
+	},
+	skills = {
+		velocidad = { dept = "produccion", name = "Velocidad", effect = "menos tiempo de fabricación", per = 0.10, cap = 0.30, unit = "pct" },
+		calidad = { dept = "produccion", name = "Calidad", effect = "puntos de calidad en los autos que se terminan", per = 3, cap = 8, unit = "pts" },
+		eficiencia = { dept = "produccion", name = "Eficiencia", effect = "menor costo de fabricación", per = 0.05, cap = 0.15, unit = "pct" },
+		conocimiento = { dept = "investigacion", name = "Conocimiento", effect = "menos PI necesarios", per = 0.08, cap = 0.25, unit = "pct" },
+		creatividad = { dept = "investigacion", name = "Creatividad", effect = "investigaciones más cortas", per = 0.08, cap = 0.30, unit = "pct" },
+		precision = { dept = "investigacion", name = "Precisión", effect = "menor costo en dinero de investigar", per = 0.08, cap = 0.25, unit = "pct" },
+		mk_creatividad = { dept = "marketing", name = "Creatividad", effect = "campañas más efectivas", per = 0.10, cap = 0.35, unit = "pct" },
+		analisis = { dept = "marketing", name = "Análisis de mercado", effect = "campañas más baratas", per = 0.08, cap = 0.25, unit = "pct" },
+		comunicacion = { dept = "marketing", name = "Comunicación", effect = "campañas que duran más", per = 0.10, cap = 0.40, unit = "pct" },
+		organizacion = { dept = "administracion", name = "Organización", effect = "obras y mejoras más rápidas", per = 0.10, cap = 0.40, unit = "pct" },
+		finanzas = { dept = "administracion", name = "Eficiencia financiera", effect = "menores gastos operativos y de mantenimiento", per = 0.08, cap = 0.25, unit = "pct" },
+		gestion = { dept = "administracion", name = "Gestión", effect = "expansiones más baratas", per = 0.06, cap = 0.20, unit = "pct" },
+	},
+	-- Transferencias: fuera de su especialidad un empleado empieza al adaptStart de productividad y llega al
+	-- 100 % en adaptDays días de juego (una capacitación en ese departamento suma trainingAdapt).
+	adaptStart = 0.5,
+	adaptDays = 180,
+	trainingAdapt = 0.2,
+	trainingProductivity = 0.8, -- productividad mientras se capacita (sigue trabajando)
+	-- Deuda salarial: cada mes con sueldos atrasados baja la productividad (nunca renuncian).
+	debtProductivityPerMonth = 0.1,
+	debtProductivityFloor = 0.5,
+	debtRecoveryShare = 0.3, -- parte de cada venta que se destina a pagar sueldos atrasados
+	-- Experiencia: cada expEvery meses trabajados suma expGain a las habilidades de su departamento actual.
+	expEvery = 6,
+	expGain = 1,
+	-- Salario mensual = (base + perPoint × promedio de las habilidades de su especialidad) × época.
+	salaryBase = 700,
+	salaryPerPoint = 35,
+	salaryEra = { { 1970, 1 }, { 1980, 2.2 }, { 1990, 4 }, { 2000, 6 }, { 2010, 8 }, { 2030, 11 } },
+	-- Mercado laboral: candidatos por mes (se reemplazan), búsquedas pagas y probabilidad de talentos.
+	candidatesPerMonth = 8,
+	searchBase = 1000, -- búsqueda general (× época)
+	searchSpecialMult = 1.5, -- la especializada cuesta 50 % más
+	searchGrowth = 1.5, -- cada búsqueda del mismo mes cuesta 50 % más que la anterior (contador compartido)
+	searchFocus = 0.5, -- especializada: probabilidad de que cada candidato sea del departamento elegido
+	exceptionalChance = 0.03, -- candidato extraordinario, posible aun con reputación baja
 }
 
 --[[ Investigación y desarrollo (I+D). Cuatro categorías del departamento de I+D: Chasis, Motores,
@@ -1048,8 +1093,8 @@ function Catalog.station(id: any): any
 end
 
 function Catalog.department(id: any): any
-	for _, d in Catalog.DEPARTMENTS do
-		if d[1] == id then
+	for _, d in Catalog.STAFF.departments do
+		if d.id == id then
 			return d
 		end
 	end

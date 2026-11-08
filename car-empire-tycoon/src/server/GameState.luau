@@ -13,10 +13,11 @@ local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
+local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 9
+GameState.SCHEMA = 10
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -66,8 +67,10 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		records = GameState.newRecords(), -- récords de la empresa (no dependen del historial)
 		launched = {}, -- diseños que ya cobraron la bonificación de lanzamiento exitoso
 		marketShare = {}, -- cuota de mercado por tipo (promedio móvil mensual)
-		employees = {},
-		candidates = {},
+		employees = {}, -- ver Staff.luau (departamento, habilidades, potencial, antigüedad…)
+		candidates = {}, -- 8 por mes (Simulation.ensureMarket); se reemplazan, no se acumulan
+		market = { month = -1, searches = 0 }, -- mes de los candidatos actuales y búsquedas pagas del mes
+		payroll = { debt = 0, debtMonths = 0 }, -- sueldos atrasados y meses seguidos con deuda
 		stations = freshStations(),
 		ledger = {},
 		-- projects = investigaciones en curso { id, progress (días), days, paidMoney, paidPi, ahead, startDay }
@@ -374,13 +377,41 @@ function GameState.validate(g: any): (boolean, string?)
 		end
 	end
 	-- Personal
+	local function checkSkills(t: any, pot: any): boolean
+		if type(t) ~= "table" or type(pot) ~= "table" then
+			return false
+		end
+		for _, k in Staff.SKILL_ORDER do
+			if not isInt(t[k], 0, 100) or not isInt(pot[k], 0, 100) or t[k] > pot[k] then
+				return false
+			end
+		end
+		return true
+	end
+	if #g.employees > 500 or #g.candidates > 40 then
+		return fail("Demasiados empleados o candidatos.")
+	end
 	for _, e in g.employees do
-		if type(e) ~= "table" or type(e.id) ~= "string" or not Util.contains(Catalog.ROLES, e.role) or not isInt(e.skill, 0, 100) or not nonNeg(e.salary) then
+		if type(e) ~= "table" or type(e.id) ~= "string" or type(e.name) ~= "string" or not Staff.dept(e.spec) or not Staff.dept(e.dept) or not nonNeg(e.salary) then
 			return fail("Hay un empleado dañado.")
 		end
-		if e.assign ~= nil and not Catalog.station(e.assign) and not Catalog.department(e.assign) then
-			return fail("Puesto de empleado desconocido.")
+		if not checkSkills(e.skills, e.potential) or not isInt(e.months, 0) or not isFinite(e.hiredDay) or type(e.adapt) ~= "table" then
+			return fail("Las habilidades de " .. e.name .. " están dañadas (nunca superan su potencial).")
 		end
+		if e.training ~= nil and type(e.training) ~= "string" then
+			return fail("La capacitación de " .. e.name .. " está dañada.")
+		end
+	end
+	for _, c in g.candidates do
+		if type(c) ~= "table" or type(c.id) ~= "string" or not Staff.dept(c.spec) or not nonNeg(c.salary) or not checkSkills(c.skills, c.potential) then
+			return fail("Hay un candidato dañado.")
+		end
+	end
+	if type(g.market) ~= "table" or not isInt(g.market.month, -1) or not isInt(g.market.searches, 0) then
+		return fail("El mercado laboral está dañado.")
+	end
+	if type(g.payroll) ~= "table" or not nonNeg(g.payroll.debt) or not isInt(g.payroll.debtMonths, 0) then
+		return fail("La deuda salarial está dañada.")
 	end
 	for _, l in g.ledger do
 		if type(l) ~= "table" or not isFinite(l.amount) or type(l.type) ~= "string" then
@@ -842,6 +873,41 @@ MIGRATIONS[8] = function(g: any, _now: number)
 	g.schema = 9
 end
 
+-- 9 → 10: personal por departamentos. Cada empleado viejo (rol + una habilidad) pasa al departamento que
+-- corresponde a su rol, con esa habilidad en las tres de su especialidad y un potencial algo mayor; conserva
+-- su salario. Su antigüedad empieza ahora (las versiones anteriores no la registraban). Los candidatos viejos
+-- se reemplazan por los 8 del mes al abrir la empresa.
+local OLD_ASSIGN = { chasis = "produccion", pintura = "produccion", motor = "produccion", interior = "produccion", calidad = "produccion", entrega = "produccion", laboratorio = "investigacion", ventas = "marketing", marketing = "marketing", diseno = "produccion" }
+MIGRATIONS[9] = function(g: any, _now: number)
+	local today = Rules.absDay(g)
+	local list = {}
+	for _, e in (type(g.employees) == "table" and g.employees or {}) do
+		if type(e) == "table" and type(e.id) == "string" then
+			local spec = Catalog.LEGACY_ROLES[e.role] or "produccion"
+			local skill = math.clamp(math.floor(isFinite(e.skill) and e.skill or 40), 0, 100)
+			local skills, potential = {}, {}
+			for _, d in Catalog.STAFF.departments do
+				for _, k in d.skills do
+					local v = d.id == spec and skill or 10
+					skills[k] = v
+					potential[k] = math.min(100, d.id == spec and v + 10 or 40)
+				end
+			end
+			table.insert(list, {
+				id = e.id, name = type(e.name) == "string" and e.name or "Empleado", spec = spec,
+				dept = (e.assign and OLD_ASSIGN[e.assign]) or spec,
+				salary = isFinite(e.salary) and math.max(0, e.salary) or 1000,
+				skills = skills, potential = potential, months = 0, hiredDay = today, adapt = {}, status = "activo",
+			})
+		end
+	end
+	g.employees = list
+	g.candidates = {}
+	g.market = { month = -1, searches = 0 }
+	g.payroll = { debt = 0, debtMonths = 0 }
+	g.schema = 10
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1181,6 +1247,7 @@ function GameState.live(g: any): any
 	local caps = Rules.caps(g)
 	return {
 		money = g.money, rp = g.rp, xp = g.xp, level = g.level, reputation = g.reputation, bankFull = g.bankFull,
+		payroll = table.clone(g.payroll),
 		time = table.clone(g.time),
 		counters = table.clone(g.counters),
 		month = table.clone(g.stats.month),
@@ -1196,7 +1263,7 @@ end
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
-		tostring(#g.candidates), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
+		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
 	end

@@ -27,7 +27,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	end
 	local g = GameState.newGame({ name = kind == "tutorial" and "Demo Garaje" or "Vortex Motors", color = "#7667FF", logo = "pico", now = now })
 	g.demo = kind
-	g.candidates = Simulation.makeCandidates(g, ctx, 5)
+	Simulation.ensureMarket(g, ctx)
 	if kind == "tutorial" then
 		return g
 	end
@@ -163,20 +163,15 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	g.counters.lotsSoldOut = 1
 	g.counters.lotsRetired = 1
 
-	-- Personal
+	-- Personal: candidatos del mes contratados en su especialidad (y uno fuera de ella, adaptándose).
 	local staff = avanz and 12 or 4
-	local roles = { "Mecánico", "Ingeniero", "Vendedor", "Diseñador", "Inspector", "Marketing" }
-	local assigns = { "chasis", "motor", "ventas", "laboratorio", "calidad", "marketing", "pintura", "interior", "entrega" }
+	Simulation.ensureMarket(g, ctx)
 	for i = 1, staff do
-		local lvl = 2 + (i % 4)
+		local c = Simulation.makeCandidate(g, ctx, nil)
 		table.insert(g.employees, {
-			id = GameState.uid(g, "e"),
-			name = Simulation.pick(ctx, { "Sofía Arce", "Mateo Ruiz", "Lara Sosa", "Julián Paz", "Carla Vega", "Ramiro Gil", "Elena Mora", "Diego Núñez" }),
-			role = roles[(i - 1) % #roles + 1],
-			level = lvl,
-			skill = 50 + lvl * 7,
-			salary = 800 + lvl * 400,
-			assign = assigns[(i - 1) % #assigns + 1],
+			id = GameState.uid(g, "e"), name = c.name, spec = c.spec, dept = i == staff and "administracion" or c.spec,
+			salary = c.salary, skills = c.skills, potential = c.potential, months = 6 + i, hiredDay = math.max(0, Rules.absDay(g) - 30 * (6 + i)),
+			adapt = {}, status = "activo",
 		})
 	end
 	g.counters.hires = staff

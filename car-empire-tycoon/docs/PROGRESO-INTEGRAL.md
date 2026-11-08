@@ -27,7 +27,13 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Nombre, símbolo y color obligatorios en el servidor (la pantalla propone valores editables).
   - Ranuras 3 y 4: compra individual con Developer Product (`Catalog.PRODUCTS`, id 0 = sin configurar, botón deshabilitado). `Sessions.processReceipt` acredita solo después de guardar y no duplica recibos (`profile.receipts`).
   - Calendario, velocidades y pausa por empresa: ya cumplían (pruebas [E1]).
-- [ ] 3. Personal
+- [x] 3. Personal (`src/shared/Staff.luau`, valores en `Catalog.STAFF`)
+  - 4 departamentos × 3 habilidades, cada beneficio con su tope; potencial individual; aportes y vista previa de contratación con topes.
+  - Efectos: velocidad (líneas, en vivo), calidad (puntos al terminar el lote), eficiencia (costo de lotes nuevos), conocimiento/precisión (PI y dinero al empezar), creatividad (avance en vivo), marketing y administración se conectan en fases 5-6.
+  - Transferencias con adaptación (50 % → 100 % en 180 días), habilidades conservadas.
+  - Sueldos al empezar el mes, deuda salarial, productividad que baja, 30 % de las ventas a la deuda; indemnización salario × años.
+  - 8 candidatos por mes, búsqueda general/especializada (+50 % por búsqueda, contador compartido); sin costo de contratación.
+  - Esquema 10: migración de empleados viejos (rol → departamento, habilidad y salario conservados).
 - [ ] 4. Capacitaciones
 - [ ] 5. Marketing
 - [ ] 6. Instalaciones

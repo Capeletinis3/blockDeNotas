@@ -12,6 +12,7 @@ local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local DesignCalc = require(Shared.DesignCalc)
 local Rules = require(Shared.Rules)
+local Staff = require(Shared.Staff)
 local GameState = require(script.Parent.GameState)
 local Simulation = require(script.Parent.Simulation)
 
@@ -628,68 +629,99 @@ end
 
 -- Personal ------------------------------------------------------------------------------------
 
+--[[ Contratar: sin costo de contratación (se paga el salario cada mes). payload = { candidateId, dept }: el
+	jugador elige el departamento donde empieza (fuera de su especialidad arranca con adaptación). ]]
 function Actions.hire(g: any, ctx: any, payload: any): any
 	local c, i = findById(g.candidates, arg(payload, "candidateId"))
 	if not c then
 		return fail("Ese candidato ya no está disponible.")
 	end
-	if #g.employees >= Rules.caps(g).staff then
-		return fail("La sede está completa (" .. Rules.caps(g).staff .. " empleados). Ampliá la sede para contratar más.")
+	local dept = arg(payload, "dept")
+	if dept == nil then
+		dept = c.spec
 	end
-	if not Simulation.spend(g, c.fee, "contratacion", "Contratación de " .. c.name) then
-		return fail("Fondos insuficientes: la contratación cuesta " .. money(c.fee) .. ".")
+	if not Staff.dept(dept) then
+		return fail("Departamento desconocido.")
+	end
+	if #g.employees >= Rules.caps(g).staff then
+		return fail("Llegaste al límite de " .. Rules.caps(g).staff .. " empleados. Mejorá las oficinas centrales para contratar más.")
 	end
 	table.remove(g.candidates, i :: number)
-	table.insert(g.employees, { id = GameState.uid(g, "e"), name = c.name, role = c.role, level = c.level, skill = c.skill, salary = c.salary, assign = nil })
+	local e = {
+		id = GameState.uid(g, "e"), name = c.name, spec = c.spec, dept = dept, salary = c.salary,
+		skills = Util.deepCopy(c.skills), potential = Util.deepCopy(c.potential), months = 0,
+		hiredDay = Rules.absDay(g), adapt = {}, status = "activo", training = nil,
+	}
+	table.insert(g.employees, e)
 	g.counters.hires += 1
 	Simulation.addXp(g, ctx, 40)
-	return { ok = true, msg = c.name .. " se sumó al equipo. Asignale un puesto." }
+	local where = Staff.dept(dept).name
+	return { ok = true, msg = c.name .. " se sumó a " .. where .. " (" .. money(c.salary) .. " por mes)." .. (dept ~= c.spec and " Fuera de su especialidad empieza al " .. round(Catalog.STAFF.adaptStart * 100) .. " % y se adapta con el tiempo." or "") }
 end
 
-function Actions.moreCandidates(g: any, ctx: any, _payload: any): any
-	if not Simulation.spend(g, Catalog.RULES.moreCandidatesCost, "contratacion", "Búsqueda de candidatos") then
-		return fail("Fondos insuficientes.")
+--[[ Búsqueda paga de candidatos: reemplaza a los 8 actuales que no se contrataron (no se acumulan).
+	payload = { kind = "general" | "especializada", dept? }. Cada búsqueda del mes cuesta 50 % más que la
+	anterior (contador compartido, vuelve a cero cada mes); la especializada parte de un costo 50 % mayor. ]]
+function Actions.searchCandidates(g: any, ctx: any, payload: any): any
+	local kind = arg(payload, "kind")
+	local focus = nil
+	if kind == "especializada" then
+		focus = arg(payload, "dept")
+		if not Staff.dept(focus) then
+			return fail("Elegí el departamento de la búsqueda.")
+		end
+	elseif kind ~= "general" then
+		return fail("Tipo de búsqueda desconocido.")
 	end
-	for _, c in Simulation.makeCandidates(g, ctx, 3) do
-		table.insert(g.candidates, c)
+	Simulation.ensureMarket(g, ctx)
+	local cost = Staff.searchCost(g, focus ~= nil, Rules.year(g))
+	if not Simulation.spend(g, cost, "contratacion", (focus and "Búsqueda especializada" or "Búsqueda general") .. " de candidatos") then
+		return fail("Fondos insuficientes: la búsqueda cuesta " .. money(cost) .. ".")
 	end
-	while #g.candidates > 12 do
-		table.remove(g.candidates, 1)
-	end
-	return { ok = true, msg = "Aparecieron 3 candidatos nuevos." }
+	g.market.searches += 1
+	Simulation.refreshCandidates(g, ctx, focus)
+	return { ok = true, msg = "Búsqueda " .. (focus and ("especializada en " .. Staff.dept(focus).name) or "general") .. ": " .. #g.candidates .. " candidatos nuevos (" .. money(cost) .. "). La próxima del mes cuesta " .. money(Staff.searchCost(g, focus ~= nil, Rules.year(g))) .. "." }
 end
 
+-- Despido: requiere pagar la indemnización (salario × años trabajados, proporcional). Nunca es automático.
 function Actions.fire(g: any, _ctx: any, payload: any): any
 	local e, i = findById(g.employees, arg(payload, "employeeId"))
 	if not e then
 		return fail("El empleado ya no está.")
 	end
+	local cost = Staff.severance(e, Rules.absDay(g))
+	if not Simulation.canAfford(g, cost) then
+		return fail("No alcanza para la indemnización de " .. e.name .. ": " .. money(cost) .. ".")
+	end
+	if cost > 0 then
+		Simulation.spend(g, cost, "indemnizacion", "Indemnización de " .. e.name)
+	end
+	for _, t in g.trainings or {} do
+		local k = table.find(t.members, e.id)
+		if k then
+			table.remove(t.members, k)
+		end
+	end
 	table.remove(g.employees, i :: number)
-	return { ok = true, msg = e.name .. " dejó la empresa. El costo de contratación no se recupera." }
+	return { ok = true, msg = e.name .. " dejó la empresa. Indemnización: " .. money(cost) .. "." }
 end
 
-function Actions.assign(g: any, _ctx: any, payload: any): any
+-- Cambio de departamento: conserva todas sus habilidades y la adaptación ganada en cada departamento.
+function Actions.setDept(g: any, _ctx: any, payload: any): any
 	local e = findById(g.employees, arg(payload, "employeeId"))
-	local area = arg(payload, "area")
+	local dept = arg(payload, "dept")
 	if not e then
 		return fail("El empleado ya no está.")
 	end
-	if area == "" then
-		area = nil
+	if not Staff.dept(dept) then
+		return fail("Departamento desconocido.")
 	end
-	if area ~= nil then
-		local isStation = Catalog.station(area) ~= nil
-		if not isStation and not Catalog.department(area) then
-			return fail("Puesto desconocido.")
-		end
-		local max = isStation and Catalog.RULES.assignMax.station or Catalog.RULES.assignMax.dept
-		if Rules.assignedCount(g, area, e.id) >= max then
-			return fail("Ese puesto está completo (" .. max .. ").")
-		end
+	if e.dept == dept then
+		return { ok = true, quiet = true }
 	end
-	e.assign = area
-	local label = area and ((Catalog.station(area) or Catalog.department(area))[2]) or nil
-	return { ok = true, msg = e.name .. (label and (" asignado/a a " .. label) or " quedó sin puesto") .. "." }
+	e.dept = dept
+	local adapt = Staff.adaptation(e)
+	return { ok = true, msg = e.name .. " pasó a " .. Staff.dept(dept).name .. (dept == e.spec and " (su especialidad)." or (": rinde al " .. round(adapt * 100) .. " % mientras se adapta.")) }
 end
 
 -- Misiones y recompensas ---------------------------------------------------------------------
@@ -781,7 +813,7 @@ Actions.handlers = {
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
-	hire = Actions.hire, moreCandidates = Actions.moreCandidates, fire = Actions.fire, assign = Actions.assign,
+	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
 	setSpeed = Actions.setSpeed,
 }
@@ -792,7 +824,7 @@ Actions.readOnly = { saveNow = true }
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
-	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, moreCandidates = true, fire = true,
+	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true,
 	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
 }
 

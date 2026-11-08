@@ -23,6 +23,7 @@ local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local DesignCalc = require(Shared.DesignCalc)
 local Rules = require(Shared.Rules)
+local Staff = require(Shared.Staff)
 local GameState = require(script.Parent.GameState)
 
 local round = Util.round
@@ -164,7 +165,7 @@ function Simulation.makeLot(g: any, snap: any, qty: number, price: number): any
 		discarded = 0,
 		price = price,
 		refPrice = snap.calc.price,
-		unitCost = snap.calc.unitCost,
+		unitCost = Rules.lotUnitCost(g, snap.calc.unitCost), -- con la eficiencia de Producción al ordenarlo
 		appeal = appeal,
 		revenue = 0,
 		costSpent = 0,
@@ -280,6 +281,13 @@ end
 	(partidas anteriores) no cambia de estado. ]]
 function Simulation.reviewLot(g: any, ctx: any, lot: any)
 	if lot.review == nil then
+		-- Calidad de fabricación: el personal de Producción suma puntos al auto que se termina (una vez).
+		local q = Rules.staff(g, "calidad")
+		if q > 0 and lot.mfgQuality == nil then
+			lot.mfgQuality = Util.round(q * 10) / 10
+			lot.design.calc.quality = math.min(100, lot.design.calc.quality + lot.mfgQuality)
+			lot.appeal = Rules.appeal(lot.design.calc, lot.design.spec)
+		end
 		lot.review = Rules.criticReviews(g, lot.design)
 	end
 	if lot.saleState == "produccion" then
@@ -307,6 +315,7 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 				local revenue = n * lot.price
 				g.money += revenue
 				flow(g, "venta", revenue)
+				Simulation.recoverSalaryDebt(g, ctx, revenue)
 				lot.sold += n
 				lot.revenue += revenue
 				lot.saleAcc -= n
@@ -362,7 +371,7 @@ function Simulation.stepResearch(g: any, ctx: any, minutes: number)
 	if not projects or #projects == 0 then
 		return
 	end
-	local days = minutes / Catalog.RULES.gameDayMinutes
+	local days = minutes / Catalog.RULES.gameDayMinutes * Rules.researchSpeed(g)
 	local finished = {}
 	for i, p in projects do
 		p.progress = math.min(p.days, p.progress + days)
@@ -401,39 +410,151 @@ end
 
 -- Personal --------------------------------------------------------------------------
 
-function Simulation.makeCandidates(g: any, ctx: any, n: number): { any }
-	local out = {}
-	for _ = 1, n do
-		local lvl = 1 + math.floor(ctx.rng() * math.min(6, 1 + g.sede))
-		table.insert(out, {
-			id = GameState.uid(g, "c"),
-			name = pick(ctx, Catalog.FIRST) .. " " .. pick(ctx, Catalog.LAST),
-			role = pick(ctx, Catalog.ROLES),
-			level = lvl,
-			skill = clamp(40 + lvl * 7 + math.floor(ctx.rng() * 12), 30, 98),
-			salary = 800 + lvl * 400,
-			fee = 3000 + lvl * 2500,
-		})
+local function randInt(ctx: any, lo: number, hi: number): number
+	return lo + math.floor(ctx.rng() * (hi - lo + 1))
+end
+
+--[[ Un candidato del mercado laboral. Su especialidad es al azar entre los cuatro departamentos (o, en una
+	búsqueda especializada, `focus` con probabilidad searchFocus). La reputación sube la probabilidad de
+	talento; un candidato extraordinario puede aparecer siempre. ]]
+function Simulation.makeCandidate(g: any, ctx: any, focus: string?): any
+	local S = Catalog.STAFF
+	local spec
+	if focus and ctx.rng() < S.searchFocus then
+		spec = focus
+	else
+		local pool = {}
+		for _, id in Staff.DEPT_ORDER do
+			if id ~= focus then
+				table.insert(pool, id)
+			end
+		end
+		spec = pool[randInt(ctx, 1, #pool)]
 	end
-	return out
+	local rep = Util.clamp((g.reputation - 1) / 4, 0, 1)
+	local talent = math.max(ctx.rng(), ctx.rng() * (0.6 + 0.5 * rep)) -- la reputación corre la curva hacia arriba
+	local exceptional = ctx.rng() < S.exceptionalChance
+	if exceptional then
+		talent = 0.9 + ctx.rng() * 0.1
+	end
+	local skills, potential = {}, {}
+	for _, d in S.departments do
+		for _, k in d.skills do
+			if d.id == spec then
+				local v = Util.clamp(math.floor(15 + talent * 55 + ctx.rng() * 12), 5, 95)
+				skills[k] = v
+				potential[k] = Util.clamp(v + randInt(ctx, 8, 20 + math.floor(talent * 25)), v, 100)
+			else
+				local v = randInt(ctx, 0, 15)
+				skills[k] = v
+				potential[k] = Util.clamp(v + randInt(ctx, 10, 35), v, 100)
+			end
+		end
+	end
+	local c = {
+		id = GameState.uid(g, "c"),
+		name = pick(ctx, Catalog.FIRST) .. " " .. pick(ctx, Catalog.LAST),
+		spec = spec,
+		skills = skills,
+		potential = potential,
+		exceptional = exceptional or nil,
+	}
+	c.salary = Staff.salaryFor(c, Rules.year(g))
+	return c
+end
+
+-- Reemplaza los candidatos del mes por `n` nuevos (los no contratados desaparecen).
+function Simulation.refreshCandidates(g: any, ctx: any, focus: string?)
+	local list = {}
+	for _ = 1, Catalog.STAFF.candidatesPerMonth do
+		table.insert(list, Simulation.makeCandidate(g, ctx, focus))
+	end
+	g.candidates = list
+end
+
+-- Mercado del mes: al empezar cada mes hay 8 candidatos nuevos y el contador de búsquedas vuelve a cero.
+function Simulation.ensureMarket(g: any, ctx: any)
+	g.market = g.market or { month = -1, searches = 0 }
+	if g.market.month ~= g.time.day then
+		g.market.month = g.time.day
+		g.market.searches = 0
+		Simulation.refreshCandidates(g, ctx, nil)
+	end
+end
+
+-- Sueldos atrasados: el 30 % de cada venta va a la deuda salarial hasta saldarla (sin pagar de más).
+function Simulation.recoverSalaryDebt(g: any, ctx: any, revenue: number)
+	local pr = g.payroll
+	if not pr or pr.debt <= 0 or revenue <= 0 then
+		return
+	end
+	local pay = math.min(pr.debt, Util.round(revenue * Catalog.STAFF.debtRecoveryShare))
+	if pay <= 0 then
+		return
+	end
+	g.money -= pay
+	pr.debt -= pay
+	flow(g, "salarios", -pay)
+	if pr.debt <= 0 then
+		pr.debt = 0
+		pr.debtMonths = 0
+		Simulation.notify(g, ctx, "ok", "Se pagaron todos los sueldos atrasados. Las ventas vuelven a ingresar completas.", "personal")
+	end
+end
+
+-- Pago de sueldos al empezar el mes: se paga lo que alcanza y el resto queda como deuda salarial.
+function Simulation.payroll(g: any, ctx: any)
+	g.payroll = g.payroll or { debt = 0, debtMonths = 0 }
+	local pr = g.payroll
+	local sal = Staff.salaries(g)
+	if sal > 0 then
+		local pay = math.min(sal, math.max(0, g.money))
+		if pay > 0 then
+			g.money -= pay
+			Simulation.ledger(g, "salarios", -pay, "Salarios del mes")
+		end
+		if pay < sal then
+			pr.debt += sal - pay
+			Simulation.notify(g, ctx, "error", "No alcanzó para todos los sueldos: " .. money(sal - pay) .. " quedan como deuda salarial. El 30 % de las ventas se destina a pagarla.", "personal")
+		end
+	end
+	if pr.debt > 0 then
+		pr.debtMonths += 1
+	else
+		pr.debtMonths = 0
+	end
+	-- Experiencia: cada expEvery meses trabajados mejora las habilidades de su departamento (hasta su potencial).
+	local S = Catalog.STAFF
+	for _, e in g.employees do
+		e.months = (e.months or 0) + 1
+		if e.months % S.expEvery == 0 then
+			local d = Staff.dept(e.dept)
+			for _, k in d and d.skills or {} do
+				e.skills[k] = math.min(e.potential[k] or 100, (e.skills[k] or 0) + S.expGain)
+			end
+			e.salary = math.max(e.salary, Staff.salaryFor(e, Rules.year(g)))
+		end
+	end
+end
+
+-- Adaptación diaria de quienes trabajan fuera de su especialidad.
+function Simulation.stepStaff(g: any, minutes: number)
+	local S = Catalog.STAFF
+	local days = minutes / Catalog.RULES.gameDayMinutes
+	for _, e in g.employees do
+		if e.dept ~= e.spec then
+			e.adapt = e.adapt or {}
+			e.adapt[e.dept] = math.min(1, (e.adapt[e.dept] or S.adaptStart) + days * (1 - S.adaptStart) / S.adaptDays)
+		end
+	end
 end
 
 -- Cierre de mes -------------------------------------------------------------------------
 
 function Simulation.monthRollover(g: any, ctx: any)
 	-- Los movimientos de este bloque pertenecen al mes que empieza.
-	local sal = Rules.salaries(g)
-	if sal > 0 then
-		local pay = math.min(sal, g.money)
-		if pay > 0 then
-			g.money -= pay
-			Simulation.ledger(g, "salarios", -pay, "Salarios del mes")
-		end
-		if pay < sal then
-			g.reputation = clamp(g.reputation - 0.05, 1, 5)
-			Simulation.notify(g, ctx, "error", "No alcanzó el dinero para pagar todos los salarios. Bajó la reputación.", "personal")
-		end
-	end
+	Simulation.payroll(g, ctx)
+	Simulation.ensureMarket(g, ctx)
 	local camp = Rules.campaign(g)
 	if camp then
 		local cost = Rules.campaignCost(g, camp.level)
@@ -466,11 +587,6 @@ function Simulation.monthRollover(g: any, ctx: any)
 		end
 		local share = mk.total > 0 and mk.demand > 0 and mine / mk.total or 0
 		g.marketShare[typeId] = (g.marketShare[typeId] or 0) * 0.8 + share * 0.2
-	end
-	if #g.candidates < 3 then
-		for _, c in Simulation.makeCandidates(g, ctx, 2) do
-			table.insert(g.candidates, c)
-		end
 	end
 	if g.time.day % 12 == 0 and Rules.extraYears(g) > 0 then
 		-- Después del último año histórico: el calendario visible queda fijo y se cuentan años comerciales.
@@ -534,6 +650,7 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		Simulation.stepProduction(g, ctx, step)
 		Simulation.stepSales(g, ctx, step)
 		Simulation.stepResearch(g, ctx, step)
+		Simulation.stepStaff(g, step)
 	end
 end
 

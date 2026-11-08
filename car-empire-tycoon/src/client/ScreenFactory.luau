@@ -192,16 +192,10 @@ function Screen.build(main: Frame, side: Frame)
 	for _, st in Catalog.STATIONS do
 		local id = st[1]
 		local s = g.stations[id]
-		local staff = {}
-		for _, e in g.employees do
-			if e.assign == id then
-				table.insert(staff, e.name)
-			end
-		end
 		local up = Rules.upgradeCost(s)
 		table.insert(stations, Ui.card({
 			Ui.row({ Ui.grow(Ui.inline(st[2], { size = 15, weight = W.bold })), Ui.chip("Nv. " .. s.level, "cn") }, 6),
-			Ui.text((#staff > 0 and table.concat(staff, ", ") or "Sin personal") .. " · ideal: " .. string.lower(st[3]), { size = Ui.S.xs, color = T.mut }),
+			Ui.text("+" .. Util.round(Catalog.STATION_SPEED * 100) .. " % de velocidad por nivel", { size = Ui.S.xs, color = T.mut }),
 			Ui.button("Mejorar · " .. Util.money(up), "default", function()
 				App.request("upgradeStation", { station = id })
 			end, { small = true, fill = true, disabled = s.level >= maxL or g.money < up, why = s.level >= maxL and "Nivel máximo para esta sede" or "Fondos insuficientes", name = "Mejorar_" .. id }),

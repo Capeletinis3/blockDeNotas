@@ -215,7 +215,7 @@ function Screen.build(main: Frame, side: Frame)
 			local x = Rules.researchProject(gg, p.id)
 			if x then
 				Ui.setBar(fill, x.progress / x.days * 100)
-				lbl.Text = math.floor(x.progress) .. "/" .. x.days .. " días · faltan ≈ " .. Util.realTime(Rules.projectSecondsLeft(x, gg.time.speed)) .. (gg.time.speed == 0 and " (en pausa)" or "")
+				lbl.Text = math.floor(x.progress) .. "/" .. x.days .. " días · faltan ≈ " .. Util.realTime(Rules.projectSecondsLeft(x, gg.time.speed, gg)) .. (gg.time.speed == 0 and " (en pausa)" or "")
 			end
 		end
 		upd(g)
