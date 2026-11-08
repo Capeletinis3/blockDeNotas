@@ -25,7 +25,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	if not Demo.KINDS[kind] then
 		return nil
 	end
-	local g = GameState.newGame({ name = kind == "tutorial" and "Demo Garaje" or "Vortex Motors", color = "#7667FF", logo = "pico", difficulty = "normal", now = now })
+	local g = GameState.newGame({ name = kind == "tutorial" and "Demo Garaje" or "Vortex Motors", color = "#7667FF", logo = "pico", now = now })
 	g.demo = kind
 	g.candidates = Simulation.makeCandidates(g, ctx, 5)
 	if kind == "tutorial" then

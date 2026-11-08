@@ -56,10 +56,10 @@ local function loadFixture(): any
 	return serde.decode("json", fs.readFile("tests/fixtures/save_v2.json"))
 end
 
-local function newCompany(name: string, color: string?, difficulty: string?): any
-	local clean, err = Actions.validateCompany({ name = name, color = color, difficulty = difficulty })
+local function newCompany(name: string, color: string?, _legacy: string?): any
+	local clean, err = Actions.validateCompany({ name = name, color = color or "#7667FF", logo = "pico" })
 	assert(clean, err)
-	return GameState.newGame({ name = clean.name, color = clean.color, logo = clean.logo, difficulty = clean.difficulty, now = 1000 })
+	return GameState.newGame({ name = clean.name, color = clean.color, logo = clean.logo, now = 1000 })
 end
 
 local function draftFor(g: any, baseId: string, name: string?): any
@@ -365,7 +365,7 @@ test("[P3][P4][P5] Se fabrica exactamente el lote, se detiene, se evalúa y no s
 end)
 
 test("Fondos: el lote se paga completo al ordenarlo y nunca queda a medio fabricar por falta de dinero", function()
-	local g = newCompany("Justa SA", nil, "dificil")
+	local g = newCompany("Justa SA")
 	local ctx = makeCtx(6)
 	local id = saveNew(g, ctx, "brisa")
 	local unit = DesignCalc.computeDesign(g, g.designs[1]).unitCost
@@ -385,7 +385,7 @@ test("Fondos: el lote se paga completo al ordenarlo y nunca queda a medio fabric
 end)
 
 test("Varios lotes: las líneas de la sede se reparten y el resto espera en cola", function()
-	local g = newCompany("Cola SA", nil, "facil")
+	local g = newCompany("Cola SA")
 	local ctx = makeCtx(7)
 	local a = saveNew(g, ctx, "brisa", "Modelo A")
 	local b = saveNew(g, ctx, "brisa", "Modelo B")
@@ -404,7 +404,7 @@ end)
 -- [P6]–[P8] Ventas automáticas -----------------------------------------------------------------
 
 test("[P6][P7][P8] Ventas automáticas sin negociar, nunca más que lo fabricado, varios modelos a la vez", function()
-	local g = newCompany("Ventas SA", nil, "facil")
+	local g = newCompany("Ventas SA")
 	local ctx = makeCtx(8)
 	g.sede = 3
 	g.money = 3000000
@@ -555,7 +555,7 @@ test("Cerrar venta de un lote que todavía no fabricó nada: se cancela y se rei
 end)
 
 test("[P11] Contabilidad: dinero = inicial − desarrollo − fabricado + ventas; sin doble costo", function()
-	local g = newCompany("Libros SA", nil, "facil")
+	local g = newCompany("Libros SA")
 	local ctx = makeCtx(12)
 	local m0 = g.money
 	local r = Actions.saveDesign(g, ctx, { draft = draftFor(g, "brisa") })
@@ -612,7 +612,7 @@ end)
 -- [P13] Investigación ----------------------------------------------------------------------------
 
 test("[P13] Investigación bloqueada por requisitos, por época y por recursos", function()
-	local g = newCompany("Lab SA", nil, "facil")
+	local g = newCompany("Lab SA")
 	local ctx = makeCtx(14)
 	local turbo = Catalog.researchNode("mo3") -- 1977, requiere mo1
 	local r = Actions.startResearch(g, ctx, { id = "mo3" })
@@ -775,8 +775,8 @@ end)
 
 -- [P16] Tutorial ---------------------------------------------------------------------------------
 
-test("[P16] El tutorial se completa en todas las dificultades sin trabarse por dinero ni investigación", function()
-	for _, dif in Catalog.DIFFICULTY_ORDER do
+test("[P16] El tutorial se completa sin trabarse por dinero ni investigación (todas las empresas empiezan igual)", function()
+	for _, dif in { "normal" } do
 		local log = Bot.play(dif, 30)
 		local g = log.g
 		for _, m in Catalog.MISSIONS do
@@ -790,13 +790,13 @@ test("[P16] El tutorial se completa en todas las dificultades sin trabarse por d
 		check(log.milestones["sede 2"] ~= nil and log.milestones["sede 2"] < 28, dif .. ": Empresa pequeña antes de 28 min (" .. tostring(log.milestones["sede 2"]) .. ")")
 		check(GameState.validate(g), dif .. ": partida válida")
 	end
-	-- Recorrido mínimo del tutorial con el capital más bajo: un solo diseño barato y un lote chico.
-	local g = newCompany("Minima SA", nil, "dificil")
+	-- Recorrido mínimo del tutorial con el capital inicial: un solo diseño barato y un lote chico.
+	local g = newCompany("Minima SA")
 	local ctx = makeCtx(17)
 	local id = saveNew(g, ctx, "brisa")
 	claimReady(g, ctx)
 	local unit = DesignCalc.computeDesign(g, g.designs[1]).unitCost
-	check(g.money >= 25 * unit, "con el capital de Magnate alcanza para un lote de 25 autos")
+	check(g.money >= 25 * unit, "con el capital inicial alcanza para un lote de 25 autos")
 	local first = Actions.createLot(g, ctx, { designId = id, qty = 25 })
 	check(first.ok, "lote")
 	claimReady(g, ctx)
@@ -989,7 +989,7 @@ test("Anti-farmeo: lotes chicos o repetidos no generan PI extra (solo las línea
 end)
 
 test("[C21] Desbloquear una tecnología de otra década (cuando llega su año y sus requisitos)", function()
-	local g = newCompany("Década SA", nil, "facil")
+	local g = newCompany("Década SA")
 	local ctx = makeCtx(44)
 	g.money = 5000000
 	g.time.day = (1983 - 1970) * 12
@@ -1311,6 +1311,7 @@ local function makeServer(store: any, jobId: string, clock: any, opts: any?)
 		end,
 		log = function() end,
 		saveMode = "memory",
+		prompt = o.prompt,
 	})
 	return mgr, pushed, data
 end
@@ -1322,7 +1323,7 @@ local function rid(): string
 end
 
 local function playThrough(mgr: any, p: any)
-	local r = mgr:request(p, "createCompany", { slot = "1", name = "Sesion SA" })
+	local r = mgr:request(p, "createCompany", { slot = "1", name = "Sesion SA", color = "#7667FF", logo = "pico" })
 	assert(r.ok, r.msg)
 	return mgr.list[p]
 end
@@ -1468,7 +1469,7 @@ test("Fallo de carga: no escribe, informa y permite reintentar", function()
 	mgr:add(p)
 	eq(pushed[p].status, "failed", "estado de error")
 	eq(store.writes, 0, "no escribió nada")
-	check(not mgr:request(p, "createCompany", { slot = "1", name = "Nada SA" }).ok, "no deja jugar")
+	check(not mgr:request(p, "createCompany", { slot = "1", name = "Nada SA", color = "#7667FF", logo = "pico" }).ok, "no deja jugar")
 	local r = mgr:request(p, "retryLoad")
 	check(r.ok, "reintento")
 	eq(pushed[p].status, "ready", "cargó al reintentar")
@@ -1528,13 +1529,13 @@ test("Menú: varias empresas independientes, renombrar y eliminar con confirmaci
 	local mgr, pushed = makeServer(store, "A", clock)
 	local p = { UserId = 11 }
 	mgr:add(p)
-	check(mgr:request(p, "createCompany", { slot = "1", name = "Primera SA" }).ok, "1")
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Primera SA", color = "#7667FF", logo = "pico" }).ok, "1")
 	local g1 = mgr.list[p].game
 	mgr:request(p, "saveDesign", { draft = draftFor(g1, "brisa"), requestId = rid() })
-	check(not mgr:request(p, "createCompany", { slot = "2", name = "primera sa" }).ok, "nombre repetido entre ranuras")
-	check(mgr:request(p, "createCompany", { slot = "2", name = "Segunda SA" }).ok, "2")
+	check(not mgr:request(p, "createCompany", { slot = "2", name = "primera sa", color = "#7667FF", logo = "pico" }).ok, "nombre repetido entre ranuras")
+	check(mgr:request(p, "createCompany", { slot = "2", name = "Segunda SA", color = "#7667FF", logo = "pico" }).ok, "2")
 	local g2 = mgr.list[p].game
-	check(g1 ~= g2 and #g2.designs == 0 and g2.money == Catalog.DIFFICULTIES.normal.money, "datos independientes")
+	check(g1 ~= g2 and #g2.designs == 0 and g2.money == Catalog.START.money, "datos independientes")
 	eq(pushed[p].profile.active, "2", "activa la segunda")
 	check(not mgr:request(p, "renameCompany", { slot = "1", name = "Prohibido SA" }).ok, "filtro de texto")
 	check(mgr:request(p, "renameCompany", { slot = "1", name = "Uno Renombrada" }).ok, "renombrada")
@@ -1599,11 +1600,11 @@ test("Dos jugadores en el mismo servidor: sesiones independientes", function()
 	local a, b = { UserId = 21 }, { UserId = 22 }
 	mgr:add(a)
 	mgr:add(b)
-	mgr:request(a, "createCompany", { slot = "1", name = "Empresa A" })
-	mgr:request(b, "createCompany", { slot = "1", name = "Empresa B", difficulty = "dificil" })
+	mgr:request(a, "createCompany", { slot = "1", name = "Empresa A", color = "#7667FF", logo = "pico" })
+	mgr:request(b, "createCompany", { slot = "1", name = "Empresa B", color = "#F7C95C", logo = "rayo" })
 	local ga, gb = mgr.list[a].game, mgr.list[b].game
 	mgr:request(a, "saveDesign", { draft = draftFor(ga, "brisa"), requestId = rid() })
-	eq(gb.money, Catalog.DIFFICULTIES.dificil.money, "B no pagó nada")
+	eq(gb.money, Catalog.START.money, "B no pagó nada")
 	eq(#gb.designs, 0, "B sin diseños")
 	local r = mgr:request(b, "createLot", { designId = ga.designs[1].id, qty = 1, requestId = rid() })
 	check(not r.ok, "B no puede fabricar el diseño de A")
@@ -2104,7 +2105,7 @@ test("Pioneer 70: carrocería 3D predeterminada del sedán en los 70, elegible d
 	end
 	eq(Catalog.defaultVehicleModel("sedan", 1980), nil, "en 1980 deja de ser la predeterminada")
 	eq(Catalog.defaultVehicleModel("compacto", 1972), nil, "solo para sedanes")
-	local g = newCompany("Pioneer SA", nil, "facil")
+	local g = newCompany("Pioneer SA")
 	local ctx = makeCtx(301)
 	g.money = 5000000
 	g.time.day = 2 * 12 -- 1972
@@ -2330,13 +2331,13 @@ test("[E1] Ranuras: dos gratuitas, la 3 y la 4 bloqueadas (sin compras), y las q
 	mgr:add(p)
 	eq(Catalog.RULES.slots, 4, "cuatro ranuras por cuenta")
 	eq(Catalog.RULES.slotsFree, 2, "dos gratuitas")
-	check(mgr:request(p, "createCompany", { slot = "1", name = "Uno SA" }).ok, "ranura 1")
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Uno SA", color = "#7667FF", logo = "pico" }).ok, "ranura 1")
 	mgr:request(p, "leaveCompany", {})
-	check(mgr:request(p, "createCompany", { slot = "2", name = "Dos SA" }).ok, "ranura 2")
+	check(mgr:request(p, "createCompany", { slot = "2", name = "Dos SA", color = "#7667FF", logo = "pico" }).ok, "ranura 2")
 	mgr:request(p, "leaveCompany", {})
-	check(not mgr:request(p, "createCompany", { slot = "3", name = "Tres SA" }).ok, "la 3 está bloqueada")
-	check(not mgr:request(p, "createCompany", { slot = "4", name = "Cuatro SA" }).ok, "la 4 también")
-	check(not mgr:request(p, "createCompany", { slot = "5", name = "Cinco SA" }).ok, "no hay quinta")
+	check(not mgr:request(p, "createCompany", { slot = "3", name = "Tres SA", color = "#7667FF", logo = "pico" }).ok, "la 3 está bloqueada")
+	check(not mgr:request(p, "createCompany", { slot = "4", name = "Cuatro SA", color = "#7667FF", logo = "pico" }).ok, "la 4 también")
+	check(not mgr:request(p, "createCompany", { slot = "5", name = "Cinco SA", color = "#7667FF", logo = "pico" }).ok, "no hay quinta")
 	local view = pushed[p].profile
 	check(view.usable["1"] and view.usable["2"] and not view.usable["3"] and not view.usable["4"], "el cliente sabe cuáles se pueden usar")
 	local s = mgr.list[p]
@@ -2792,6 +2793,67 @@ test("[E3] Investigación completa: los 15 casos pedidos (chasis, motores, PI, p
 	check(saved.ok, "13. el diseño con equipamiento se guarda: " .. tostring(saved.msg))
 	eq(table.concat(g.designs[#g.designs].equipment, ","), table.concat(ss.equipment, ","), "13. con su equipamiento")
 	check(GameState.validate(g), "partida válida")
+end)
+
+test("[I2] Empresas: mismas condiciones, identidad obligatoria, fecha inicial y compra segura de ranuras", function()
+	-- Identidad obligatoria (la interfaz propone valores editables) y sin dificultades.
+	check(Actions.validateCompany({ name = "Sin Color SA", logo = "pico" }) == nil, "sin color se rechaza")
+	check(Actions.validateCompany({ name = "Sin Logo SA", color = "#7667FF" }) == nil, "sin símbolo se rechaza")
+	check(Actions.validateCompany({ name = "Completa SA", color = "#7667FF", logo = "rayo" }) ~= nil, "nombre, símbolo y color")
+	local a, b = newCompany("Una SA"), newCompany("Otra SA", "#F7C95C")
+	eq(a.money, Catalog.START.money, "capital inicial")
+	eq(b.money, a.money, "igual para todas")
+	eq(Rules.date(a), "01/01/1970", "empieza el 1 de enero de 1970")
+	eq(Rules.demand(a, "sedan"), Rules.demand(b, "sedan"), "misma demanda")
+	check(Catalog.DIFFICULTIES == nil, "no hay dificultades")
+	-- Migración 8 → 9: la dificultad desaparece y el dinero que tenían se conserva.
+	local old = jsonCopy(a)
+	old.schema = 8
+	old.company.difficulty = "facil"
+	old.money = 150000
+	local m = GameState.migrate(jsonCopy(old), 5000)
+	check(m ~= nil and GameState.validate(m), "migra y valida")
+	eq(m.company.difficulty, nil, "sin dificultad")
+	eq(m.money, 150000, "dinero conservado")
+
+	-- Compras de ranuras con Developer Products.
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local prompts = {}
+	local mgr = makeServer(store, "A", clock, { prompt = function(_, id)
+		table.insert(prompts, id)
+	end })
+	local p = { UserId = 901 }
+	mgr:add(p)
+	local s = mgr.list[p]
+	local r = mgr:request(p, "buyProduct", { product = "slot3" })
+	check(not r.ok and string.find(r.msg, "configurar") ~= nil, "sin producto configurado no se vende nada: " .. r.msg)
+	eq(#prompts, 0, "no abre ninguna compra")
+	local saved = Catalog.PRODUCTS.slot3.id
+	Catalog.PRODUCTS.slot3.id = 1111
+	check(mgr:request(p, "buyProduct", { product = "slot3" }).ok and prompts[1] == 1111, "abre la compra del producto configurado")
+	check(not mgr:request(p, "createCompany", { slot = "3", name = "Tres SA", color = "#7667FF", logo = "pico" }).ok, "antes del recibo, la 3 sigue bloqueada")
+	-- Un recibo que no se puede guardar no se acredita (Roblox lo reintenta).
+	store.failNext = 50
+	check(mgr:processReceipt({ PlayerId = 901, ProductId = 1111, PurchaseId = "r-1" }) == false, "si el guardado falla, NotProcessedYet")
+	check(not GameState.slotUsable(s.profile, "3"), "y no queda habilitada")
+	store.failNext = 0
+	check(mgr:processReceipt({ PlayerId = 901, ProductId = 1111, PurchaseId = "r-1" }) == true, "reintento: acreditada")
+	check(GameState.slotUsable(s.profile, "3"), "ranura 3 habilitada")
+	check(not GameState.slotUsable(s.profile, "4"), "la 4 se compra aparte")
+	check(mgr:processReceipt({ PlayerId = 901, ProductId = 1111, PurchaseId = "r-1" }) == true, "el mismo recibo otra vez: no se duplica")
+	eq(#s.profile.receipts, 1, "un solo recibo registrado")
+	check(not mgr:request(p, "buyProduct", { product = "slot3" }).ok, "no se vuelve a vender lo que ya tiene")
+	check(mgr:processReceipt({ PlayerId = 902, ProductId = 1111, PurchaseId = "r-2" }) == false, "jugador no cargado: se reintenta después")
+	check(mgr:processReceipt({ PlayerId = 901, ProductId = 999, PurchaseId = "r-3" }) == false, "producto desconocido: no se acredita")
+	check(mgr:request(p, "createCompany", { slot = "3", name = "Tres SA", color = "#7667FF", logo = "pico" }).ok, "crea la empresa en la ranura 3")
+	-- La compra persiste en otro servidor.
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(GameState.slotUsable(mgr2.list[p].profile, "3"), "persistida")
+	check(table.find(mgr2.list[p].profile.receipts, "r-1") ~= nil, "con su recibo")
+	Catalog.PRODUCTS.slot3.id = saved
 end)
 
 T.finish()

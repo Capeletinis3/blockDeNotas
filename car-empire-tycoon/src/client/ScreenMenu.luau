@@ -61,7 +61,7 @@ end
 
 function Screen.newCompany(key: string)
 	local nc = App.ui.newCompany
-	nc.name, nc.color, nc.logo, nc.difficulty, nc.slot = "", "#7667FF", "pico", "normal", key
+	nc.name, nc.color, nc.logo, nc.slot = "", "#7667FF", "pico", key
 	App.go("nueva")
 end
 
@@ -189,15 +189,20 @@ local function emptySlot(key: string): Frame
 	}, { dir = "H", v = "C", gap = 16, bg = Ui.hex("#0E1016"), transparency = 0.25, radius = 16, stroke = Ui.hex("#3A3F4D"), pad = 18, name = "Ranura_" .. key })
 end
 
--- Ranuras 3 y 4: bloqueadas hasta que exista su desbloqueo (en una etapa posterior). No hay botón de
--- compra ni precio: nada que pueda confundirse con una compra real.
+-- Ranuras 3 y 4: se compran por separado con Robux (Developer Product; Roblox muestra el precio). Si el
+-- producto no está configurado (id 0), el botón queda deshabilitado: no se simula ninguna compra.
 local function lockedSlot(n: number): Frame
+	local product = Catalog.PRODUCTS["slot" .. n]
+	local ready = product ~= nil and product.id ~= 0
 	return Ui.card({
 		Ui.ico("lock", T.ye, T.ye, 32, { alpha = 0.12, iconSize = 17 }),
 		Ui.grow(Ui.col({
 			Ui.text("Ranura " .. n .. " · bloqueada", { size = Ui.S.sm, weight = W.bold }),
-			Ui.text("Ranura adicional: se podrá habilitar más adelante. Por ahora no está disponible.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
+			Ui.text(ready and "Ranura adicional permanente: se compra con Robux, por separado de la otra." or "Ranura adicional: la compra todavía no está configurada.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
 		}, 2)),
+		Ui.button("Desbloquear", "p", function()
+			App.request("buyProduct", { product = "slot" .. n })
+		end, { small = true, disabled = not ready, why = (not ready) and "Compra no configurada todavía" or nil, name = "Comprar_" .. n }),
 	}, { dir = "H", v = "C", gap = 10, bg = Ui.hex("#0E1016"), transparency = 0.08, radius = 16, stroke = { T.ye, 1, 0.65 }, pad = { 14, 16 }, name = "Bloqueada_" .. n })
 end
 

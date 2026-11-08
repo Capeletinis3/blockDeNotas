@@ -450,7 +450,6 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	end), "vuelve al menú de empresas")
 	clickN("Crear_2")
 	eq(App.ui.newCompany.slot ~= "1", true, "elige una ranura libre")
-	clickN("Dificultad_dificil")
 	for _, d in root:GetDescendants() do
 		if d.ClassName == "TextBox" and d.PlaceholderText == "Por ejemplo: Ruta Norte Motors" then
 			M.type(d, "Magnate SA")
@@ -461,8 +460,9 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 		return App.g ~= nil
 	end), "se crea la segunda empresa")
 	eq(App.g.company.name, "Magnate SA", "es la nueva")
-	eq(App.g.company.difficulty, "dificil", "dificultad Magnate")
-	-- Magnate: sin dinero manual, alcanza para el primer diseño y un primer lote.
+	eq(App.g.company.difficulty, nil, "sin dificultad: misma condición inicial")
+	eq(App.g.money, 90000, "capital inicial igual para todas")
+	-- Sin dinero manual, el capital inicial alcanza para el primer diseño y un primer lote.
 	App.go("editor", { new = true })
 	M.task.wait()
 	for _ = 1, 3 do

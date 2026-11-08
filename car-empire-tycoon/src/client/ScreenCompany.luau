@@ -40,7 +40,6 @@ function Screen.build(parent: Instance)
 	local st = App.ui.newCompany
 	local phone = App.isPhone()
 	local vw, vh = App.vw, App.vh
-	local dif = Catalog.DIFFICULTIES[st.difficulty] or Catalog.DIFFICULTIES.normal
 
 	local wrap = Ui.new("ScrollingFrame", {
 		Name = "NuevaWrap",
@@ -74,7 +73,7 @@ function Screen.build(parent: Instance)
 			Ui.grow(Ui.col({
 				Ui.lbl("Vista previa"),
 				previewName,
-				Ui.text("Garaje inicial · " .. dif.label .. " · " .. Util.money(dif.money) .. " iniciales", { size = Ui.S.sm, color = T.mut }),
+				Ui.text("Garaje inicial · " .. Util.money(Catalog.START.money) .. " iniciales · 01/01/1970", { size = Ui.S.sm, color = T.mut }),
 			}, 6)),
 		}, { dir = "H", v = "C", gap = 18, pad = 18, bg = Color3.fromHex("#0E1016"), transparency = 0.12, name = "VistaPrevia" }),
 	}, 18, { Name = "Presentacion", v = "C" })
@@ -133,22 +132,6 @@ function Screen.build(parent: Instance)
 	end
 	table.insert(swatches, Ui.inline(Catalog.colorName(Catalog.BRAND_COLORS, st.color) or "", { size = Ui.S.sm, color = T.mut }))
 
-	local difs = {}
-	for _, id in Catalog.DIFFICULTY_ORDER do
-		local d = Catalog.DIFFICULTIES[id]
-		local selected = st.difficulty == id
-		local dotsColor = d.dots == 1 and T.gr or (d.dots == 2 and T.ye or T.re2)
-		local b = Ui.opt("", selected, function()
-			st.difficulty = id
-			App.forceRender()
-		end, { name = "Dificultad_" .. id, fill = true, autoY = true, height = 0, pad = 12 })
-		Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6), Parent = b })
-		Ui.row({ Ui.grow(Ui.text(d.label, { size = 15, weight = W.bold })), Ui.inline(string.rep("●", d.dots) .. string.rep("○", 3 - d.dots), { size = Ui.S.xs, color = dotsColor }) }, 6).Parent = b
-		Ui.text(d.desc, { size = Ui.S.xs, color = T.mut, lineHeight = 1.35, weight = W.med }).Parent = b
-		Ui.text(Util.money(d.money) .. " iniciales", { size = Ui.S.sm, weight = W.bold, color = T.gr }).Parent = b
-		table.insert(difs, b)
-	end
-
 	createBtn = Ui.button("Comenzar mi empresa", "p", function()
 		Screen.create(createBtn)
 	end, { name = "Comenzar", kbd = "Enter" })
@@ -158,9 +141,9 @@ function Screen.build(parent: Instance)
 		Ui.row({ Ui.grow(Ui.text("Nueva empresa", { size = 21, weight = W.bold })), Ui.inline("Ranura " .. st.slot .. " de " .. Catalog.RULES.slots, { size = Ui.S.sm, color = T.mut }) }, 10, { Pad = { 18, 18, 6, 18 } }),
 		Ui.col({
 			Ui.col({ Ui.lbl("Nombre de la empresa"), nameBox, hintLabel }, 8),
-			Ui.col({ Ui.lbl("Logotipo"), Ui.grid(logos, phone and 4 or 8, nil, 10) }, 10),
-			Ui.col({ Ui.lbl("Color de marca"), Ui.row(swatches, 10, { wrap = true }) }, 10),
-			Ui.col({ Ui.lbl("Dificultad"), Ui.grid(difs, phone and 1 or 3, nil, 10) }, 10),
+			Ui.col({ Ui.lbl("Símbolo corporativo"), Ui.grid(logos, phone and 4 or 8, nil, 10) }, 10),
+			Ui.col({ Ui.lbl("Color corporativo"), Ui.row(swatches, 10, { wrap = true }) }, 10),
+			Ui.text("Todas las empresas empiezan igual: " .. Util.money(Catalog.START.money) .. " y un garaje el 1 de enero de 1970.", { size = Ui.S.sm, color = T.mut }),
 		}, 22, { Pad = 18 }),
 		Ui.new("Frame", { Name = "Borde", Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.line3, BackgroundTransparency = 0 }),
 		Ui.row({
@@ -199,7 +182,7 @@ function Screen.create(btn: any)
 		App.toast("error", (string.gsub(h, "^✕ ", "")))
 		return
 	end
-	local r = App.request("createCompany", { slot = st.slot, name = Util.trim(st.name), color = st.color, logo = st.logo, difficulty = st.difficulty }, { button = btn })
+	local r = App.request("createCompany", { slot = st.slot, name = Util.trim(st.name), color = st.color, logo = st.logo }, { button = btn })
 	if r.ok then
 		st.name = ""
 		App.ui.enteringGame = true

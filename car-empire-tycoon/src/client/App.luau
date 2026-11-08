@@ -38,7 +38,7 @@ App.ui = {
 	collapsed = {},
 	editor = nil,
 	dialogs = {},
-	newCompany = { name = "", color = "#7667FF", logo = "pico", difficulty = "normal", slot = "1" },
+	newCompany = { name = "", color = "#7667FF", logo = "pico", slot = "1" },
 	sidePanel = nil, -- celular: panel lateral abierto ("l" | "r")
 	statRange = 12,
 	pop = nil, -- menú emergente abierto: "more" | "mob"

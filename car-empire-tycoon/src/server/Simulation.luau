@@ -382,6 +382,23 @@ function Simulation.stepResearch(g: any, ctx: any, minutes: number)
 	end
 end
 
+-- Compras permanentes ------------------------------------------------------------------
+
+function Simulation.ownsLine(g: any, n: number): boolean
+	return Rules.ownsLine(g, n)
+end
+
+-- Acredita la línea 3 (compra con Robux). Devuelve la función que la deshace si el guardado falla.
+function Simulation.grantLine3(g: any): () -> ()
+	g.facilities = g.facilities or {}
+	g.facilities.lines = g.facilities.lines or {}
+	local before = g.facilities.lines["3"]
+	g.facilities.lines["3"] = true
+	return function()
+		g.facilities.lines["3"] = before
+	end
+end
+
 -- Personal --------------------------------------------------------------------------
 
 function Simulation.makeCandidates(g: any, ctx: any, n: number): { any }

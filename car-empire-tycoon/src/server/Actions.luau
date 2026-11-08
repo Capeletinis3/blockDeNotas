@@ -69,29 +69,15 @@ function Actions.validateCompany(payload: any): (any?, string?)
 	if not name then
 		return nil, err
 	end
-	-- Color, logo y dificultad tienen valores por defecto: alcanza con escribir un nombre válido.
-	local color = payload.color
-	if color == nil then
-		color = Catalog.BRAND_COLORS[1][1]
+	-- Nombre, símbolo y color son obligatorios (la pantalla de creación propone valores editables). No hay
+	-- dificultades: todas las empresas empiezan con las mismas condiciones.
+	if not Catalog.isBrandColor(payload.color) then
+		return nil, "Elegí un color corporativo de la lista."
 	end
-	if not Catalog.isBrandColor(color) then
-		return nil, "Elegí un color de marca de la lista."
+	if not Catalog.isLogo(payload.logo) then
+		return nil, "Elegí un símbolo corporativo."
 	end
-	local logo = payload.logo
-	if logo == nil then
-		logo = "pico"
-	end
-	if not Catalog.isLogo(logo) then
-		return nil, "Logotipo desconocido."
-	end
-	local difficulty = payload.difficulty
-	if difficulty == nil then
-		difficulty = "normal"
-	end
-	if not Catalog.DIFFICULTIES[difficulty] then
-		return nil, "Dificultad desconocida."
-	end
-	return { name = name, color = color, logo = logo, difficulty = difficulty }, nil
+	return { name = name, color = payload.color, logo = payload.logo }, nil
 end
 
 function Actions.setIdentity(g: any, _ctx: any, payload: any): any

@@ -52,7 +52,7 @@ Catalog.RULES = {
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
 	slots = 4, -- empresas por cuenta (ranuras "1".."4")
-	slotsFree = 2, -- las dos primeras son gratuitas; la 3 y la 4 se desbloquearán más adelante (no hay compra todavía)
+	slotsFree = 2, -- las dos primeras son gratuitas; la 3 y la 4 se compran por separado (Catalog.PRODUCTS)
 	moreCandidatesCost = 1000,
 	assignMax = { station = 2, dept = 4 },
 	speeds = { 0, 1, 2, 3 }, -- 0 = pausa manual; 1×, 2× y 3× (sin avance instantáneo)
@@ -117,14 +117,18 @@ Catalog.RESEARCH_TIERS = {
 -- Generación de PI que se espera tener en cada época (para dimensionar los costos, no para dar PI).
 Catalog.EXPECTED_PI = { { 1970, 3 }, { 1972, 8 }, { 1975, 20 }, { 1982, 45 }, { 1994, 90 }, { 2030, 90 } }
 
--- Las diferencias son solo las que la simulación aplica de verdad: dinero inicial,
--- paciencia de los clientes y frecuencia con que llegan al concesionario.
-Catalog.DIFFICULTIES = {
-	facil = { id = "facil", label = "Relajado", money = 150000, desc = "Más capital inicial y 15 % más de demanda.", demand = 1.15, dots = 1 },
-	normal = { id = "normal", label = "Normal", money = 90000, desc = "Capital y demanda de referencia. La experiencia recomendada.", demand = 1, dots = 2 },
-	dificil = { id = "dificil", label = "Magnate", money = 65000, desc = "Menos capital y 15 % menos de demanda. El primer lote tiene que ser chico.", demand = 0.85, dots = 3 },
+-- Condiciones iniciales: todas las empresas empiezan igual (no hay dificultades), el 1 de enero de 1970.
+Catalog.START = { money = 90000, reputation = 3.0 }
+
+--[[ Compras con Robux (Developer Products, compra permanente registrada por recibo). id = 0: el producto
+	todavía no está configurado en el panel de Roblox y la compra queda deshabilitada (no se simula nada).
+	- slot3 / slot4: habilitan esa ranura de empresa en la cuenta (cada una por separado).
+	- line3: la línea de producción 3 de la empresa activa, permanente e independiente de la línea 2. ]]
+Catalog.PRODUCTS = {
+	slot3 = { id = 0, kind = "slot", slot = "3", name = "Ranura de empresa 3" },
+	slot4 = { id = 0, kind = "slot", slot = "4", name = "Ranura de empresa 4" },
+	line3 = { id = 0, kind = "line3", name = "Línea de producción 3" },
 }
-Catalog.DIFFICULTY_ORDER = { "facil", "normal", "dificil" }
 
 Catalog.BRAND_COLORS = {
 	{ "#7667FF", "Violeta" },

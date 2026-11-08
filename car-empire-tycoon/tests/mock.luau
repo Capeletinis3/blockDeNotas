@@ -1026,6 +1026,11 @@ function M.reset(opts: any?)
 	for _, name in { "ReplicatedStorage", "ServerStorage", "ServerScriptService", "StarterPlayer", "Lighting", "StarterGui", "SoundService", "ProximityPromptService", "ContentProvider" } do
 		S[name] = service(name)
 	end
+	S.MarketplaceService = service("MarketplaceService")
+	M.prompts = {}
+	S.MarketplaceService.PromptProductPurchase = function(_, player, id)
+		table.insert(M.prompts, { player = player, id = id })
+	end
 	S.StarterGui.SetCore = function() end
 	S.SoundService.PlayLocalSound = function() end
 	S.Workspace = service("Workspace")

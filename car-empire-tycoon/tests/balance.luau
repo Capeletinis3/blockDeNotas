@@ -133,14 +133,14 @@ function Bot.bestPrice(g: any, d: any): number
 end
 
 -- Juega `minutes` minutos reales. Devuelve el registro de métricas y el estado final.
-function Bot.play(difficulty: string, minutes: number, opts: any?): any
+function Bot.play(_label: string, minutes: number, opts: any?): any
 	local o = opts or {}
 	local verbose = o.verbose
 	local flat = o.flat
 	local single = o.single -- un solo tipo de vehículo (el de más demanda), con generaciones nuevas
 	local ctx = { events = {}, today = "2026-10-25", yesterday = "2026-10-24", rng = seeded(7) }
 	ctx.notify = function() end
-	local g = GameState.newGame({ name = "Bot Motors", color = "#7667FF", logo = "pico", difficulty = difficulty, now = 1 })
+	local g = GameState.newGame({ name = "Bot Motors", color = "#7667FF", logo = "pico", now = 1 })
 	local m0 = g.money
 	local log = {
 		milestones = {}, research = {}, unlocks = {}, minMoney = g.money, decades = {}, byType = {}, spent = { produccion = 0, investigacion = 0, mejoras = 0, desarrollo = 0, campanas = 0 },

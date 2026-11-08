@@ -183,11 +183,9 @@ function Screen.build(main: Frame, side: Frame)
 	end
 	Ui.card(exRows, { gap = 8, pad = 18, name = "Expansion" }).Parent = main
 
-	local dif = Catalog.DIFFICULTIES[g.company.difficulty]
 	local tot = Rules.finance(g, 100000)
 	local summary: { Instance? } = { Ui.lbl("Resumen de la empresa") }
 	for _, r in {
-		{ "Dificultad", dif.label },
 		{ "Fecha", Util.fullDate(g.time.day, g.time.minute) .. (Rules.extraYears(g) > 0 and (" · año comercial extra " .. Rules.extraYears(g)) or "") },
 		{ "Nivel", g.level .. " (" .. g.xp .. "/" .. g.derived.xpNext .. " XP)" },
 		{ "Reputación", Util.num(g.reputation, 2) .. " / 5" },

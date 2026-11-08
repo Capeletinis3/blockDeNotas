@@ -5,7 +5,7 @@
 
 	Perfil guardado (un registro por jugador):
 	  { slots = { ["1"] = partida, … ["4"] = … }, active = "1" | nil, settings = {…}, processed = { ids },
-	    unlocked = { ["3"] = true } }   -- ranuras 3 y 4: se habilitan una por una (por ahora no hay compra)
+	    unlocked = { ["3"] = true }, receipts = { PurchaseId } }   -- ranuras 3 y 4: compra por separado (Robux)
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -16,7 +16,7 @@ local Rules = require(Shared.Rules)
 
 local GameState = {}
 
-GameState.SCHEMA = 8
+GameState.SCHEMA = 9
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -40,8 +40,7 @@ function GameState.newRecords(): any
 	return { others = { models = 0, lots = 0, produced = 0, sold = 0, discarded = 0, revenue = 0, cost = 0 } }
 end
 
-function GameState.newGame(opts: { name: string, color: string, logo: string?, difficulty: string?, now: number }): any
-	local dif = Catalog.DIFFICULTIES[opts.difficulty or "normal"] or Catalog.DIFFICULTIES.normal
+function GameState.newGame(opts: { name: string, color: string, logo: string?, now: number }): any
 	return {
 		schema = GameState.SCHEMA,
 		createdAt = opts.now,
@@ -49,15 +48,15 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, d
 		playedSeconds = 0,
 		nextId = 1,
 		-- id: identificador estable de la empresa (no cambia al renombrarla ni al moverla de ranura).
-		company = { id = opts.id or ("c" .. tostring(opts.now)), name = opts.name, color = opts.color, logo = opts.logo or "pico", difficulty = dif.id },
+		company = { id = opts.id or ("c" .. tostring(opts.now)), name = opts.name, color = opts.color, logo = opts.logo or "pico" },
 		sede = 1,
 		expansion = 0, -- regiones abiertas de la expansión global (después del Imperio automotriz)
-		money = dif.money,
+		money = Catalog.START.money, -- todas las empresas empiezan igual
 		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
 		rp = 0, -- banco de puntos de investigación
 		xp = 0,
 		level = 1,
-		reputation = 3.0,
+		reputation = Catalog.START.reputation,
 		-- day = meses desde enero de 1970; minute = minutos de juego dentro del mes.
 		time = { day = 0, minute = 0, speed = 1 },
 		designs = {},
@@ -231,7 +230,7 @@ function GameState.validate(g: any): (boolean, string?)
 	if type(co) ~= "table" or type(co.name) ~= "string" or Util.charCount(co.name) < 3 or Util.charCount(co.name) > 24 then
 		return fail("El nombre de la empresa no es válido.")
 	end
-	if type(co.id) ~= "string" or #co.id < 1 or #co.id > 64 or not Util.isHexColor(co.color) or not Catalog.isLogo(co.logo) or not Catalog.DIFFICULTIES[co.difficulty] then
+	if type(co.id) ~= "string" or #co.id < 1 or #co.id > 64 or not Util.isHexColor(co.color) or not Catalog.isLogo(co.logo) or co.difficulty ~= nil then
 		return fail("La identidad de la empresa está dañada.")
 	end
 	if not nonNeg(g.money) or not isInt(g.gems, 0) or not nonNeg(g.rp) or not nonNeg(g.xp) then
@@ -459,7 +458,7 @@ local MIGRATIONS: { [number]: (any, number) -> () } = {}
 
 -- 1 → 2: sistemas completos de la V3 (personal, estaciones, investigación activa, mercado, misiones…).
 MIGRATIONS[1] = function(g: any, now: number)
-	local fresh = GameState.newGame({ name = g.company.name, color = g.company.color, difficulty = g.company.difficulty, now = now })
+	local fresh = GameState.newGame({ name = g.company.name, color = g.company.color, now = now })
 	for k, v in fresh do
 		if g[k] == nil then
 			g[k] = v
@@ -836,6 +835,13 @@ MIGRATIONS[7] = function(g: any, _now: number)
 	g.schema = 8
 end
 
+-- 8 → 9: sin dificultades (todas las empresas juegan con las mismas reglas). El dinero que ya tenían se
+-- conserva; solo deja de aplicarse el ajuste de demanda.
+MIGRATIONS[8] = function(g: any, _now: number)
+	g.company.difficulty = nil
+	g.schema = 9
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -864,7 +870,7 @@ end
 -- Perfil (varias empresas por jugador) ---------------------------------------------------
 
 function GameState.newProfile(): any
-	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {}, unlocked = {} }
+	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {}, unlocked = {}, receipts = {} }
 end
 
 -- ¿Se puede usar la ranura? Las dos primeras son gratuitas; la 3 y la 4 solo si se habilitaron
@@ -928,6 +934,9 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	end
 	if type(profile.unlocked) ~= "table" then
 		profile.unlocked = {}
+	end
+	if not isList(profile.receipts) then
+		profile.receipts = {} -- recibos de Robux ya acreditados (PurchaseId)
 	end
 	local damaged = {}
 	for key, raw in profile.slots do
@@ -1200,7 +1209,6 @@ function GameState.summary(g: any): any
 		name = g.company.name,
 		color = g.company.color,
 		logo = g.company.logo,
-		difficulty = g.company.difficulty,
 		level = g.level,
 		money = g.money,
 		day = g.time.day,

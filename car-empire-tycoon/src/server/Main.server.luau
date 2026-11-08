@@ -10,6 +10,7 @@ local RunService = game:GetService("RunService")
 local TextService = game:GetService("TextService")
 local DataStoreService = game:GetService("DataStoreService")
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -213,7 +214,21 @@ sessions = Sessions.new({
 	log = log,
 	debug = RunService:IsStudio(),
 	saveMode = saveMode,
+	prompt = function(player: Player, productId: number)
+		MarketplaceService:PromptProductPurchase(player, productId)
+	end,
 })
+
+-- Compras permanentes con Developer Products: se acreditan solo después de guardarlas (Sessions.processReceipt).
+MarketplaceService.ProcessReceipt = function(info: any): Enum.ProductPurchaseDecision
+	local ok, granted = pcall(function()
+		return sessions:processReceipt(info)
+	end)
+	if ok and granted then
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	end
+	return Enum.ProductPurchaseDecision.NotProcessedYet
+end
 
 local function onPlayerAdded(player: Player)
 	sessions:add(player)

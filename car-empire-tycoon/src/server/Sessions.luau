@@ -14,6 +14,7 @@
 	  wait      = (s) -> ()                   spawn = (fn, ...) -> ()
 	  log       = (texto) -> ()               debug = boolean (muestra datos de diagnóstico en el registro)
 	  saveMode  = "datastore" | "memory"
+	  prompt    = (player, productId) -> () | nil                   -- abre la compra de un Developer Product
 	}
 
 	Estados de una sesión: "loading" → "ready" (o "failed") ; "lost" si otro servidor tomó la partida.
@@ -38,6 +39,7 @@ Sessions.MIN_SAVE_GAP = 7 -- límite de escritura por clave del DataStore
 Sessions.RATE_WINDOW = 2
 Sessions.RATE_MAX = 14
 Sessions.PROCESSED_KEPT = 60
+Sessions.RECEIPTS_KEPT = 300 -- recibos de Robux ya acreditados (un reintento de Roblox no se acredita dos veces)
 
 -- Opciones de Configuración (las de la V3). camSpeed va de 0,4 a 2 en pasos de 0,1.
 local CAM_SPEEDS = {}
@@ -152,6 +154,7 @@ function Sessions:save(s: any, release: boolean?)
 	end
 	local ok, msg, code = data:save(s.player.UserId, s.profile, s.damaged, { release = release })
 	s.saving = false
+	s.lastSaveOk = ok == true
 	s.lastSave = self.deps.clock()
 	if ok then
 		s.lastSavedAt = self.deps.now()
@@ -419,16 +422,138 @@ function Sessions:createCompany(s: any, payload: any): any
 	if s.game then
 		self:deactivate(s)
 	end
-	local g = GameState.newGame({ id = "c" .. tostring(self.deps.now()) .. "-" .. key, name = name, color = clean.color, logo = clean.logo, difficulty = clean.difficulty, now = self.deps.now() })
+	local g = GameState.newGame({ id = "c" .. tostring(self.deps.now()) .. "-" .. key, name = name, color = clean.color, logo = clean.logo, now = self.deps.now() })
 	s.profile.slots[key] = g
 	Simulation.notify(g, nil, "ok", "¡" .. name .. " fue fundada!", "juego")
 	self:activate(s, key)
 	return { ok = true, msg = "¡" .. name .. " fue fundada! Tu garaje te espera." }
 end
 
+-- Compras con Robux -------------------------------------------------------------------------
+
+local function productByKey(key: any): any
+	return type(key) == "string" and Catalog.PRODUCTS[key] or nil
+end
+
+local function productById(id: any): (string?, any)
+	if type(id) ~= "number" or id <= 0 then
+		return nil, nil
+	end
+	for k, p in Catalog.PRODUCTS do
+		if p.id == id then
+			return k, p
+		end
+	end
+	return nil, nil
+end
+
+-- Motivo por el que no se puede comprar `p` ahora, o nil.
+function Sessions:productBlock(s: any, p: any): string?
+	if p.id == 0 then
+		return "Esta compra todavía no está disponible: falta configurar el producto en Roblox."
+	end
+	if p.kind == "slot" then
+		if GameState.slotUsable(s.profile, p.slot) then
+			return "Ya tenés la ranura " .. p.slot .. "."
+		end
+	elseif p.kind == "line3" then
+		if not s.game or s.demo then
+			return "Abrí la empresa que va a recibir la línea 3."
+		end
+		if Simulation.ownsLine(s.game, 3) then
+			return "Esta empresa ya tiene la línea 3."
+		end
+	end
+	return nil
+end
+
+-- Aplica lo comprado. Devuelve una función que lo deshace (si el guardado falla) o nil si no se puede aplicar.
+local function grantProduct(s: any, p: any): (() -> ())?
+	if p.kind == "slot" then
+		local before = s.profile.unlocked[p.slot]
+		s.profile.unlocked[p.slot] = true
+		return function()
+			s.profile.unlocked[p.slot] = before
+		end
+	elseif p.kind == "line3" then
+		local g = s.game
+		if not g or s.demo then
+			return nil -- sin empresa abierta: Roblox reintenta el recibo más tarde
+		end
+		return Simulation.grantLine3(g)
+	end
+	return nil
+end
+
+--[[ MarketplaceService.ProcessReceipt. Devuelve true (PurchaseGranted) solo cuando lo comprado quedó GUARDADO;
+	false (NotProcessedYet) si el jugador no está cargado, no hay dónde aplicarlo o el guardado falló: Roblox
+	vuelve a intentar. Un recibo ya acreditado devuelve true sin volver a aplicarlo. ]]
+function Sessions:processReceipt(info: any): boolean
+	if type(info) ~= "table" or type(info.PurchaseId) ~= "string" then
+		return false
+	end
+	local s
+	for player, x in self.list do
+		if player.UserId == info.PlayerId then
+			s = x
+		end
+	end
+	if not s or s.status ~= "ready" or not s.profile or s.leaving or not s.canSave then
+		return false
+	end
+	s.profile.receipts = s.profile.receipts or {}
+	if table.find(s.profile.receipts, info.PurchaseId) then
+		return true
+	end
+	local key, p = productById(info.ProductId)
+	if not p then
+		self.deps.log("[CarEmpire] Recibo de un producto desconocido: " .. tostring(info.ProductId))
+		return false
+	end
+	local undo = grantProduct(s, p)
+	if not undo then
+		return false
+	end
+	table.insert(s.profile.receipts, info.PurchaseId)
+	while #s.profile.receipts > Sessions.RECEIPTS_KEPT do
+		table.remove(s.profile.receipts, 1)
+	end
+	while s.saving do
+		self.deps.wait(0.2)
+	end
+	s.dirty = true
+	s.lastSaveOk = false
+	self:save(s)
+	if not s.lastSaveOk then
+		undo()
+		local i = table.find(s.profile.receipts, info.PurchaseId)
+		if i then
+			table.remove(s.profile.receipts, i)
+		end
+		return false
+	end
+	self.deps.notice(s.player, "ok", "Compra acreditada: " .. p.name .. ".")
+	self:push(s)
+	return key ~= nil
+end
+
 function Sessions:menuAction(s: any, action: string, payload: any): any?
 	local key = type(payload) == "table" and payload.slot or nil
-	if action == "createCompany" then
+	if action == "buyProduct" then
+		local p = productByKey(type(payload) == "table" and payload.product or nil)
+		if not p then
+			return { ok = false, msg = "Producto desconocido." }
+		end
+		local why = self:productBlock(s, p)
+		if why then
+			return { ok = false, msg = why }
+		end
+		if not self.deps.prompt then
+			return { ok = false, msg = "Las compras no están disponibles en este servidor." }
+		end
+		self.deps.prompt(s.player, p.id)
+		return { ok = true, quiet = true }
+	elseif action == "createCompany" then
 		return self:createCompany(s, payload)
 	elseif action == "selectSlot" then
 		if type(key) ~= "string" or not s.profile.slots[key] then

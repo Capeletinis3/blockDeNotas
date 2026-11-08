@@ -106,6 +106,16 @@ end
 
 -- Sede y capacidades ---------------------------------------------------------------------
 
+-- ¿La empresa tiene la línea de producción n? La 1 viene siempre; la 2 se compra con dinero del juego y la 3
+-- con Robux (independiente de la 2). g.facilities.lines = { [2] = true, [3] = true }.
+function Rules.ownsLine(g: any, n: number): boolean
+	if n == 1 then
+		return true
+	end
+	local f = g.facilities
+	return type(f) == "table" and type(f.lines) == "table" and f.lines[tostring(n)] == true
+end
+
 function Rules.sede(g: any): any
 	return Catalog.SEDES[Util.clamp(g.sede or 1, 1, #Catalog.SEDES)]
 end
@@ -452,14 +462,13 @@ function Rules.appeal(calc: any, spec: any): (number, any)
 	return a, { quality = idx.quality, objective = obj, indices = idx }
 end
 
--- Demanda total del tipo este año (autos/min real), con la dificultad.
+-- Demanda total del tipo este año (autos/min real). Igual para todas las empresas.
 function Rules.demand(g: any, type: string, yearFrac: number?): number
 	local curve = Catalog.DEMAND[type]
 	if not curve then
 		return 0
 	end
-	local dif = Catalog.DIFFICULTIES[g.company.difficulty] or Catalog.DIFFICULTIES.normal
-	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * dif.demand * Rules.marketFactor(g)
+	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * Rules.marketFactor(g)
 end
 
 -- Precio justo de un auto de ese tipo, ese año y ese atractivo (referencia de los rivales).
