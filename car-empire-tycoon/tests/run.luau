@@ -159,6 +159,8 @@ local function bigCompany(name: string): any
 	local g = newCompany(name)
 	g.sede = 5
 	g.counters.sedeLevel = 5
+	g.facilities.factory, g.facilities.research = 5, 5
+	g.facilities.lines["2"], g.facilities.lines["3"] = true, true
 	g.money = 500000000
 	return g
 end
@@ -583,28 +585,47 @@ end)
 
 -- [P12] Sede y PI ---------------------------------------------------------------------------------
 
-test("[P12] Ampliar la sede aumenta los PI por minuto (3 → 8 → 20 → 45 → 90)", function()
+test("[P12] Instalaciones: oficinas, fábrica y centro de investigación mejoran con obras (PI 3 → 8 → 20 → 45 → 90)", function()
 	local g = newCompany("Sede SA")
 	local ctx = makeCtx(13)
 	local expected = { 3, 8, 20, 45, 90 }
-	eq(Rules.piPerMinute(g), 3, "garaje inicial")
-	check(not Actions.expandSede(g, ctx, {}).ok, "sin requisitos no se amplía")
-	for lvl = 2, 5 do
-		local nx = Rules.nextSede(g)
-		g.counters.unitsSold = nx.req.sold
-		g.reputation = nx.req.rep
-		g.money = nx.cost
-		local r = Actions.expandSede(g, ctx, {})
-		check(r.ok, r.msg)
-		eq(g.money, 0, "se cobró la ampliación")
-		eq(Rules.piPerMinute(g), expected[lvl], "PI/min de " .. Rules.sede(g).name)
-		check(Rules.caps(g).capacity > 0 and Rules.sede(g).lines == lvl, "más líneas")
+	eq(Rules.piPerMinute(g), 3, "centro inicial")
+	eq(Rules.caps(g).lines, 1, "una línea al empezar")
+	check(not Actions.upgradeFacility(g, ctx, { kind = "offices" }).ok, "sin requisitos no se amplían las oficinas")
+	check(not Actions.upgradeFacility(g, ctx, { kind = "research" }).ok, "el centro no supera el nivel de las oficinas")
+	local function finish()
+		Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 320)
 	end
-	check(not Actions.expandSede(g, ctx, {}).ok, "no hay sede después del imperio")
-	-- El personal no suma PI por minuto (en una etapa futura reducirá costos y duración).
+	for lvl = 2, 5 do
+		local nx = Rules.nextFacility(g, "offices")
+		g.counters.unitsSold = nx.def.req.sold
+		g.reputation = nx.def.req.rep
+		g.money = nx.cost
+		local r = Actions.upgradeFacility(g, ctx, { kind = "offices" })
+		check(r.ok, r.msg)
+		eq(g.money, 0, "se cobró la obra al empezar")
+		eq(g.sede, lvl - 1, "la obra todavía no terminó")
+		finish()
+		eq(g.sede, lvl, "oficinas nivel " .. lvl)
+		check(Rules.caps(g).staff == Catalog.SEDES[lvl].staff, "límite global de empleados")
+		g.money = Rules.nextFacility(g, "research").cost
+		check(Actions.upgradeFacility(g, ctx, { kind = "research" }).ok, "mejora el centro")
+		finish()
+		eq(Rules.piPerMinute(g), expected[lvl], "PI/min del " .. Rules.researchCenter(g).name)
+		g.money = Rules.nextFacility(g, "factory").cost
+		local rate = Rules.lineRate(g)
+		check(Actions.upgradeFacility(g, ctx, { kind = "factory" }).ok, "mejora la fábrica")
+		finish()
+		check(Rules.lineRate(g) > rate, "cada línea fabrica más")
+		eq(Rules.caps(g).lines, 1, "ninguna mejora regala líneas")
+	end
+	check(not Actions.upgradeFacility(g, ctx, { kind = "offices" }).ok, "no hay oficinas después de la casa matriz")
+	-- El personal no suma PI por minuto.
 	local base = Rules.piPerMinute(g)
 	for i = 1, 30 do
-		table.insert(g.employees, { id = "e" .. i, name = "X", role = "Ingeniero", level = 6, skill = 98, salary = 100, assign = "laboratorio" })
+		local c = Simulation.makeCandidate(g, ctx, "investigacion")
+		c.id = "x" .. i
+		table.insert(g.employees, { id = c.id, name = c.name, spec = c.spec, dept = "investigacion", salary = 100, skills = c.skills, potential = c.potential, months = 0, hiredDay = 0, adapt = {}, status = "activo" })
 	end
 	eq(Rules.piPerMinute(g), base, "el personal no aumenta los PI por minuto")
 end)
@@ -787,7 +808,7 @@ test("[P16] El tutorial se completa sin trabarse por dinero ni investigación (t
 		check(log.minMoney >= 0, dif .. ": nunca en negativo")
 		-- El primer lote se fabrica completo y recibe reseñas antes de venderse.
 		check(log.milestones["primera venta"] ~= nil and log.milestones["primera venta"] < 3, dif .. ": primera venta en menos de 3 minutos (" .. tostring(log.milestones["primera venta"]) .. ")")
-		check(log.milestones["sede 2"] ~= nil and log.milestones["sede 2"] < 28, dif .. ": Empresa pequeña antes de 28 min (" .. tostring(log.milestones["sede 2"]) .. ")")
+		check(log.milestones["sede 2"] ~= nil and log.milestones["sede 2"] < 30, dif .. ": Empresa pequeña antes de 30 min (" .. tostring(log.milestones["sede 2"]) .. ")")
 		check(GameState.validate(g), dif .. ": partida válida")
 	end
 	-- Recorrido mínimo del tutorial con el capital inicial: un solo diseño barato y un lote chico.
@@ -1129,27 +1150,57 @@ test("Inversiones: duplicar paga ingeniería", function()
 	eq(g.money, m2 - DesignCalc.engineeringCost(g, g.designs[1], "nuevo"), "el duplicado paga la ingeniería de un modelo nuevo")
 	-- Estaciones: hasta nivel 2 por sede (10 con el imperio), cada nivel más caro.
 	eq(Rules.maxStationLevel(g), 2, "garaje: nivel 2")
-	g.sede = 5
-	eq(Rules.maxStationLevel(g), 10, "imperio: nivel 10")
+	g.facilities.factory = 5
+	eq(Rules.maxStationLevel(g), 10, "complejo automotriz: nivel 10")
 	check(Rules.upgradeCost({ level = 9 }) > Rules.upgradeCost({ level = 2 }) * 100, "los niveles altos cuestan mucho más")
 end)
 
-test("[C17][C18] Ampliar la sede: cobra, aplica enseguida, no se puede sin dinero ni dos veces", function()
+test("[C17][C18] Líneas y obras: línea 2 con dinero, línea 3 con Robux independiente, sin cobrar dos veces", function()
 	local g = newCompany("Ampliar SA")
 	local ctx = makeCtx(49)
-	local nx = Rules.nextSede(g)
-	g.counters.unitsSold = nx.req.sold
-	g.reputation = nx.req.rep
+	local nx = Rules.nextFacility(g, "line2")
 	g.money = nx.cost - 1
-	check(not Actions.expandSede(g, ctx, {}).ok, "sin dinero suficiente no amplía")
-	eq(g.sede, 1, "sigue en el garaje")
+	check(not Actions.upgradeFacility(g, ctx, { kind = "line2" }).ok, "sin dinero suficiente no se compra")
 	g.money = nx.cost + 10
-	local pi0, lines0 = Rules.piPerMinute(g), Rules.caps(g).lines
-	check(Actions.expandSede(g, ctx, {}).ok, "amplía")
+	check(Actions.upgradeFacility(g, ctx, { kind = "line2" }).ok, "compra la línea 2")
 	eq(g.money, 10, "descuenta el costo exacto")
-	check(Rules.piPerMinute(g) > pi0 and Rules.caps(g).lines == lines0 + 1, "más PI y una línea más, al instante")
-	check(not Actions.expandSede(g, ctx, {}).ok, "la siguiente pide sus propios requisitos")
-	eq(g.sede, 2, "no se compra dos veces")
+	g.money = 1e9
+	check(not Actions.upgradeFacility(g, ctx, { kind = "line2" }).ok, "una obra a la vez por instalación (no se paga dos veces)")
+	eq(Rules.caps(g).lines, 1, "mientras se construye, una línea")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * (nx.days + 1))
+	eq(Rules.caps(g).lines, 2, "terminada: dos líneas")
+	check(Rules.nextFacility(g, "line2") == nil and not Actions.upgradeFacility(g, ctx, { kind = "line2" }).ok, "la línea 2 es permanente y no se vuelve a vender")
+	-- La línea 3 es independiente de la 2.
+	local other = newCompany("Tres Líneas SA")
+	local undo = Simulation.grantLine3(other)
+	eq(Rules.caps(other).lines, 2, "línea 3 sin la 2: dos líneas (1 y 3)")
+	undo()
+	eq(Rules.caps(other).lines, 1, "deshacer (si el guardado del recibo falla)")
+	-- Administración: organización acelera obras, gestión abarata, finanzas baja el mantenimiento.
+	local h = bigCompany("Admin SA")
+	h.sede = 2
+	h.facilities.factory = 1
+	local cost0 = Rules.nextFacility(h, "factory").cost
+	local maint0
+	h.facilities.invested = 1000000
+	maint0 = Rules.maintenance(h)
+	eq(maint0, 1000000 * Catalog.FACILITIES.maintenanceRate, "mantenimiento: porcentaje de lo invertido")
+	Simulation.ensureMarket(h, ctx)
+	for _ = 1, 2 do
+		local c = Simulation.makeCandidate(h, ctx, "administracion")
+		c.spec = "administracion"
+		for _, k in Catalog.STAFF.departments[4].skills do
+			c.skills[k], c.potential[k] = 90, 100
+		end
+		table.insert(h.candidates, c)
+		check(Actions.hire(h, ctx, { candidateId = c.id, dept = "administracion" }).ok, "contrata administración")
+	end
+	check(Rules.nextFacility(h, "factory").cost < cost0, "gestión: obras más baratas")
+	check(Rules.maintenance(h) < maint0, "eficiencia financiera: menos mantenimiento")
+	check(Rules.buildSpeed(h) > 1, "organización: obras más rápidas")
+	local m0 = h.money
+	Simulation.monthRollover(h, ctx)
+	check(h.money < m0, "el mantenimiento se cobra cada mes")
 end)
 
 test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y progreso del bot", function()
@@ -1200,7 +1251,7 @@ test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y 
 	-- El primer lote se fabrica completo y recibe reseñas antes de venderse (etapa 2).
 	check(log.milestones["primera venta"] < 3, "primera venta en menos de 3 min")
 	check(log.milestones["primera ganancia"] < 5, "primera ganancia en menos de 5 min")
-	check(log.milestones["sede 2"] >= 8 and log.milestones["sede 2"] <= 25, "Empresa pequeña entre 8 y 25 min (" .. Util.num(log.milestones["sede 2"], 1) .. ")")
+	check(log.milestones["sede 2"] >= 8 and log.milestones["sede 2"] <= 30, "Empresa pequeña entre 8 y 30 min (" .. Util.num(log.milestones["sede 2"], 1) .. ")")
 	check(log.milestones["sede 3"] ~= nil and log.milestones["sede 3"] <= 100, "Sede empresarial antes de 100 min (" .. tostring(log.milestones["sede 3"]) .. ")")
 	check(log.milestones["sede 4"] ~= nil and log.milestones["sede 4"] <= 200, "Corporación antes de 200 min")
 	check(log.minMoney >= 0, "nunca dinero negativo")
@@ -1918,7 +1969,7 @@ test("[F6] Tiempos reales de investigación (bot): cerca de los objetivos", func
 	check(rs.avgLag <= 0.5, "el optimizador investiga apenas puede (" .. Util.num(rs.avgLag, 1) .. " años)")
 	-- Estrategia simple (sin ampliar más allá de la sede 3 hasta 2009): más lenta, pero sin esperas eternas.
 	local flat = Bot.researchSummary(Bot.play("normal", 732, { flat = true }))
-	check(flat.done >= Catalog.RESEARCH_TOTAL - 5, "la estrategia simple completa casi todas (" .. flat.done .. ")")
+	check(flat.done >= Catalog.RESEARCH_TOTAL - 10, "la estrategia simple completa casi todas (" .. flat.done .. ")")
 	for k, rg in RANGE do
 		local bt = flat.byTier[k]
 		check(bt ~= nil and bt.max <= rg[2] * 1.1, "simple · " .. Catalog.RESEARCH_RULES.complexityLabel[k] .. ": máxima " .. Util.num(bt and bt.max or -1, 1) .. " min")

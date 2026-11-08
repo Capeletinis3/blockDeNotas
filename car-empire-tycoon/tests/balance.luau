@@ -395,6 +395,10 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 		if g.counters.unitsSold > 0 then
 			mark("primera venta")
 		end
+		if g.sede > (log.lastSede or 1) then
+			log.lastSede = g.sede
+			mark("sede " .. g.sede, Rules.sede(g).name)
+		end
 		if g.money > m0 and log.milestones["primera venta"] then
 			mark("primera ganancia", "el dinero supera el capital inicial")
 		end
@@ -405,13 +409,23 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 			research()
 			upgrade()
 			campaign()
-			local ok = Rules.nextSede(g) ~= nil
-			for _, c in Rules.expandChecks(g) do
-				ok = ok and c[1]
+			-- Instalaciones: oficinas apenas cumple los requisitos; línea 2, fábrica y centro cuando sobra dinero.
+			local function tryBuild(kind: string, margin: number)
+				local nx = Rules.nextFacility(g, kind)
+				if not nx or g.money < nx.cost * margin then
+					return
+				end
+				for _, c in Rules.facilityChecks(g, kind) do
+					if not c[1] then
+						return
+					end
+				end
+				Actions.upgradeFacility(g, ctx, { kind = kind })
 			end
-			if ok and Actions.expandSede(g, ctx, {}).ok then
-				mark("sede " .. g.sede, Rules.sede(g).name)
-			end
+			tryBuild("offices", 1)
+			tryBuild("line2", 1.5)
+			tryBuild("factory", flat and 3 or 1.3)
+			tryBuild("research", flat and 4 or 1.6)
 			local nx = Rules.nextExpansion(g)
 			if nx and not o.noExpansion and g.counters.unitsSold >= nx.sold and g.money >= nx.cost * 1.2 and Actions.expandGlobal(g, ctx, {}).ok then
 				mark("region " .. g.expansion, nx.name)

@@ -338,8 +338,8 @@ local function signature(g: any): string
 end
 
 -- Refleja el estado de la partida en el garaje. Reconstruye lo dinámico solo si cambió.
---[[ Fase 3D futura: cada sede puede tener su edificio en ServerStorage.CarEmpireAssets.Sedes.<asset>
-	(Catalog.SEDES[n].asset), ubicado con su PrimaryPart en el centro de la parcela. Si no existe, la
+--[[ Fase 3D futura: cada nivel de fábrica puede tener su edificio en ServerStorage.CarEmpireAssets.Sedes.<asset>
+	(Catalog.FACILITIES.factory.levels[n].asset), ubicado con su PrimaryPart en el centro de la parcela. Si no existe, la
 	parcela conserva el edificio provisional; la sede cambia igual sus beneficios. Ver docs/FASE-3D.md. ]]
 function Garage:applySedeModel(i: number, sedeLevel: number)
 	local plot = self.plots[i]
@@ -351,7 +351,7 @@ function Garage:applySedeModel(i: number, sedeLevel: number)
 		plot.sedeModel:Destroy()
 		plot.sedeModel = nil
 	end
-	local def = Catalog.SEDES[sedeLevel]
+	local def = Catalog.FACILITIES.factory.levels[sedeLevel]
 	local ok, asset = pcall(function()
 		local folder = game:GetService("ServerStorage"):FindFirstChild("CarEmpireAssets")
 		local sedes = folder and folder:FindFirstChild("Sedes")
@@ -371,7 +371,7 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 		return
 	end
 	local plot = self.plots[i]
-	self:applySedeModel(i, g.sede or 1)
+	self:applySedeModel(i, (g.facilities and g.facilities.factory) or 1) -- el edificio sigue a la fábrica
 	if refreshSign then
 		self:refreshSign(i, g.company)
 	end

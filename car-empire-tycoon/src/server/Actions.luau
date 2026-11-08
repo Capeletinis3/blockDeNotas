@@ -94,24 +94,35 @@ function Actions.setIdentity(g: any, _ctx: any, payload: any): any
 	return { ok = true, msg = "Identidad actualizada.", quiet = true }
 end
 
-function Actions.expandSede(g: any, ctx: any, _payload: any): any
-	local next = Rules.nextSede(g)
-	if not next then
-		return fail("Ya tenés la sede máxima.")
+--[[ Mejora de una instalación (Compañía › Instalaciones): payload = { kind = "offices" | "factory" |
+	"research" | "line2" }. Se paga al empezar y es una obra con duración (Simulation.stepBuilds); el beneficio
+	llega al terminarla. La línea 3 no se construye: es una compra con Robux (Sessions.processReceipt). ]]
+function Actions.upgradeFacility(g: any, ctx: any, payload: any): any
+	local kind = arg(payload, "kind")
+	if kind ~= "offices" and kind ~= "factory" and kind ~= "research" and kind ~= "line2" then
+		return fail("Instalación desconocida.")
 	end
-	for _, check in Rules.expandChecks(g) do
+	local nx = Rules.nextFacility(g, kind)
+	if not nx then
+		return fail(kind == "line2" and "Ya tenés la línea 2." or "Esa instalación ya está en su nivel máximo.")
+	end
+	for _, check in Rules.facilityChecks(g, kind) do
 		if not check[1] then
-			return fail("Faltan requisitos para ampliar: " .. check[2] .. ".")
+			return fail("Faltan requisitos: " .. check[2] .. ".")
 		end
 	end
-	if not Simulation.spend(g, next.cost, "sede", "Ampliación a " .. next.name) then
+	if not Simulation.spend(g, nx.cost, "sede", "Obra: " .. nx.name) then
 		return fail("Fondos insuficientes.")
 	end
-	g.sede += 1
-	g.counters.sedeLevel = g.sede
-	Simulation.addXp(g, ctx, 500)
-	Simulation.notify(g, ctx, "ok", "¡Nueva sede: " .. next.name .. "!", "compania")
-	return { ok = true, msg = "Ampliaste a «" .. next.name .. "»: " .. next.lines .. " líneas, alcance comercial ×" .. Util.num(next.reach, 1) .. " y " .. next.pi .. " PI por minuto." }
+	table.insert(g.facilities.builds, { id = GameState.uid(g, "b"), kind = kind, level = nx.level, progress = 0, days = nx.days, cost = nx.cost })
+	g.facilities.invested = (g.facilities.invested or 0) + nx.cost
+	Simulation.addXp(g, ctx, 100)
+	return { ok = true, msg = "Obra iniciada: " .. nx.name .. " (" .. money(nx.cost) .. ", " .. nx.days .. " días)." }
+end
+
+-- Compatibilidad: «ampliar la sede» = mejorar las oficinas centrales.
+function Actions.expandSede(g: any, ctx: any, _payload: any): any
+	return Actions.upgradeFacility(g, ctx, { kind = "offices" })
 end
 
 -- Expansión global: después del Imperio automotriz, cada región suma alcance y capacidad de las líneas.
@@ -402,7 +413,7 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	Simulation.registerModel(g, lot)
 	g.counters.lotsLaunched = (g.counters.lotsLaunched or 0) + 1
 	Simulation.addXp(g, ctx, 60)
-	local lines = Rules.sede(g).lines
+	local lines = Rules.lineCount(g)
 	local waiting = #Rules.producingLots(g) >= lines and not table.find(Rules.producingLots(g), lot)
 	return {
 		ok = true,
@@ -831,7 +842,7 @@ function Actions.setSpeed(g: any, _ctx: any, payload: any): any
 end
 
 Actions.handlers = {
-	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, expandGlobal = Actions.expandGlobal,
+	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, upgradeFacility = Actions.upgradeFacility, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, startCampaign = Actions.startCampaign, cancelCampaign = Actions.cancelCampaign,
@@ -848,7 +859,7 @@ Actions.readOnly = { saveNow = true }
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, startCampaign = true, cancelCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
-	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
+	claimMission = true, claimDaily = true, expandSede = true, upgradeFacility = true, expandGlobal = true,
 }
 
 -- Acciones que justifican guardar enseguida (además del autoguardado periódico).

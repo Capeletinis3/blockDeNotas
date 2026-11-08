@@ -38,6 +38,8 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	g.time.day = imperio and ((Catalog.CALENDAR.endYear - 1970 + 1) * 12 + 2) or (avanz and (22 * 12 + 3) or (4 * 12 + 2))
 	g.sede = imperio and 5 or (avanz and 4 or 2)
 	g.counters.sedeLevel = g.sede
+	g.facilities.factory, g.facilities.research = g.sede, g.sede
+	g.facilities.lines["2"] = true
 	g.level = imperio and 30 or (avanz and 12 or 4)
 	g.reputation = imperio and 4.6 or (avanz and 4.2 or 3.4)
 	g.money = imperio and 250000000 or (avanz and 12500000 or 240000)

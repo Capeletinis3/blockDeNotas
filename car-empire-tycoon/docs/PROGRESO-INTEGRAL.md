@@ -43,7 +43,13 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Presupuesto mensual y duración elegibles; efecto con rendimientos decrecientes; costo y efecto calculados en el servidor.
   - Una activa, pago al inicio, avanza con el calendario, cancelable sin reembolso. Personal: creatividad (efecto), análisis (costo), comunicación (duración).
   - Esquema 12: la campaña por niveles activa sigue como corporativa por el resto del mes ya pagado.
-- [ ] 6. Instalaciones
+- [x] 6. Instalaciones (`Catalog.SEDES`, `Catalog.FACILITIES`, Compañía › Instalaciones)
+  - Oficinas centrales (g.sede): límite global de empleados, alcance, niveles de capacitación, expansión internacional.
+  - Fábrica (autos/min por línea, edificio del garaje) y centro de investigación (PI/min) separados; no superan a las oficinas.
+  - Mejoras = obras pagadas al inicio con duración (organización las acelera, gestión las abarata); mantenimiento mensual sobre lo invertido (finanzas lo baja).
+  - Líneas: 1 gratis, 2 con dinero (obra), 3 con Robux (Developer Product, independiente de la 2). Ninguna mejora da líneas.
+  - Expansión internacional por países reales (sin mapa definitivo todavía).
+  - Esquema 13: la sede vieja se reparte en oficinas/fábrica/centro del mismo nivel; quien tenía 2 o 3+ líneas las conserva.
 - [ ] 7. Investigación
 - [ ] 8. Ciclo automotriz
 - [ ] 9. Interfaz

@@ -570,6 +570,39 @@ function Simulation.stepTrainings(g: any, ctx: any, minutes: number)
 	end
 end
 
+--[[ Obras de instalaciones: avanzan por días simulados (velocidades y pausa) y la organización del personal
+	de Administración las acelera en vivo. Al terminar aplican el nivel nuevo una sola vez. ]]
+function Simulation.stepBuilds(g: any, ctx: any, minutes: number)
+	local f = g.facilities
+	if not f or #f.builds == 0 then
+		return
+	end
+	local days = minutes / Catalog.RULES.gameDayMinutes * Rules.buildSpeed(g)
+	for i = #f.builds, 1, -1 do
+		local b = f.builds[i]
+		b.progress = math.min(b.days, b.progress + days)
+		if b.progress >= b.days - 1e-9 then
+			table.remove(f.builds, i)
+			local label
+			if b.kind == "offices" and (g.sede or 1) < b.level then
+				g.sede = b.level
+				g.counters.sedeLevel = g.sede
+				label = "Oficinas centrales: " .. Rules.sede(g).office .. " (" .. Rules.sede(g).name .. ")"
+			elseif (b.kind == "factory" or b.kind == "research") and (f[b.kind] or 1) < b.level then
+				f[b.kind] = b.level
+				label = Catalog.FACILITIES[b.kind].name .. ": " .. Rules.facilityDef(b.kind, b.level).name
+			elseif b.kind == "line2" then
+				f.lines["2"] = true
+				label = "Línea de producción 2"
+			end
+			if label then
+				Simulation.addXp(g, ctx, 300)
+				Simulation.notify(g, ctx, "ok", "Obra terminada: " .. label .. ".", "compania")
+			end
+		end
+	end
+end
+
 -- Campaña: avanza con el calendario (comunicación la hace durar más) y termina sola.
 function Simulation.stepCampaign(g: any, ctx: any, minutes: number)
 	local c = Rules.campaign(g)
@@ -601,6 +634,12 @@ function Simulation.monthRollover(g: any, ctx: any)
 	-- Los movimientos de este bloque pertenecen al mes que empieza.
 	Simulation.payroll(g, ctx)
 	Simulation.ensureMarket(g, ctx)
+	-- Mantenimiento de las instalaciones (se paga lo que alcanza; nunca deja el dinero negativo).
+	local maint = math.min(Rules.maintenance(g), math.max(0, g.money))
+	if maint > 0 then
+		g.money -= maint
+		Simulation.ledger(g, "mantenimiento", -maint, "Mantenimiento de instalaciones")
+	end
 	-- Campaña corporativa: reconocimiento de marca (la reputación sube un poco cada mes, según el efecto).
 	local camp = Rules.campaign(g)
 	if camp and camp.kind == "corporativa" then
@@ -697,6 +736,7 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		Simulation.stepStaff(g, step)
 		Simulation.stepTrainings(g, ctx, step)
 		Simulation.stepCampaign(g, ctx, step)
+		Simulation.stepBuilds(g, ctx, step)
 	end
 end
 

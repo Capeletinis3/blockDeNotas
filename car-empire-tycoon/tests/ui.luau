@@ -1197,6 +1197,51 @@ test("Marketing en la interfaz: nueva campaña con presupuesto y duración, canc
 	noErrors("Marketing")
 end)
 
+test("Instalaciones en la interfaz: obra de la línea 2 con confirmación, avance y línea 3 sin compra configurada", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.closeAllDialogs()
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	sess.game.money = 5000000
+	sess.game.facilities.lines["2"] = nil
+	sess.game.facilities.builds = {}
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 5000000
+	end)
+	App.go("compania")
+	M.task.wait()
+	for _, k in { "offices", "factory", "research", "line2", "line3" } do
+		check(named("Instalacion_" .. k) ~= nil, "tarjeta " .. k)
+	end
+	local b3 = named("ComprarLinea3")
+	check(b3 ~= nil, "la línea 3 ofrece la compra con Robux")
+	clickN("Mejorar_line2")
+	M.task.wait()
+	eq(topKind(), "confirm", "confirma antes de pagar")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return #App.g.facilities.builds == 1
+	end), "obra en curso")
+	App.go("juego")
+	App.request("setSpeed", { speed = 3 })
+	for _ = 1, 60 do
+		advance(1)
+		if App.g.facilities.lines["2"] then
+			break
+		end
+	end
+	check(App.g.facilities.lines["2"] == true, "la línea 2 quedó construida")
+	eq(App.g.derived.caps.lines, 2, "dos líneas")
+	App.request("setSpeed", { speed = 1 })
+	noErrors("Instalaciones")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()

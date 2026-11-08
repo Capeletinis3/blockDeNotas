@@ -486,14 +486,45 @@ Catalog.MATERIALS = {
 	{ "cuero", "Cuero", 180 },
 }
 
---[[ Sedes. La sede define la capacidad de la fábrica (líneas × autos por minuto de cada línea), el alcance
-	comercial (cuántos concesionarios venden tus autos) y la generación de puntos de investigación (PI/min). ]]
+--[[ Instalaciones (Compañía › Instalaciones). Valores provisionales. Cada mejora se paga al empezar y es una
+	OBRA que dura `days` días de juego (la organización del personal de Administración la acelera; la gestión
+	abarata el costo). Una obra por instalación a la vez.
+	- Oficinas centrales (g.sede, 1–5): límite GLOBAL de empleados, alcance comercial, niveles de capacitación
+	  (TRAINING.levels[i].office) y la expansión internacional. Piden ventas y reputación. Sus niveles conservan
+	  los nombres de las etapas de la empresa (Garaje inicial … Imperio automotriz).
+	- Fábrica (1–5): autos por minuto de cada línea y edificio que se ve en el garaje. No da líneas.
+	- Centro de investigación (1–5): PI por minuto.
+	- Líneas: la 1 viene siempre; la 2 se compra con dinero (obra); la 3 es un desbloqueo permanente con Robux
+	  (Catalog.PRODUCTS.line3), independiente de la 2. Ninguna mejora da líneas sola.
+	La fábrica y el centro no pueden superar el nivel de las oficinas. ]]
 Catalog.SEDES = {
-	{ level = 1, name = "Garaje inicial", asset = "Sede1", lines = 1, perLine = 15, reach = 1, pi = 3, staff = 3, campaign = 4000, cost = 0, req = { sold = 0, rep = 0 } },
-	{ level = 2, name = "Empresa pequeña", asset = "Sede2", lines = 2, perLine = 20, reach = 2.5, pi = 8, staff = 8, campaign = 12000, cost = 300000, req = { sold = 300, rep = 3.0 } },
-	{ level = 3, name = "Sede empresarial", asset = "Sede3", lines = 3, perLine = 35, reach = 6, pi = 20, staff = 16, campaign = 35000, cost = 2500000, req = { sold = 3000, rep = 3.4 } },
-	{ level = 4, name = "Corporación automotriz", asset = "Sede4", lines = 4, perLine = 60, reach = 11, pi = 45, staff = 30, campaign = 100000, cost = 60000000, req = { sold = 20000, rep = 3.9 } },
-	{ level = 5, name = "Imperio automotriz", asset = "Sede5", lines = 5, perLine = 100, reach = 20, pi = 90, staff = 50, campaign = 300000, cost = 400000000, req = { sold = 100000, rep = 4.3 } },
+	{ level = 1, name = "Garaje inicial", office = "Oficinas básicas", reach = 1, staff = 3, cost = 0, days = 0, req = { sold = 0, rep = 0 } },
+	{ level = 2, name = "Empresa pequeña", office = "Oficinas ampliadas", reach = 2.5, staff = 8, cost = 300000, days = 60, req = { sold = 300, rep = 3.0 } },
+	{ level = 3, name = "Sede empresarial", office = "Sede corporativa", reach = 6, staff = 16, cost = 2500000, days = 120, req = { sold = 3000, rep = 3.4 } },
+	{ level = 4, name = "Corporación automotriz", office = "Torre corporativa", reach = 11, staff = 30, cost = 60000000, days = 200, req = { sold = 20000, rep = 3.9 } },
+	{ level = 5, name = "Imperio automotriz", office = "Casa matriz global", reach = 20, staff = 50, cost = 400000000, days = 300, req = { sold = 100000, rep = 4.3 } },
+}
+Catalog.FACILITIES = {
+	order = { "offices", "factory", "research" },
+	offices = { name = "Oficinas centrales", icon = "building" },
+	factory = { name = "Fábrica", icon = "factory", levels = {
+		{ level = 1, name = "Garaje pequeño", perLine = 15, cost = 0, days = 0, asset = "Sede1" },
+		{ level = 2, name = "Taller mecánico", perLine = 25, cost = 200000, days = 45, asset = "Sede2" },
+		{ level = 3, name = "Fábrica", perLine = 55, cost = 1500000, days = 90, asset = "Sede3" },
+		{ level = 4, name = "Planta industrial", perLine = 100, cost = 30000000, days = 150, asset = "Sede4" },
+		{ level = 5, name = "Complejo automotriz", perLine = 170, cost = 200000000, days = 240, asset = "Sede5" },
+	} },
+	research = { name = "Centro de investigación", icon = "flask", levels = {
+		{ level = 1, name = "Centro inicial", pi = 3, cost = 0, days = 0 },
+		{ level = 2, name = "Laboratorio", pi = 8, cost = 150000, days = 45 },
+		{ level = 3, name = "Centro de I+D", pi = 20, cost = 1200000, days = 90 },
+		{ level = 4, name = "Instituto tecnológico", pi = 45, cost = 25000000, days = 150 },
+		{ level = 5, name = "Campus de innovación", pi = 90, cost = 150000000, days = 240 },
+	} },
+	line2 = { name = "Línea de producción 2", cost = 150000, days = 30 },
+	maxLines = 3,
+	-- Mantenimiento mensual: este porcentaje de lo invertido en instalaciones (la eficiencia financiera lo baja).
+	maintenanceRate = 0.003,
 }
 
 -- Expansión global (después del Imperio automotriz): cada región abre mercados nuevos (+15 % de demanda
@@ -503,12 +534,21 @@ Catalog.SEDES = {
 Catalog.EXPANSION = {
 	cost = 80000000,
 	growth = 1.4,
-	demand = 0.15, -- +15 % de demanda por región
-	line = 0.12, -- +12 % de autos por minuto en cada línea por región
+	demand = 0.15, -- +15 % de demanda por país
+	line = 0.12, -- +12 % de autos por minuto en cada línea por país (capacidad global de la empresa)
 	soldBase = 110000,
 	soldStep = 35000,
-	regions = { "Sudamérica", "Norteamérica", "Europa occidental", "Europa del este", "Asia oriental", "Sudeste asiático", "India", "Oceanía", "Medio Oriente", "África" },
+	-- Países reales en orden de apertura (el mapa mundial definitivo se hará en una etapa visual posterior).
+	countries = {
+		{ id = "BR", name = "Brasil" }, { id = "US", name = "Estados Unidos" }, { id = "DE", name = "Alemania" }, { id = "PL", name = "Polonia" },
+		{ id = "JP", name = "Japón" }, { id = "TH", name = "Tailandia" }, { id = "IN", name = "India" }, { id = "AU", name = "Australia" },
+		{ id = "AE", name = "Emiratos Árabes Unidos" }, { id = "ZA", name = "Sudáfrica" },
+	},
+	regions = {}, -- nombres (compatibilidad): se completa abajo con los de `countries`
 }
+for _, c in Catalog.EXPANSION.countries do
+	table.insert(Catalog.EXPANSION.regions, c.name)
+end
 
 -- Estaciones de la fábrica (mejoras): cada nivel suma velocidad de producción. { id, nombre, rol ideal }
 Catalog.STATIONS = {
@@ -635,7 +675,7 @@ Catalog.TRAINING = {
 	  menor a los PI (piEraGrowth) y el dinero sigue a la economía de la época (moneyEra).
 	- Adelanto: se puede investigar hasta aheadMaxYears antes del año de la tecnología; cada año de adelanto
 	  suma aheadMoney al dinero, aheadPi a los PI y aheadDays a la duración.
-	- PI: el centro de investigación genera los PI de la sede (Catalog.SEDES[n].pi) por minuto real a 1×; cada
+	- PI: el centro de investigación genera FACILITIES.research.levels[n].pi por minuto real a 1×; cada
 	  línea que está fabricando suma linePi. Sin tope de acumulación.
 	- maxParallel: investigaciones simultáneas como máximo. ]]
 Catalog.RESEARCH_RULES = {
@@ -866,25 +906,25 @@ Catalog.MISSIONS = {
 	{ id = "t5", kind = "tutorial", title = "Investigá una tecnología", desc = "Elegí una tecnología disponible de tu época en Investigación.", counter = "researchDone", goal = 1, reward = { money = 10000, pi = 3, xp = 200 }, go = "investigacion" },
 	{ id = "t6", kind = "tutorial", title = "Diseñá un segundo modelo", desc = "Un segundo auto de otro tipo vende en otro segmento sin competir con el primero.", counter = "designsSaved", goal = 2, reward = { money = 20000, pi = 3, xp = 300 }, go = "editor" },
 	{ id = "s1", kind = "historia", title = "Vendé 300 autos", desc = "Requisito para ampliar a Empresa pequeña.", counter = "unitsSold", goal = 300, reward = { money = 30000, pi = 8, xp = 500 }, go = "ventas" },
-	{ id = "s2", kind = "historia", title = "Ampliá a Empresa pequeña", desc = "Desde Compañía › Sede.", counter = "sedeLevel", goal = 2, reward = { money = 50000, pi = 15, xp = 600 }, go = "compania" },
+	{ id = "s2", kind = "historia", title = "Ampliá a Empresa pequeña", desc = "Mejorá las oficinas centrales en Compañía › Instalaciones.", counter = "sedeLevel", goal = 2, reward = { money = 50000, pi = 15, xp = 600 }, go = "compania" },
 	{ id = "s3", kind = "historia", title = "Completá 5 investigaciones", desc = "Cada tecnología cambia estadísticas, costos u opciones del editor.", counter = "researchDone", goal = 5, reward = { money = 40000, pi = 10, xp = 400 }, go = "investigacion" },
 	{ id = "s4", kind = "historia", title = "Agotá un lote completo", desc = "Vendé todas las unidades de un lote.", counter = "lotsSoldOut", goal = 1, reward = { money = 25000, pi = 6, xp = 350 }, go = "ventas" },
 	{ id = "s5", kind = "historia", title = "Lanzá una nueva generación", desc = "Desde Catálogo, creá la 2.ª generación de un modelo.", counter = "generations", goal = 1, reward = { money = 30000, pi = 8, xp = 400 }, go = "autos" },
 	{ id = "s5a", kind = "historia", title = "Mejorá la fábrica 12 veces", desc = "Cada nivel de estación fabrica más rápido. Con la Empresa pequeña las estaciones llegan hasta nivel 4.", counter = "stationUpgrades", goal = 12, reward = { money = 40000, pi = 8, xp = 400 }, go = "fabrica" },
 	{ id = "s5b", kind = "historia", title = "Vendé 3.000 autos", desc = "Requisito para ampliar a Sede empresarial (también pide $2,5 M y reputación 3,4).", counter = "unitsSold", goal = 3000, reward = { money = 120000, pi = 20, xp = 800 }, go = "ventas" },
-	{ id = "s6", kind = "historia", title = "Llegá a la Sede empresarial", desc = "Más líneas, más alcance y 20 PI por minuto.", counter = "sedeLevel", goal = 3, reward = { money = 150000, pi = 40, xp = 1200 }, go = "compania" },
+	{ id = "s6", kind = "historia", title = "Llegá a la Sede empresarial", desc = "Oficinas centrales de nivel 3: 16 empleados y alcance ×6.", counter = "sedeLevel", goal = 3, reward = { money = 150000, pi = 40, xp = 1200 }, go = "compania" },
 	{ id = "s7", kind = "historia", title = "Vendé 10.000 autos", desc = "Una marca reconocida en todo el país.", counter = "unitsSold", goal = 10000, reward = { money = 400000, pi = 80, xp = 2000 }, go = "ventas" },
-	{ id = "s8", kind = "historia", title = "Llegá a la Corporación automotriz", desc = "Cuatro líneas, alcance ×11 y 45 PI por minuto.", counter = "sedeLevel", goal = 4, reward = { money = 3000000, pi = 150, xp = 3000 }, go = "compania" },
+	{ id = "s8", kind = "historia", title = "Llegá a la Corporación automotriz", desc = "Oficinas centrales de nivel 4: 30 empleados y alcance ×11.", counter = "sedeLevel", goal = 4, reward = { money = 3000000, pi = 150, xp = 3000 }, go = "compania" },
 	{ id = "s9", kind = "historia", title = "Liderá un tipo de vehículo", desc = "Tené al menos 35 % de la cuota de mercado de un tipo (promedio de los últimos meses, en Mercado).", counter = "leaderTypes", goal = 1, reward = { money = 6000000, pi = 150, xp = 3000 }, go = "mercado" },
 	{ id = "s10", kind = "historia", title = "Vendé 50.000 autos", desc = "Una de las marcas grandes del país.", counter = "unitsSold", goal = 50000, reward = { money = 10000000, pi = 200, xp = 4000 }, go = "ventas" },
-	{ id = "s11", kind = "historia", title = "Llegá al Imperio automotriz", desc = "La sede máxima: abre la expansión global.", counter = "sedeLevel", goal = 5, reward = { money = 40000000, pi = 300, xp = 6000 }, go = "compania" },
+	{ id = "s11", kind = "historia", title = "Llegá al Imperio automotriz", desc = "Oficinas centrales al máximo: abren la expansión internacional.", counter = "sedeLevel", goal = 5, reward = { money = 40000000, pi = 300, xp = 6000 }, go = "compania" },
 	{ id = "s12", kind = "historia", title = "Completá todas las investigaciones", desc = "Las 56 tecnologías de 1970 a 2030.", counter = "researchDone", goal = 56, reward = { money = 50000000, xp = 8000 }, go = "investigacion" },
-	{ id = "s13", kind = "historia", title = "Primera expansión global", desc = "Abrí tu primera región desde Compañía › Expansión global.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "compania" },
+	{ id = "s13", kind = "historia", title = "Primera expansión internacional", desc = "Abrí tu primer país desde Compañía › Instalaciones.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "compania" },
 	{ id = "s14", kind = "historia", title = "Vendé 250.000 autos", desc = "Una marca internacional.", counter = "unitsSold", goal = 250000, reward = { money = 60000000, xp = 8000 }, go = "ventas" },
 	{ id = "s15", kind = "historia", title = "Liderá cuatro tipos de vehículo", desc = "Al menos 35 % de cuota en cuatro tipos a la vez.", counter = "leaderTypes", goal = 4, reward = { money = 80000000, xp = 10000 }, go = "mercado" },
-	{ id = "s16", kind = "historia", title = "Abrí cinco regiones", desc = "Expansión global nivel 5.", counter = "expansion", goal = 5, reward = { money = 150000000, xp = 12000 }, go = "compania" },
+	{ id = "s16", kind = "historia", title = "Abrí cinco países", desc = "Expansión internacional en cinco países.", counter = "expansion", goal = 5, reward = { money = 150000000, xp = 12000 }, go = "compania" },
 	{ id = "s17", kind = "historia", title = "Vendé 1.000.000 de autos", desc = "Una de las marcas más grandes del mundo.", counter = "unitsSold", goal = 1000000, reward = { money = 250000000, xp = 20000 }, go = "ventas" },
-	{ id = "s18", kind = "historia", title = "Presencia en todo el mundo", desc = "Abrí las diez regiones de la expansión global.", counter = "expansion", goal = 10, reward = { money = 500000000, xp = 30000 }, go = "compania" },
+	{ id = "s18", kind = "historia", title = "Presencia en todo el mundo", desc = "Abrí los diez países de la expansión internacional.", counter = "expansion", goal = 10, reward = { money = 500000000, xp = 30000 }, go = "compania" },
 	{ id = "y1", kind = "anual", title = "Vendé autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "soldYear", goal = 120, goalScale = "reach", reward = { money = 12000, pi = 3, xp = 150 }, go = "ventas" },
 	{ id = "y2", kind = "anual", title = "Producí autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "producedYear", goal = 150, goalScale = "reach", reward = { money = 10000, pi = 3, xp = 120 }, go = "fabrica" },
 	{ id = "y3", kind = "anual", title = "Ganancia del año", desc = "Ingresos por ventas − costo de fabricación de lo vendido este año.", counter = "marginYear", goal = 90000, goalScale = "reach", reward = { money = 15000, pi = 4, xp = 150 }, go = "estadisticas" },

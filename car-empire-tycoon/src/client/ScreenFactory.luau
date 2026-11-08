@@ -208,13 +208,13 @@ function Screen.build(main: Frame, side: Frame)
 	}, 8).Parent = main
 
 	-- Columna lateral
-	local nx = Rules.nextSede(g)
+	local nx = Rules.nextFacility(g, "factory")
 	Ui.card({
 		Ui.lbl("Capacidad"),
 		Ui.between("Líneas", tostring(caps.lines)),
 		Ui.between("Por línea", Util.num(caps.perLine, 1) .. " autos/min"),
 		Ui.between("Total", Util.num(caps.capacity, 1) .. " autos/min", { color = T.gr }),
-		nx and Ui.text("Con «" .. nx.name .. "»: " .. nx.lines .. " líneas de " .. nx.perLine .. " autos/min de base.", { size = Ui.S.xs, color = T.mut }) or nil,
+		nx and Ui.text("Con «" .. nx.name .. "»: " .. nx.def.perLine .. " autos/min de base por línea (Compañía › Instalaciones).", { size = Ui.S.xs, color = T.mut }) or nil,
 	}, { gap = 6, name = "Capacidad" }).Parent = side
 	Ui.card({
 		Ui.lbl("Cómo funciona"),

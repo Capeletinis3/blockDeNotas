@@ -123,11 +123,13 @@ function Screen.build(main: Frame, side: Frame)
 	for _, r in {
 		{ "Fabricación (al terminar cada unidad)", f.manufacturing },
 		{ "Salarios", f.opex.salarios },
-		{ "Campaña publicitaria", f.opex.promocion },
+		{ "Campañas publicitarias", f.opex.promocion },
+		{ "Mantenimiento de instalaciones", f.opex.mantenimiento },
+		{ "Capacitaciones", f.invest.capacitacion },
 		{ "Desarrollo de diseños", f.invest.desarrollo },
 		{ "Investigación", f.invest.investigacion },
-		{ "Mejoras y sede", f.invest.mejoras },
-		{ "Contrataciones", f.invest.contratacion },
+		{ "Instalaciones y mejoras", f.invest.mejoras },
+		{ "Búsquedas e indemnizaciones", f.invest.contratacion },
 	} do
 		table.insert(gastos, Ui.between(r[1], Util.money(-r[2]), { color = r[2] > 0 and T.or_ or T.tx }))
 	end

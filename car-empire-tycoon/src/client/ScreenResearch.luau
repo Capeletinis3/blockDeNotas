@@ -245,7 +245,7 @@ function Screen.build(main: Frame, side: Frame)
 	Ui.card({
 		Ui.lbl("Puntos de investigación (PI)"),
 		Ui.row({ Ui.grow(Ui.text("Disponibles", { size = Ui.S.sm })), rpLabel }, 10),
-		Ui.row({ Ui.grow(Ui.text("Centro de investigación (" .. Rules.sede(g).name .. ")", { size = Ui.S.sm })), center }, 10),
+		Ui.row({ Ui.grow(Ui.text("Centro de investigación (" .. Rules.researchCenter(g).name .. ")", { size = Ui.S.sm })), center }, 10),
 		Ui.row({ Ui.grow(Ui.text("Líneas fabricando (" .. Catalog.RESEARCH_RULES.linePi .. " PI/min cada una)", { size = Ui.S.sm })), lines }, 10),
 		Ui.row({ Ui.grow(Ui.text("Generación total a 1×", { size = Ui.S.sm, weight = W.bold })), total }, 10),
 		Ui.text("Los PI se generan mientras la simulación corre (a 2× y 3×, más rápido) y se acumulan sin tope. Ampliar la sede mejora el centro de investigación.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),

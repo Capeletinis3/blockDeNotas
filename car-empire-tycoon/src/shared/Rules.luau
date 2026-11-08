@@ -144,10 +144,126 @@ function Rules.salaries(g: any): number
 	return Staff.salaries(g)
 end
 
--- Nivel de las oficinas centrales (límite de empleados y niveles de capacitación).
+-- Nivel de las oficinas centrales (g.sede: límite de empleados, alcance y niveles de capacitación).
 function Rules.officeLevel(g: any): number
+	return g.sede or 1
+end
+
+-- Instalaciones -----------------------------------------------------------------------------
+
+-- Nivel actual de una instalación ("offices" | "factory" | "research").
+function Rules.facilityLevel(g: any, kind: string): number
+	if kind == "offices" then
+		return g.sede or 1
+	end
 	local f = g.facilities
-	return (type(f) == "table" and tonumber(f.offices)) or g.sede or 1
+	return (type(f) == "table" and tonumber(f[kind])) or 1
+end
+
+-- Datos del nivel n (o del actual) de una instalación.
+function Rules.facilityDef(kind: string, n: number): any
+	if kind == "offices" then
+		return Catalog.SEDES[n]
+	end
+	local F = Catalog.FACILITIES[kind]
+	return F and F.levels and F.levels[n] or nil
+end
+
+function Rules.factory(g: any): any
+	return Rules.facilityDef("factory", Util.clamp(Rules.facilityLevel(g, "factory"), 1, 5))
+end
+
+function Rules.researchCenter(g: any): any
+	return Rules.facilityDef("research", Util.clamp(Rules.facilityLevel(g, "research"), 1, 5))
+end
+
+-- Líneas de producción que tiene la empresa (1 + la 2 comprada + la 3 de Robux).
+function Rules.lineCount(g: any): number
+	local n = 1
+	for i = 2, Catalog.FACILITIES.maxLines do
+		if Rules.ownsLine(g, i) then
+			n += 1
+		end
+	end
+	return n
+end
+
+-- Obra en curso de una instalación (o nil).
+function Rules.build(g: any, kind: string): any
+	for _, b in (type(g.facilities) == "table" and g.facilities.builds) or {} do
+		if b.kind == kind then
+			return b
+		end
+	end
+	return nil
+end
+
+-- Costo con la gestión del personal de Administración (expansiones más baratas).
+function Rules.expansionCost(g: any, cost: number): number
+	return Util.round(cost * (1 - Rules.staff(g, "gestion")) / 100) * 100
+end
+
+-- Próxima mejora de una instalación: { kind, level, name, cost, days, def } o nil si no hay más.
+function Rules.nextFacility(g: any, kind: string): any
+	if kind == "line2" then
+		if Rules.ownsLine(g, 2) then
+			return nil
+		end
+		local L = Catalog.FACILITIES.line2
+		return { kind = kind, level = 2, name = L.name, cost = Rules.expansionCost(g, L.cost), days = L.days }
+	end
+	local n = Rules.facilityLevel(g, kind) + 1
+	local def = Rules.facilityDef(kind, n)
+	if not def then
+		return nil
+	end
+	return { kind = kind, level = n, name = kind == "offices" and (def.office .. " · " .. def.name) or def.name, cost = Rules.expansionCost(g, def.cost), days = def.days, def = def }
+end
+
+-- Requisitos de la próxima mejora: { { cumplido, texto } }.
+function Rules.facilityChecks(g: any, kind: string): { any }
+	local nx = Rules.nextFacility(g, kind)
+	if not nx then
+		return {}
+	end
+	local out = {}
+	if kind == "offices" then
+		table.insert(out, { g.counters.unitsSold >= nx.def.req.sold, "Autos vendidos: " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.def.req.sold) })
+		table.insert(out, { g.reputation >= nx.def.req.rep, "Reputación: " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.def.req.rep, 1) })
+	elseif kind ~= "line2" then
+		table.insert(out, { nx.level <= Rules.officeLevel(g), "Oficinas centrales de nivel " .. nx.level })
+	end
+	table.insert(out, { Rules.build(g, kind) == nil, "Sin otra obra en curso en esta instalación" })
+	table.insert(out, { g.money >= nx.cost, "Dinero: " .. Util.money(g.money) .. " / " .. Util.money(nx.cost) })
+	return out
+end
+
+-- Días de obra que avanza cada día de juego (organización del personal de Administración).
+function Rules.buildSpeed(g: any): number
+	return 1 + Rules.staff(g, "organizacion")
+end
+
+-- Lo invertido en instalaciones (base del mantenimiento mensual).
+function Rules.facilitiesValue(g: any): number
+	local v = 0
+	for _, kind in Catalog.FACILITIES.order do
+		for n = 2, Rules.facilityLevel(g, kind) do
+			local def = Rules.facilityDef(kind, n)
+			v += def and def.cost or 0
+		end
+	end
+	if Rules.ownsLine(g, 2) then
+		v += Catalog.FACILITIES.line2.cost
+	end
+	return v
+end
+
+-- Mantenimiento mensual: un porcentaje de lo invertido en obras (g.facilities.invested); la eficiencia
+-- financiera del personal de Administración lo reduce.
+function Rules.maintenance(g: any): number
+	local f = g.facilities
+	local invested = (type(f) == "table" and tonumber(f.invested)) or 0
+	return Util.round(invested * Catalog.FACILITIES.maintenanceRate * (1 - Rules.staff(g, "finanzas")))
 end
 
 -- Costo por unidad de un lote nuevo: el del diseño menos la eficiencia de Producción.
@@ -157,7 +273,7 @@ end
 
 -- Nivel máximo de las estaciones: 2 por nivel de sede (hasta 10 con el Imperio automotriz).
 function Rules.maxStationLevel(g: any): number
-	return math.min(10, (g.sede or 1) * 2)
+	return math.min(10, Rules.facilityLevel(g, "factory") * 2)
 end
 
 function Rules.upgradeCost(s: any): number
@@ -197,7 +313,7 @@ function Rules.nextExpansion(g: any): any
 	if Rules.nextSede(g) ~= nil or n > #E.regions then
 		return nil
 	end
-	return { level = n, name = E.regions[n], cost = Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000, sold = E.soldBase + E.soldStep * (n - 1) }
+	return { level = n, name = E.regions[n], cost = Rules.expansionCost(g, Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000), sold = E.soldBase + E.soldStep * (n - 1) }
 end
 
 function Rules.expansionChecks(g: any): { any }
@@ -213,18 +329,19 @@ end
 
 -- Autos por minuto real que fabrica cada línea a 1×.
 function Rules.lineRate(g: any): number
-	return Rules.sede(g).perLine * Rules.factoryMult(g) * (1 + Catalog.EXPANSION.line * Rules.expansion(g))
+	return Rules.factory(g).perLine * Rules.factoryMult(g) * (1 + Catalog.EXPANSION.line * Rules.expansion(g))
 end
 
 function Rules.caps(g: any): any
 	local s = Rules.sede(g)
+	local lines = Rules.lineCount(g)
 	return {
-		lines = s.lines,
+		lines = lines,
 		perLine = Rules.lineRate(g),
-		capacity = Rules.lineRate(g) * s.lines,
+		capacity = Rules.lineRate(g) * lines,
 		reach = Rules.reach(g),
 		staff = s.staff,
-		pi = s.pi,
+		pi = Rules.researchCenter(g).pi,
 	}
 end
 
@@ -233,7 +350,7 @@ end
 	- Líneas de fabricación: cada línea que está fabricando suma RESEARCH_RULES.linePi, sin importar el auto.
 	El personal no suma PI por minuto (ver Rules.researchModifiers). ]]
 function Rules.piCenter(g: any): number
-	return Rules.sede(g).pi
+	return Rules.researchCenter(g).pi
 end
 
 function Rules.activeLines(g: any): number
@@ -283,7 +400,7 @@ end
 -- Lotes que ocupan una línea en este momento: los primeros N con producción pendiente y sin pausa manual.
 function Rules.producingLots(g: any): { any }
 	local out = {}
-	local lines = Rules.sede(g).lines
+	local lines = Rules.lineCount(g)
 	for _, lot in g.lots do
 		if Rules.lotProducing(lot) and lot.prodState ~= "pausado" and #out < lines then
 			table.insert(out, lot)
@@ -818,10 +935,10 @@ function Rules.finance(g: any, months: number): any
 		return n
 	end
 	f.manufacturing = spent({ "fabricacion" })
-	f.opex = { salarios = spent({ "salarios" }), promocion = spent({ "promocion" }) }
-	f.invest = { desarrollo = spent({ "desarrollo" }), investigacion = spent({ "investigacion" }), mejoras = spent({ "mejora", "sede" }), contratacion = spent({ "contratacion" }) }
+	f.opex = { salarios = spent({ "salarios" }), promocion = spent({ "promocion" }), mantenimiento = spent({ "mantenimiento" }) }
+	f.invest = { desarrollo = spent({ "desarrollo" }), investigacion = spent({ "investigacion" }), mejoras = spent({ "mejora", "sede" }), contratacion = spent({ "contratacion", "indemnizacion" }), capacitacion = spent({ "capacitacion" }) }
 	f.net = f.cash
-	f.opProfit = f.revenue - f.manufacturing - f.opex.salarios - f.opex.promocion
+	f.opProfit = f.revenue - f.manufacturing - f.opex.salarios - f.opex.promocion - f.opex.mantenimiento
 	f.demo = g.demo ~= nil and g.demo ~= "tutorial"
 	return f
 end
@@ -935,15 +1052,7 @@ function Rules.nextSede(g: any): any
 end
 
 function Rules.expandChecks(g: any): { any }
-	local next = Rules.nextSede(g)
-	if not next then
-		return {}
-	end
-	return {
-		{ g.counters.unitsSold >= next.req.sold, "Autos vendidos: " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(next.req.sold) },
-		{ g.reputation >= next.req.rep, "Reputación: " .. Util.num(g.reputation, 1) .. "/" .. Util.num(next.req.rep, 1) },
-		{ g.money >= next.cost, "Dinero: " .. Util.money(g.money) .. " / " .. Util.money(next.cost) },
-	}
+	return Rules.facilityChecks(g, "offices")
 end
 
 return Rules

@@ -871,14 +871,14 @@ local function leftCards(g: any): { Instance }
 		local pct = Util.round((s1 + s2 + s3) / 3 * 100)
 		sedeBody = Ui.col({
 			Ui.row({ Ui.grow((Ui.bar(pct, T.ye))), Ui.inline(pct .. "%", { size = Ui.S.sm, weight = W.bold }) }, 10),
-			Ui.text("Próxima: <b><font color=\"#F5F7FA\">" .. nx.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.req.sold) .. " autos vendidos · reputación " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.req.rep, 1) .. " · costo " .. Util.money(nx.cost) .. " · " .. nx.pi .. " PI/min", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+			Ui.text("Próxima: <b><font color=\"#F5F7FA\">" .. nx.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(nx.req.sold) .. " autos vendidos · reputación " .. Util.num(g.reputation, 1) .. "/" .. Util.num(nx.req.rep, 1) .. " · costo " .. Util.money(nx.cost) .. " · " .. nx.staff .. " empleados · alcance ×" .. Util.num(nx.reach, 1), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 		}, 9)
 	else
 		local ex = Rules.nextExpansion(g)
-		sedeBody = Ui.text(ex and ("Sede máxima. Próxima región: <b><font color=\"#F5F7FA\">" .. ex.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos · costo " .. Util.money(ex.cost)) or ("Sede máxima · " .. Rules.expansion(g) .. " regiones abiertas."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
+		sedeBody = Ui.text(ex and ("Oficinas al máximo. Próximo país: <b><font color=\"#F5F7FA\">" .. ex.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos · costo " .. Util.money(ex.cost)) or ("Oficinas al máximo · " .. Rules.expansion(g) .. " países abiertos."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
 	end
 	table.insert(out, hcCard("Sede", {
-		cardHead("sede", "building", T.ye, T.ye, 0.15, "Sede · nivel " .. g.sede, g.derived.sedeName),
+		cardHead("sede", "building", T.ye, T.ye, 0.15, "Oficinas centrales · nivel " .. g.sede, g.derived.sedeName),
 		(not coll.sede) and hb({ sedeBody }) or nil,
 	}))
 	return out

@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 12
+GameState.SCHEMA = 13
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -50,7 +50,10 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		nextId = 1,
 		-- id: identificador estable de la empresa (no cambia al renombrarla ni al moverla de ranura).
 		company = { id = opts.id or ("c" .. tostring(opts.now)), name = opts.name, color = opts.color, logo = opts.logo or "pico" },
-		sede = 1,
+		sede = 1, -- nivel de las oficinas centrales (Catalog.SEDES)
+		-- Instalaciones: fábrica y centro de investigación (1–5), líneas compradas y obras en curso
+		-- builds = { { id, kind = "offices" | "factory" | "research" | "line2", level, progress, days, cost } }
+		facilities = { factory = 1, research = 1, lines = {}, builds = {}, invested = 0 },
 		expansion = 0, -- regiones abiertas de la expansión global (después del Imperio automotriz)
 		money = Catalog.START.money, -- todas las empresas empiezan igual
 		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
@@ -489,6 +492,23 @@ function GameState.validate(g: any): (boolean, string?)
 		if type(l) ~= "table" or not nonNeg(l.balance) or not nonNeg(l.principal) or not nonNeg(l.monthlyRate) then
 			return fail("Hay un préstamo dañado.")
 		end
+	end
+	local f = g.facilities
+	if type(f) ~= "table" or not isInt(f.factory, 1, 5) or not isInt(f.research, 1, 5) or type(f.lines) ~= "table" or not isList(f.builds) or not nonNeg(f.invested) then
+		return fail("Las instalaciones están dañadas.")
+	end
+	for k, v in f.lines do
+		if (k ~= "2" and k ~= "3") or type(v) ~= "boolean" then
+			return fail("Las líneas de producción están dañadas.")
+		end
+	end
+	local building = {}
+	for _, b in f.builds do
+		if type(b) ~= "table" or building[b.kind] or (b.kind ~= "offices" and b.kind ~= "factory" and b.kind ~= "research" and b.kind ~= "line2") or not isInt(b.level, 2, 5)
+			or not isFinite(b.days) or b.days < 0 or not isFinite(b.progress) or b.progress < 0 or b.progress > b.days then
+			return fail("Hay una obra dañada.")
+		end
+		building[b.kind] = true
 	end
 	if not isInt(g.expansion, 0, #Catalog.EXPANSION.regions) or (g.expansion > 0 and g.sede < #Catalog.SEDES) then
 		return fail("La expansión global está dañada.")
@@ -965,6 +985,24 @@ MIGRATIONS[11] = function(g: any, _now: number)
 	g.schema = 12
 end
 
+-- 12 → 13: instalaciones separadas. La sede vieja daba todo junto; ahora las oficinas conservan su nivel
+-- (g.sede) y la fábrica y el centro de investigación quedan en el mismo nivel, así nada se pierde. Líneas:
+-- quien ya tenía 2 líneas conserva la 2 y quien tenía 3 o más conserva también la 3 (que ahora se compra con
+-- Robux): no se quita nada que ya tenía. La capacidad por línea de las fábricas grandes compensa las líneas 4 y 5.
+MIGRATIONS[12] = function(g: any, _now: number)
+	local s = math.clamp(math.floor(tonumber(g.sede) or 1), 1, 5)
+	local lines = {}
+	if s >= 2 then
+		lines["2"] = true
+	end
+	if s >= 3 then
+		lines["3"] = true
+	end
+	g.facilities = { factory = s, research = s, lines = lines, builds = {}, invested = 0 }
+	g.facilities.invested = Rules.facilitiesValue(g) -- lo que ya había invertido en la sede
+	g.schema = 13
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1307,6 +1345,7 @@ function GameState.live(g: any): any
 		payroll = table.clone(g.payroll),
 		trainings = Util.deepCopy(g.trainings),
 		campaign = g.campaign and table.clone(g.campaign) or false,
+		builds = Util.deepCopy(g.facilities.builds),
 		time = table.clone(g.time),
 		counters = table.clone(g.counters),
 		month = table.clone(g.stats.month),
@@ -1320,7 +1359,7 @@ end
 
 -- Firma de la estructura: si cambia, el cliente recibe la partida completa.
 function GameState.structKey(g: any): string
-	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
+	local parts = { tostring(g.time.day), tostring(g.sede), tostring(g.facilities.factory), tostring(g.facilities.research), tostring(#g.facilities.builds), tostring(Rules.lineCount(g)), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
 		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), g.campaign and g.campaign.id or "-", tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
