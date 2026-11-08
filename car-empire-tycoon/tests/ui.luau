@@ -428,6 +428,16 @@ end)
 test("Configuración: se guarda en el servidor y se aplica", function()
 	App.openDialog("settings", {})
 	M.task.wait()
+	for _, t in { "audio", "graficos", "accesibilidad", "datos" } do
+		clickN("Ajustes_" .. t)
+		M.task.wait()
+		check(named("PestanasAjustes") ~= nil and #M.log == 0, "pestaña " .. t)
+	end
+	check(named("BorrarTodo") ~= nil, "datos: borrar todo")
+	clickN("Ajustes_graficos")
+	check(named("SensibilidadCamara") ~= nil, "gráficos: sensibilidad de la cámara")
+	clickN("Ajustes_accesibilidad")
+	M.task.wait()
 	click("Grande")
 	check(waitFor(function()
 		return App.settings.textScale == 1.12
@@ -972,7 +982,13 @@ test("Etapa 1 en la interfaz: pausa con diálogos, guardar ahora, guardar y volv
 	end), "vuelve al menú sin salir del servidor")
 	check(named("Bloqueada_3") ~= nil and named("Bloqueada_4") ~= nil, "las ranuras 3 y 4 se ven bloqueadas")
 	check(named("Crear_3") == nil and named("Crear_4") == nil, "y no se pueden usar")
-	check(find("Robux") == nil and find("Comprar") == nil, "sin compras ni precios")
+	-- La ranura 3 se desbloquea con Robux; sin producto configurado, el botón queda deshabilitado.
+	App.ui.menuSel = "3"
+	App.forceRender()
+	M.task.wait()
+	local buy = named("Comprar_3")
+	check(buy ~= nil and buy:GetAttribute("disabled") == true, "compra de la ranura 3 deshabilitada mientras no esté configurada")
+	App.ui.menuSel = nil
 	App.request("selectSlot", { slot = "1" })
 	check(waitFor(function()
 		return App.g ~= nil
@@ -1240,6 +1256,35 @@ test("Instalaciones en la interfaz: obra de la línea 2 con confirmación, avanc
 	eq(App.g.derived.caps.lines, 2, "dos líneas")
 	App.request("setSpeed", { speed = 1 })
 	noErrors("Instalaciones")
+end)
+
+test("Escenario sin personaje: la cámara orbita sobre el garaje con zoom y rotación", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.closeAllDialogs()
+	App.go("juego")
+	M.task.wait()
+	local center = player:GetAttribute("PlotCenter")
+	check(M.typeof(center) == "Vector3", "el servidor publica el centro del garaje")
+	check(M.services.Players.CharacterAutoLoads == false, "no se crea un personaje para caminar")
+	local SceneCamera = require("./.build-ui/client/SceneCamera")
+	local cam = M.services.Workspace.CurrentCamera
+	M.services.RunService.RenderStepped:Fire(1 / 60)
+	local d0 = (cam.CFrame.Position - center).Magnitude
+	check(d0 > 10, "cámara del escenario a distancia del garaje (" .. math.floor(d0) .. ")")
+	SceneCamera.zoom(0.5)
+	M.services.RunService.RenderStepped:Fire(1 / 60)
+	check((cam.CFrame.Position - center).Magnitude < d0, "zoom: se acerca")
+	local p0 = cam.CFrame.Position
+	SceneCamera.rotate(120, 0)
+	M.services.RunService.RenderStepped:Fire(1 / 60)
+	check((cam.CFrame.Position - p0).Magnitude > 1, "rotación: gira alrededor del garaje")
+	SceneCamera.zoom(2)
+	noErrors("Cámara del escenario")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

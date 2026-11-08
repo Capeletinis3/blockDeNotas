@@ -120,6 +120,16 @@ function Actions.upgradeFacility(g: any, ctx: any, payload: any): any
 	return { ok = true, msg = "Obra iniciada: " .. nx.name .. " (" .. money(nx.cost) .. ", " .. nx.days .. " días)." }
 end
 
+-- Auto que la empresa exhibe en el showroom del menú principal (configurable por empresa).
+function Actions.setShowcase(g: any, _ctx: any, payload: any): any
+	local d = findById(g.designs, arg(payload, "designId"))
+	if not d then
+		return fail("Ese diseño ya no existe.")
+	end
+	g.showcase = d.id
+	return { ok = true, msg = "«" .. d.name .. "» se exhibe en el menú principal." }
+end
+
 -- Compatibilidad: «ampliar la sede» = mejorar las oficinas centrales.
 function Actions.expandSede(g: any, ctx: any, _payload: any): any
 	return Actions.upgradeFacility(g, ctx, { kind = "offices" })
@@ -842,7 +852,7 @@ function Actions.setSpeed(g: any, _ctx: any, payload: any): any
 end
 
 Actions.handlers = {
-	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, upgradeFacility = Actions.upgradeFacility, expandGlobal = Actions.expandGlobal,
+	setIdentity = Actions.setIdentity, setShowcase = Actions.setShowcase, expandSede = Actions.expandSede, upgradeFacility = Actions.upgradeFacility, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, startCampaign = Actions.startCampaign, cancelCampaign = Actions.cancelCampaign,

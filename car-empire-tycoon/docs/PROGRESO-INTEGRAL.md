@@ -53,5 +53,10 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
 - [x] 7. Investigación: exactamente 4 categorías. Producción (velocidad, calidad, costo, acabados premium) pasó a los niveles de la fábrica; marketing a campañas y oficinas. Esquema 14: esos ids salen de lo investigado y un proyecto en curso se reintegra (dinero y PI).
 - [x] 8. Ciclo automotriz: diseño con especificaciones fijas, un lote por modelo, reseñas guardadas, ventas con campaña, stock y deuda salarial (prueba [I8]).
   - Ajuste: el mantenimiento tiene tope en el 10 % de las ventas del mes anterior (la estrategia simple del bot se trababa sin dinero).
-- [ ] 9. Interfaz
+- [x] 9. Interfaz
+  - Menú principal: showroom 3D de fondo (`Showroom.luau`) con el auto exhibido y el color de la empresa elegida; 4 tarjetas a la izquierda (2 gratis, 2 con Robux), la elegida expandida. El auto exhibido se elige en Compañía › Marca.
+  - Barra superior: ya tenía dos filas (datos y botones); Producción pasó a Ventas › Producción.
+  - Personal (4 tarjetas, lista y detalle, mercado, capacitaciones), Marketing (diálogo de campaña) e Instalaciones (Compañía).
+  - Sin personaje caminando: `SceneCamera.luau` orbita sobre el garaje (arrastrar = rotar, rueda/pellizco = zoom).
+  - Ajustes con pestañas Audio, Gráficos, Accesibilidad y Datos.
 - [ ] 10. Pruebas generales

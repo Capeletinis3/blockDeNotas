@@ -90,8 +90,22 @@ function Screen.build(main: Frame, side: Frame)
 				Ui.text("El nombre aparece en el HUD, el cartel del taller, el menú y los números de serie nuevos.", { size = Ui.S.xs, color = T.mut }),
 			}, 6)),
 		}, 16, { wrap = phone }),
-		Ui.col({ Ui.fl("Logotipo"), Ui.row(logos, 10, { wrap = true }) }, 6),
-		Ui.col({ Ui.fl("Color de marca"), Ui.row(colors, 10, { wrap = true }) }, 6),
+		Ui.col({ Ui.fl("Símbolo corporativo"), Ui.row(logos, 10, { wrap = true }) }, 6),
+		Ui.col({ Ui.fl("Color corporativo"), Ui.row(colors, 10, { wrap = true }) }, 6),
+		(function(): Instance?
+			local opts = {}
+			for _, d in g.designs do
+				if not d.template then
+					table.insert(opts, { d.id, d.name })
+				end
+			end
+			if #opts == 0 then
+				return Ui.text("Auto exhibido en el menú: el sedán de 1970 hasta que guardes un diseño.", { size = Ui.S.xs, color = T.mut })
+			end
+			return Ui.selectF("Auto exhibido en el menú principal", g.showcase or opts[#opts][1], opts, function(v: any)
+				App.request("setShowcase", { designId = v })
+			end, { height = 34, name = "AutoExhibido" })
+		end)(),
 	}, { gap = 14, pad = 18, name = "Marca" })
 	marca.Parent = main
 	marca.LayoutOrder = 1e7 -- la identidad de la marca va al final; primero las instalaciones

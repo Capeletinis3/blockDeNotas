@@ -183,6 +183,9 @@ function Garage:assign(player: Player, g: any): number?
 	plot.owner = player
 	self.byPlayer[player] = index
 	self:buildPlot(index, company)
+	pcall(function()
+		player:SetAttribute("PlotCenter", plot.cf.Position) -- centro de la cámara del escenario (SceneCamera)
+	end)
 	return index
 end
 
@@ -193,6 +196,9 @@ function Garage:release(player: Player)
 	end
 	self.byPlayer[player] = nil
 	self.plots[i].owner = nil
+	pcall(function()
+		player:SetAttribute("PlotCenter", nil)
+	end)
 	self:buildEmptyPlot(i)
 end
 

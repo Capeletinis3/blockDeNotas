@@ -14,6 +14,7 @@ local Rules = require(Shared.Rules)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
+local Sheet = require(script.Parent.ScreenSheet)
 local T = Ui.T
 local W = Ui.W
 
@@ -118,6 +119,7 @@ end
 
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
+	Sheet.salesNav("fabrica").Parent = main
 	local caps = g.derived.caps
 	local canLot = false
 	for _, d in g.designs do

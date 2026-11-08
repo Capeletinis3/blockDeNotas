@@ -230,6 +230,11 @@ MarketplaceService.ProcessReceipt = function(info: any): Enum.ProductPurchaseDec
 	return Enum.ProductPurchaseDecision.NotProcessedYet
 end
 
+-- Sin personaje: la gestión se hace desde los menús y la cámara del escenario orbita sobre el garaje.
+pcall(function()
+	Players.CharacterAutoLoads = false
+end)
+
 local function onPlayerAdded(player: Player)
 	sessions:add(player)
 	player.CharacterAdded:Connect(function()

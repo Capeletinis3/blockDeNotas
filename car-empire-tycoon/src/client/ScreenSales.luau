@@ -211,6 +211,7 @@ end
 
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
+	Sheet.salesNav("ventas").Parent = main
 	local selling, done = {}, {}
 	for _, l in g.lots do
 		if l.saleState == "en venta" then

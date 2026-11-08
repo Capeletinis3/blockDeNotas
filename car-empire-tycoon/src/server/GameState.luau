@@ -478,6 +478,9 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("El historial de «" .. e.name .. "» no es coherente.")
 		end
 	end
+	if g.showcase ~= nil and type(g.showcase) ~= "string" then
+		return fail("El auto exhibido está dañado.")
+	end
 	if g.campaign ~= nil then
 		local c = g.campaign
 		if type(c) ~= "table" or not Catalog.MARKETING.kinds[c.kind] or not isFinite(c.boost) or c.boost < 0 or c.boost > 1
@@ -1395,9 +1398,25 @@ function GameState.structKey(g: any): string
 	return table.concat(parts, "|")
 end
 
+-- Auto exhibido en el showroom del menú: el elegido (g.showcase) o el último diseño (o nada: sedán de 1970).
+local function showcase(g: any): any
+	local pick
+	for _, d in g.designs do
+		if not d.template then
+			if d.id == g.showcase then
+				pick = d
+				break
+			end
+			pick = d -- si no eligió ninguno: el último diseño
+		end
+	end
+	return pick and Util.deepCopy(pick) or nil
+end
+
 -- Resumen de una ranura para el menú de inicio.
 function GameState.summary(g: any): any
 	return {
+		showcase = showcase(g),
 		name = g.company.name,
 		color = g.company.color,
 		logo = g.company.logo,

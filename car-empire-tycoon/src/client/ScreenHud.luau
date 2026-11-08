@@ -30,7 +30,6 @@ end
 Screen.NAV = {
 	{ "editor", "Diseño", "pen", hex("#B3AAFF"), T.vi, 0.2 },
 	{ "autos", "Catálogo", "car", hex("#8DB8FF"), T.bl, 0.18 },
-	{ "fabrica", "Producción", "factory", hex("#FFB36B"), hex("#FFA050"), 0.16 },
 	{ "ventas", "Ventas", "tag", T.gr, T.gr, 0.15 },
 	{ "mercado", "Mercado", "globe", T.ye, T.ye, 0.15 },
 	{ "investigacion", "Investigación", "flask", T.cyan, hex("#50D2E6"), 0.15 },
@@ -92,6 +91,10 @@ function Screen.counts(g: any): { [string]: any }
 	end
 	if selling > 0 then
 		out.ventas = { selling .. " en venta", T.gr, 0.82, T.gr }
+	end
+	-- Producción está dentro de Ventas: su aviso más urgente se muestra en el botón de Ventas.
+	if noFunds > 0 or (producing > 0 and selling == 0) then
+		out.ventas = out.fabrica
 	end
 	if researchFree(g) then
 		out.investigacion = { "libre", T.vi, 0.78, T.vi3 }
@@ -483,7 +486,7 @@ local function hud2(g: any): Frame
 	local route = App.ui.route
 	local items: { Instance? } = {}
 	local function navItem(id: string, label: string, icon: string, col: Color3, bg: Color3, a: number, key: string)
-		local on = route == id
+		local on = route == id or (id == "ventas" and route == "fabrica") -- Ventas › Producción
 		local b = Ui.new("TextButton", {
 			Name = "Nav_" .. id,
 			Text = "",
@@ -511,7 +514,7 @@ local function hud2(g: any): Frame
 		end
 		-- Tutorial: el botón de la sección del paso actual se resalta con un borde violeta que late.
 		local tut = Rules.currentTutorial(g)
-		if tut and not g.tutorial.skipped and tut.go == id and not on then
+		if tut and not g.tutorial.skipped and (tut.go == id or (id == "ventas" and tut.go == "fabrica")) and not on then
 			Screen.pulse(b)
 		end
 		if not on then

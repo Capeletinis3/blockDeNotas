@@ -190,48 +190,64 @@ Dialogs.settings = function(box: Frame)
 		end
 		l.Parent = b
 	end
-	section("Accesibilidad")
-	local sizes = {}
-	for _, v in { { 1, "Normal" }, { 1.12, "Grande" }, { 1.25, "Muy grande" } } do
-		table.insert(sizes, Ui.opt(v[2], s.textScale == v[1], function()
-			setting("textScale", v[1])
-		end))
+	-- Pestañas: Audio, Gráficos, Accesibilidad y Datos.
+	local tab = App.ui.settingsTab or "audio"
+	local tabs = {}
+	for _, t in { { "audio", "Audio" }, { "graficos", "Gráficos" }, { "accesibilidad", "Accesibilidad" }, { "datos", "Datos" } } do
+		table.insert(tabs, Ui.opt(t[2], tab == t[1], function()
+			App.ui.settingsTab = t[1]
+			App.renderDialog()
+		end, { name = "Ajustes_" .. t[1], height = 34 }))
 	end
-	row("Tamaño del texto", "Aumenta todos los textos de la interfaz.", Ui.row(sizes, 10, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }))
-	row("Reducir movimiento", "Quita animaciones y transiciones de cámara.", Ui.toggle(s.reduceMotion == true, function()
-		setting("reduceMotion", not s.reduceMotion)
-	end))
-	row("Mostrar atajos de teclado", "Indicadores como «1», «E» o «Esc» junto a los botones.", Ui.toggle(s.keyHints ~= false, function()
-		setting("keyHints", s.keyHints == false)
-	end))
-	section("Juego", true)
-	row("Efectos de sonido", "Sonidos cortos al confirmar acciones.", Ui.toggle(s.sound ~= false, function()
-		setting("sound", s.sound == false)
-	end))
-	row("Sombras 3D", "Desactivalas si el equipo funciona lento.", Ui.toggle(s.shadows ~= false, function()
-		setting("shadows", s.shadows == false)
-	end))
-	row("Sensibilidad de la cámara", "Velocidad de rotación al arrastrar en el editor.", Ui.slider(s.camSpeed or 1, 0.4, 2, 0.1, function(v: number, final: boolean)
-		if final then
-			setting("camSpeed", math.floor(v * 10 + 0.5) / 10)
+	Ui.row(tabs, 8, { Name = "PestanasAjustes", wrap = true }).Parent = b
+	if tab == "audio" then
+		section("Audio", true)
+		row("Efectos de sonido", "Sonidos cortos al confirmar acciones.", Ui.toggle(s.sound ~= false, function()
+			setting("sound", s.sound == false)
+		end))
+	elseif tab == "graficos" then
+		section("Gráficos", true)
+		row("Sombras 3D", "Desactivalas si el equipo funciona lento.", Ui.toggle(s.shadows ~= false, function()
+			setting("shadows", s.shadows == false)
+		end))
+		row("Sensibilidad de la cámara", "Velocidad de rotación al arrastrar en el editor y en el escenario.", Ui.slider(s.camSpeed or 1, 0.4, 2, 0.1, function(v: number, final: boolean)
+			if final then
+				setting("camSpeed", math.floor(v * 10 + 0.5) / 10)
+			end
+		end, { width = 180, name = "SensibilidadCamara" }))
+	elseif tab == "accesibilidad" then
+		section("Accesibilidad", true)
+		local sizes = {}
+		for _, v in { { 1, "Normal" }, { 1.12, "Grande" }, { 1.25, "Muy grande" } } do
+			table.insert(sizes, Ui.opt(v[2], s.textScale == v[1], function()
+				setting("textScale", v[1])
+			end))
 		end
-	end, { width = 180, name = "SensibilidadCamara" }))
-	row("Idioma", "Por ahora el juego está solo en español.", Ui.chip("Español", "cn"))
-	row("Atajos", "0 Sede · 1–8 secciones · WASD o flechas para caminar · E interactuar · Tab ocultar paneles · Esc cerrar. En el editor: [ y ] pasos, Ctrl+Z/Ctrl+Y.", nil)
-	section("Datos", true)
-	local mode = App.payload and App.payload.saveMode
-	row("Guardado en Roblox", mode == "memory" and "Studio sin acceso a la API: se guarda solo durante esta prueba." or "Tus empresas se guardan automáticamente en tu cuenta.", mode == "memory" and Ui.chip("Temporal", "cy") or Ui.chip("Activo", "cg"))
-	row("Borrar todos los datos", "Elimina las tres ranuras de tu cuenta. No se puede deshacer.", Ui.button("Borrar todo", "d", function()
-		App.openDialog("confirm", {
-			title = "¿Borrar todos los datos?",
-			body = "Se eliminan las tres ranuras de tu cuenta. No se puede deshacer.",
-			okLabel = "Borrar todo",
-			danger = true,
-			onOk = function()
-				App.request("wipeAll", { confirm = "BORRAR" })
-			end,
-		})
-	end, { small = true, name = "BorrarTodo" }))
+		row("Tamaño del texto", "Aumenta todos los textos de la interfaz.", Ui.row(sizes, 10, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }))
+		row("Reducir movimiento", "Quita animaciones, el giro del showroom y transiciones de cámara.", Ui.toggle(s.reduceMotion == true, function()
+			setting("reduceMotion", not s.reduceMotion)
+		end))
+		row("Mostrar atajos de teclado", "Indicadores como «1», «E» o «Esc» junto a los botones.", Ui.toggle(s.keyHints ~= false, function()
+			setting("keyHints", s.keyHints == false)
+		end))
+		row("Idioma", "Por ahora el juego está solo en español.", Ui.chip("Español", "cn"))
+		row("Atajos", "0 Sede · 1–7 secciones · arrastrar para girar la cámara y rueda para acercar · Tab ocultar paneles · Esc cerrar. En el editor: [ y ] pasos, Ctrl+Z/Ctrl+Y.", nil)
+	else
+		section("Datos", true)
+		local mode = App.payload and App.payload.saveMode
+		row("Guardado en Roblox", mode == "memory" and "Studio sin acceso a la API: se guarda solo durante esta prueba." or "Tus empresas se guardan automáticamente en tu cuenta.", mode == "memory" and Ui.chip("Temporal", "cy") or Ui.chip("Activo", "cg"))
+		row("Borrar todos los datos", "Elimina todas las empresas de tu cuenta. No se puede deshacer.", Ui.button("Borrar todo", "d", function()
+			App.openDialog("confirm", {
+				title = "¿Borrar todos los datos?",
+				body = "Se eliminan todas las empresas de tu cuenta (las ranuras desbloqueadas se conservan). No se puede deshacer.",
+				okLabel = "Borrar todo",
+				danger = true,
+				onOk = function()
+					App.request("wipeAll", { confirm = "BORRAR" })
+				end,
+			})
+		end, { small = true, name = "BorrarTodo" }))
+	end
 end
 
 -- Notificaciones (notifsDialog)

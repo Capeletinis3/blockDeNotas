@@ -20,7 +20,9 @@ require(Shared.CarModel).vehicleResolver = function(asset: string): Model?
 end
 
 local App = require(script.Parent.App)
-require(script.Parent.WorldPrompts).start()
+-- Sin personaje caminando: la gestión es desde los menús y la cámara orbita sobre el garaje (zoom y rotación).
+-- WorldPrompts (indicaciones para caminar hasta los objetos) queda sin iniciar.
+require(script.Parent.SceneCamera).start()
 App.screens.status = require(script.Parent.ScreenStatus)
 App.screens.menu = require(script.Parent.ScreenMenu)
 App.screens.company = require(script.Parent.ScreenCompany)

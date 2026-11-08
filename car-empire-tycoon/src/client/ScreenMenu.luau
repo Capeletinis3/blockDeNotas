@@ -1,8 +1,9 @@
 --!strict
 --[[
-	Menú de empresas (renderMenu de la V3): marca, titular, novedades con el próximo evento,
-	demostraciones, ranuras (ocupadas, libres y bloqueadas) y configuración.
-	Adaptaciones: no hay exportar/importar (el guardado es de la cuenta de Roblox).
+	Menú principal: showroom 3D de fondo (Showroom.luau) con el auto exhibido y el color de la empresa elegida,
+	y a la izquierda las cuatro tarjetas de empresas (dos gratuitas y dos que se desbloquean con Robux). La
+	tarjeta elegida se expande con sus datos y acciones; las demás quedan compactas. Abajo: configuración,
+	novedades y demostraciones. No hay exportar/importar (el guardado es de la cuenta de Roblox).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,6 +13,7 @@ local Util = require(Shared.Util)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
+local Showroom = require(script.Parent.Showroom)
 local T = Ui.T
 local W = Ui.W
 
@@ -181,7 +183,7 @@ local function emptySlot(key: string): Frame
 		plus,
 		Ui.grow(Ui.col({
 			Ui.text("Nueva empresa", { size = 17, weight = W.bold, align = "C", color = T.mut }),
-			Ui.text("Ranura " .. key .. " libre. Empezás con un garaje, dinero inicial según la dificultad y una idea.", { size = Ui.S.sm, color = T.mut, align = "C" }),
+			Ui.text("Ranura " .. key .. " libre. Todas las empresas empiezan igual: un garaje, " .. Util.money(Catalog.START.money) .. " y una idea, el 1 de enero de 1970.", { size = Ui.S.sm, color = T.mut, align = "C" }),
 		}, 4)),
 		Ui.button("Crear", "p", function()
 			Screen.newCompany(key)
@@ -206,36 +208,77 @@ local function lockedSlot(n: number): Frame
 	}, { dir = "H", v = "C", gap = 10, bg = Ui.hex("#0E1016"), transparency = 0.08, radius = 16, stroke = { T.ye, 1, 0.65 }, pad = { 14, 16 }, name = "Bloqueada_" .. n })
 end
 
+-- Ranura elegida en el menú (la expandida): la que eligió el jugador, la última jugada o la primera ocupada.
+local function selectedSlot(): string
+	local slots = App.profile and App.profile.slots or {}
+	local sel = App.ui.menuSel
+	if sel and (slots[sel] or tonumber(sel) <= Catalog.RULES.slots) then
+		return sel
+	end
+	local active = App.profile and App.profile.active
+	if active and slots[active] then
+		return active
+	end
+	return firstSlot() or "1"
+end
+
+local function selectSlot(key: string)
+	App.ui.menuSel = key
+	App.forceRender()
+end
+
+-- Tarjeta compacta (no elegida): logo, nombre y fecha; un clic la expande.
+local function compactCard(key: string, s: any?, locked: boolean): Frame
+	local title, sub
+	if locked then
+		title, sub = "Ranura " .. key .. " · bloqueada", "Se desbloquea con Robux"
+	elseif s and s.damaged then
+		title, sub = "Ranura " .. key .. " · datos dañados", "Elegila para ver opciones"
+	elseif s then
+		title, sub = s.name, Util.gameDate(s.day) .. " · " .. Util.money(s.money)
+	else
+		title, sub = "Ranura " .. key .. " libre", "Nueva empresa"
+	end
+	local b = Ui.new("TextButton", { Name = locked and ("Bloqueada_" .. key) or ("Elegir_" .. key), Text = "", Size = UDim2.new(1, 0, 0, 64), BackgroundColor3 = Ui.hex("#0E1016"), BackgroundTransparency = 0.15, Corner = 14, Stroke = { s and Color3.fromHex(s.color or "#3A3F4D") or Ui.hex("#3A3F4D"), 1, 0.4 }, Pad = { 8, 14 } })
+	Ui.row({
+		(s and not s.damaged) and Ui.logo(s, 44) or Ui.ico(locked and "lock" or "plus", locked and T.ye or T.mut, locked and T.ye or T.mut, 44, { alpha = 0.12, iconSize = 18 }),
+		Ui.grow(Ui.col({ Ui.text(title, { size = Ui.S.base, weight = W.bold }), Ui.text(sub, { size = Ui.S.xs, color = T.mut }) }, 2)),
+		(not s and not locked) and Ui.button("Crear", "p", function()
+			Screen.newCompany(key)
+		end, { small = true, name = "Crear_" .. key }) or Ui.icon("right", 16, T.mut),
+	}, 12, { Size = UDim2.fromScale(1, 1), Parent = b })
+	b.Activated:Connect(function()
+		selectSlot(key)
+	end)
+	return b
+end
+
 function Screen.build(parent: Instance)
 	local phone = App.isPhone()
 	local vw, vh = App.vw, App.vh
 	local slots = App.profile and App.profile.slots or {}
-	local used = 0
-	for _ in slots do
-		used += 1
-	end
+	local usable = App.profile and App.profile.usable or {}
+	local sel = selectedSlot()
+	local selected = slots[sel]
 
-	-- .menu-wrap: degradado horizontal sobre la escena 3D
+	-- Fondo: showroom 3D con el auto y el color de la empresa elegida.
+	Showroom.mount(parent, selected and not selected.damaged and selected.showcase or nil, selected and not selected.damaged and selected.color or nil, App.settings and App.settings.reduceMotion)
 	local wrap = Ui.new("ScrollingFrame", {
 		Name = "MenuWrap",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Ui.hex("#06070B"),
-		BackgroundTransparency = 0,
+		BackgroundTransparency = 1,
 		ScrollBarThickness = 4,
+		ZIndex = 2,
 		Parent = parent,
 	})
-	local grad = Instance.new("UIGradient")
-	grad.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.07),
-		NumberSequenceKeypoint.new(0.4, 0.35),
-		NumberSequenceKeypoint.new(0.55, 0.4),
-		NumberSequenceKeypoint.new(0.75, 0.1),
-		NumberSequenceKeypoint.new(1, 0.1),
-	})
-	grad.Parent = wrap
 	App.keepScroll(wrap, "menu")
+	-- Velo lateral para que las tarjetas se lean sobre la escena.
+	local veil = Ui.new("Frame", { Name = "Velo", Size = UDim2.new(0, phone and vw or math.min(620, vw * 0.48), 1, 0), BackgroundColor3 = Ui.hex("#06070B"), BackgroundTransparency = 0, ZIndex = 1, Parent = parent })
+	local vg = Instance.new("UIGradient")
+	vg.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.15), NumberSequenceKeypoint.new(0.7, 0.45), NumberSequenceKeypoint.new(1, 1) })
+	vg.Parent = veil
 
-	-- Columna izquierda: marca, titular, novedades y demostraciones.
 	local brand = Ui.row({
 		Ui.new("Frame", { Name = "LogoJuego", Size = UDim2.fromOffset(42, 42), BackgroundColor3 = T.p1, BackgroundTransparency = 0, Corner = 9, Stroke = T.vi }, {
 			(function()
@@ -250,110 +293,54 @@ function Screen.build(parent: Instance)
 			Ui.inline("T  Y  C  O  O  N", { size = 11, weight = W.bold, color = T.vi2 }),
 		}, 0, { Size = UDim2.new(0, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.XY }),
 	}, 10)
-	local N = Screen.NEWS
-	local news = Ui.card1({
-		Ui.col({
-			Ui.chip(N.version, "cv"),
-			Ui.text(N.title, { size = 17, weight = W.bold }),
-			Ui.text(N.body, { size = Ui.S.sm, color = T.tx2, lineHeight = 1.45 }),
-			Ui.button("Ver novedades", "default", function()
-				App.openDialog("news", {})
-			end, { small = true, icon = "right", iconAfter = true }),
-		}, 10, { Pad = 18 }),
-		Ui.new("Frame", { Name = "Separador", Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = T.line2, BackgroundTransparency = 0 }),
-		Ui.new("Frame", { Name = "Evento", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.vi, Alpha = 0.07, Pad = 14, List = { dir = "H", gap = 10, v = "C" } }, {
-			Ui.ico("cal", T.ye, T.ye, 32, { alpha = 0.14, iconSize = 17 }),
-			Ui.grow(Ui.col({ Ui.lbl("Próximo evento", nil, 10), Ui.text(N.event, { size = Ui.S.sm, weight = W.bold }) }, 2)),
-			Ui.inline(N.when, { size = Ui.S.sm, color = T.ye, weight = W.bold }),
-		}),
-	}, { bg = Ui.hex("#0E1016"), transparency = 0.1, pad = 0, gap = 0, clip = true, name = "Novedades" })
-	local demos = Ui.col({
-		Ui.lbl("Demostraciones (no modifican tus partidas)"),
-		Ui.row({
-			Ui.button("Tutorial", "default", function()
-				App.request("playDemo", { kind = "tutorial" })
-				App.ui.enteringGame = true
-			end, { small = true, name = "Demo_tutorial" }),
-			Ui.button("Empresa en funcionamiento", "default", function()
-				App.request("playDemo", { kind = "operacion" })
-				App.ui.enteringGame = true
-			end, { small = true, name = "Demo_operacion" }),
-			Ui.button("Fábrica avanzada", "default", function()
-				App.request("playDemo", { kind = "avanzada" })
-				App.ui.enteringGame = true
-			end, { small = true, name = "Demo_avanzada" }),
-			Ui.button("Imperio (después de 2030)", "default", function()
-				App.request("playDemo", { kind = "imperio" })
-				App.ui.enteringGame = true
-			end, { small = true, name = "Demo_imperio" }),
-		}, 10, { wrap = true }),
-	}, 8)
-	local leftW = phone and (vw - 28) or 0
-	local left = Ui.col({
-		brand,
-		Ui.text("Construí tu imperio automotor", { size = phone and 30 or 51, weight = W.heavy, lineHeight = 1.04, name = "Titular" }),
-		Ui.text("Desde tu primer garaje hasta una marca de autos reconocida en todo el mundo.", { size = 18, color = T.tx2, lineHeight = 1.45 }),
-		news,
-		demos,
-	}, 20, { Name = "Presentacion", v = "C" })
 
-	-- Columna derecha: ranuras.
-	local cards: { Instance? } = {
-		Ui.row({
-			Ui.grow(Ui.text("Tus empresas", { size = 20, weight = W.bold })),
-			Ui.inline(used .. " de " .. (function()
-				local n = 0
-				for i = 1, Catalog.RULES.slots do
-					if i <= Catalog.RULES.slotsFree or (App.profile and App.profile.usable and App.profile.usable[tostring(i)]) then
-						n += 1
-					end
-				end
-				return n
-			end)() .. " ranuras en uso", { size = Ui.S.sm, color = T.mut }),
-		}, 10),
-	}
+	local cards: { Instance? } = { brand, Ui.text("Tus empresas", { size = 20, weight = W.bold, name = "Titular" }) }
 	if App.payload and App.payload.saveMode == "memory" then
 		table.insert(cards, Ui.note("y", "Studio sin acceso a la API de DataStore: las empresas se guardan solo mientras dure esta prueba."))
 	end
-	local usable = App.profile and App.profile.usable or {}
-	local locked = {}
 	for i = 1, Catalog.RULES.slots do
 		local key = tostring(i)
-		if slots[key] then
+		local open = slots[key] ~= nil or usable[key] or i <= Catalog.RULES.slotsFree
+		if key ~= sel then
+			table.insert(cards, compactCard(key, slots[key], not open))
+		elseif slots[key] then
 			table.insert(cards, slotCard(key, slots[key]))
-		elseif usable[key] or i <= Catalog.RULES.slotsFree then
+		elseif open then
 			table.insert(cards, emptySlot(key))
 		else
-			table.insert(locked, lockedSlot(i))
+			table.insert(cards, lockedSlot(i))
 		end
 	end
-	if #locked > 0 then
-		table.insert(cards, Ui.grid(locked, phone and 1 or 2, nil, 10))
-	end
+	local demos = Ui.row({
+		Ui.button("Novedades", "default", function()
+			App.openDialog("news", {})
+		end, { small = true, name = "Novedades" }),
+		Ui.button("Demo: garaje", "default", function()
+			App.request("playDemo", { kind = "tutorial" })
+			App.ui.enteringGame = true
+		end, { small = true, name = "Demo_tutorial" }),
+		Ui.button("Demo: fábrica avanzada", "default", function()
+			App.request("playDemo", { kind = "avanzada" })
+			App.ui.enteringGame = true
+		end, { small = true, name = "Demo_avanzada" }),
+		Ui.button("Demo: después de 2030", "default", function()
+			App.request("playDemo", { kind = "imperio" })
+			App.ui.enteringGame = true
+		end, { small = true, name = "Demo_imperio" }),
+	}, 8, { wrap = true })
+	table.insert(cards, demos)
 	table.insert(cards, Ui.text("Tus empresas se guardan en tu cuenta de Roblox y se validan al cargarse.", { size = Ui.S.xs, color = T.mut }))
-	local right = Ui.col(cards, 12, { Name = "Empresas", v = "C" })
-
+	local left = Ui.col(cards, 10, { Name = "Empresas" })
 	if phone then
-		Ui.new("UIPadding", { PaddingTop = UDim.new(0, 70), PaddingBottom = UDim.new(0, 80), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), Parent = wrap })
-		Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 22), Parent = wrap })
+		Ui.new("UIPadding", { PaddingTop = UDim.new(0, 60), PaddingBottom = UDim.new(0, 80), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), Parent = wrap })
+		Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 16), Parent = wrap })
 		left.Size = UDim2.new(1, 0, 0, 0)
-		right.Size = UDim2.new(1, 0, 0, 0)
 		left.Parent = wrap
-		right.Parent = wrap
-		local _ = leftW
 	else
-		-- Grilla de la V3: minmax(0,1fr) y minmax(0,800px), separación 40, márgenes 110/80/90.
-		local avail = vw - 160 - 40
-		local rightW = math.min(800, math.max(0, avail))
-		local lw = math.max(0, avail - rightW)
-		local h = math.max(0, vh - 200)
-		left.Position = UDim2.fromOffset(80, 110)
-		left.Size = UDim2.fromOffset(math.min(640, lw), h)
-		right.Position = UDim2.fromOffset(80 + lw + 40, 110)
-		right.Size = UDim2.fromOffset(rightW, h)
+		left.Position = UDim2.fromOffset(48, 40)
+		left.Size = UDim2.fromOffset(math.min(540, vw * 0.42), math.max(0, vh - 80))
 		left.Parent = wrap
-		right.Parent = wrap
-		Ui.new("Frame", { Name = "Margen", Size = UDim2.fromOffset(1, 90), Position = UDim2.fromOffset(0, 110 + h), BackgroundTransparency = 1, Parent = wrap })
+		Ui.new("Frame", { Name = "Margen", Size = UDim2.fromOffset(1, 60), Position = UDim2.fromOffset(0, vh - 20), BackgroundTransparency = 1, Parent = wrap })
 	end
 
 	local cfg = Ui.button("Configuración", "default", function()

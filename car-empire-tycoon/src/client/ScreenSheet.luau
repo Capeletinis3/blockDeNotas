@@ -14,6 +14,19 @@ local W = Ui.W
 local Sheet = {}
 
 -- Pestañas (.tabs/.tab): subrayado violeta en la elegida y contador como chip violeta.
+-- Subsecciones de Ventas: Producción (lotes y fábrica) y En venta (precios, ventas y marketing).
+function Sheet.salesNav(current: string): Frame
+	local items = {}
+	for _, t in { { "fabrica", "Producción", "factory" }, { "ventas", "En venta y marketing", "tag" } } do
+		table.insert(items, Ui.opt(t[2], current == t[1], function()
+			if current ~= t[1] then
+				App.go(t[1])
+			end
+		end, { name = "Sub_" .. t[1], height = 36 }))
+	end
+	return Ui.row(items, 8, { Name = "SubVentas" })
+end
+
 function Sheet.tabs(key: string, list: { any }, default: string): (Frame, string)
 	local current = App.ui.tabs[key] or default
 	local row = Ui.new("ScrollingFrame", {
