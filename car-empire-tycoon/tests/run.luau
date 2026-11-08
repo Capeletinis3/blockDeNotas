@@ -3284,6 +3284,134 @@ test("[I8] Ciclo automotriz integrado: ventas con deuda salarial (30 %), campañ
 	check(m.facilities.invested > 0, "lo invertido en la sede cuenta para el mantenimiento")
 end)
 
+test("[I10] Recorrido integral de una empresa (20 pasos) con sesiones reales, dos jugadores y carga en otro servidor", function()
+	local Staff = require("./.build/shared/Staff")
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p, q = { UserId = 1001 }, { UserId = 1002 }
+	mgr:add(p)
+	mgr:add(q)
+	local function req(action: string, payload: any?): any
+		local body = payload or {}
+		body.requestId = rid()
+		return mgr:request(p, action, body)
+	end
+	-- 1. Empresa nueva el 01/01/1970.
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Integral SA", color = "#42B8E5", logo = "rayo" }).ok, "1. empresa creada")
+	check(mgr:request(q, "createCompany", { slot = "1", name = "Vecina SA", color = "#FF8A3D", logo = "pico" }).ok, "segundo jugador en el mismo servidor")
+	local g, gq = mgr.list[p].game, mgr.list[q].game
+	eq(Rules.date(g), "01/01/1970", "1. empieza el 01/01/1970")
+	eq(#g.candidates, 8, "8 candidatos del mes")
+	-- 2. Sedán con motor I4.
+	local draft = draftFor(g, "brisa", "Integral Uno")
+	eq(draft.parts.motor, "i4", "2. sedán I4")
+	check(req("saveDesign", { draft = draft }).ok, "2. diseño guardado")
+	local d = g.designs[1]
+	-- 3. Fabricar (sin dinero suficiente para un lote enorme no se puede).
+	check(not req("createLot", { designId = d.id, qty = 100000 }).ok, "sin dinero suficiente no se ordena")
+	local unit = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, d).unitCost)
+	g.money = math.max(g.money, unit * 400 + 50000)
+	local r = req("createLot", { designId = d.id, qty = 400 })
+	check(r.ok, "3. lote de 400: " .. tostring(r.msg))
+	local lot = g.lots[1]
+	-- 4. Reseñas al terminar.
+	local ok = false
+	for _ = 1, 3000 do
+		ticks(mgr, clock, 1)
+		if lot.saleState == "por lanzar" then
+			ok = true
+			break
+		end
+	end
+	check(ok and lot.review and #lot.review.scores == 4, "4. cuatro reseñas guardadas")
+	-- 5-7. Precio, ventas y dinero.
+	check(req("launchSale", { lotId = lot.id, price = lot.refPrice }).ok, "5. precio fijado")
+	local m0 = g.money
+	for _ = 1, 3000 do
+		ticks(mgr, clock, 1)
+		if g.counters.unitsSold >= 300 then
+			break
+		end
+	end
+	check(g.counters.unitsSold >= 300, "6. vende (" .. g.counters.unitsSold .. ")")
+	check(g.money > m0, "7. el dinero entra por las ventas")
+	-- 8-9. Contratar y comprobar la bonificación.
+	g.money = 5000000
+	local c = g.candidates[1]
+	for _, x in g.candidates do
+		if x.spec == "produccion" then
+			c = x
+		end
+	end
+	local rate0 = Rules.lineRate(g)
+	check(req("hire", { candidateId = c.id, dept = "produccion" }).ok, "8. contratado en Producción")
+	local e = g.employees[1]
+	check(Rules.lineRate(g) > rate0, "9. la bonificación se aplica enseguida")
+	-- 10-11. Capacitación con mejora garantizada.
+	local sk = "velocidad"
+	e.skills[sk], e.potential[sk] = math.min(e.skills[sk], 80), 100
+	local before = e.skills[sk]
+	check(req("startTraining", { scope = "individual", level = "basico", skill = sk, employeeId = e.id }).ok, "10. capacitación básica")
+	check(not req("startTraining", { scope = "individual", level = "basico", skill = "calidad", employeeId = e.id }).ok, "una a la vez por empleado")
+	ticks(mgr, clock, Staff.trainingLevel("basico").days * Catalog.CALENDAR.realSecondsPerDay + 2)
+	eq(e.skills[sk], before + 3, "11. mejora garantizada aplicada")
+	-- 12. Investigar (varias a la vez).
+	g.rp = 500
+	check(req("startResearch", { id = "mo1" }).ok and req("startResearch", { id = "ca1" }).ok, "12. dos investigaciones simultáneas")
+	-- 13-14. Mejorar las oficinas y desbloquear la capacitación intermedia.
+	g.reputation = math.max(g.reputation, 3.0)
+	check(req("upgradeFacility", { kind = "offices" }).ok, "13. obra de oficinas")
+	check(not req("upgradeFacility", { kind = "offices" }).ok, "no se paga dos veces la misma obra")
+	ticks(mgr, clock, Catalog.SEDES[2].days * Catalog.CALENDAR.realSecondsPerDay + 2)
+	eq(g.sede, 2, "13. oficinas nivel 2")
+	local plan = Staff.trainingPlan(g, { scope = "individual", level = "intermedio", skill = "calidad", employeeId = e.id }, Rules.officeLevel(g), Rules.year(g))
+	check(plan ~= nil, "14. capacitación intermedia desbloqueada")
+	-- 15. Campaña publicitaria.
+	check(req("startCampaign", { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = 30 }).ok, "15. campaña corporativa")
+	check(not req("startCampaign", { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = 30 }).ok, "una sola campaña")
+	-- 16-17. Varios meses: sueldos y deuda salarial.
+	local day0 = g.time.day
+	g.money = 0
+	ticks(mgr, clock, 3 * 31 * Catalog.CALENDAR.realSecondsPerDay)
+	check(g.time.day - day0 >= 3, "16. pasaron varios meses")
+	check(g.payroll.debt > 0 or g.money > 0, "17. sueldos pagados o adeudados")
+	eq(#g.employees, 1, "17. nadie renunció")
+	check(g.market.searches == 0 and #g.candidates == 8, "candidatos renovados al cambiar de mes")
+	-- Pausa individual: el otro jugador sigue.
+	mgr:request(p, "setUiPause", { paused = true })
+	local dp, dq = Rules.absDay(g), Rules.absDay(gq)
+	ticks(mgr, clock, 10)
+	eq(Rules.absDay(g), dp, "pausa de una empresa")
+	check(Rules.absDay(gq) > dq, "la del otro jugador sigue")
+	mgr:request(p, "setUiPause", { paused = false })
+	-- Duplicados: el mismo identificador de solicitud no se aplica dos veces.
+	local id = rid()
+	g.money = 1e7
+	local m1 = g.money
+	mgr:request(p, "searchCandidates", { kind = "general", requestId = id })
+	local m2 = g.money
+	mgr:request(p, "searchCandidates", { kind = "general", requestId = id })
+	check(m2 < m1 and g.money == m2, "una búsqueda repetida por red no se cobra dos veces")
+	-- 18-20. Guardar, volver al menú y cargar en otro servidor.
+	local snap = jsonCopy({ money = g.money, sede = g.sede, done = g.research.done, employees = g.employees, trainings = g.trainings, campaign = g.campaign, debt = g.payroll.debt, facilities = g.facilities, sold = g.counters.unitsSold })
+	check(mgr:request(p, "leaveCompany", {}).ok, "18-19. guardar y volver al menú")
+	mgr:remove(p)
+	mgr:remove(q)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "20. carga")
+	local g2 = mgr2.list[p].game
+	eq(g2.money, snap.money, "20. mismo dinero")
+	eq(g2.sede, snap.sede, "20. mismas oficinas")
+	eq(serde.encode("json", g2.research.done), serde.encode("json", snap.done), "20. mismas tecnologías")
+	eq(serde.encode("json", g2.employees), serde.encode("json", snap.employees), "20. mismos empleados, habilidades y potencial")
+	eq(serde.encode("json", g2.facilities), serde.encode("json", snap.facilities), "20. mismas instalaciones")
+	eq(g2.payroll.debt, snap.debt, "20. misma deuda salarial")
+	eq(g2.counters.unitsSold, snap.sold, "20. mismas ventas")
+	check(GameState.validate(g2), "partida válida")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

@@ -59,4 +59,17 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Personal (4 tarjetas, lista y detalle, mercado, capacitaciones), Marketing (diálogo de campaña) e Instalaciones (Compañía).
   - Sin personaje caminando: `SceneCamera.luau` orbita sobre el garaje (arrastrar = rotar, rueda/pellizco = zoom).
   - Ajustes con pestañas Audio, Gráficos, Accesibilidad y Datos.
-- [ ] 10. Pruebas generales
+- [x] 10. Pruebas generales (simuladas; **no se probó en Roblox Studio**)
+  - `lune run tests/run.luau`: 6.272 comprobaciones; [I10] recorre los 20 pasos con sesiones reales (dos jugadores, pausa individual, duplicados, cambio de mes, carga en otro servidor).
+  - `lune run tests/ui.luau`: 965 comprobaciones (menú, Personal, capacitación, marketing, instalaciones, cámara, ajustes).
+  - `selene src tests` sin avisos; `.rbxl` armado y verificado con `tests/verify_place.luau`.
+
+## Pendiente
+
+- Probar en Studio: verificar el aspecto del showroom 3D, de la cámara del escenario y de las pantallas nuevas.
+- Configurar los Developer Products (ranura 3, ranura 4, línea 3) en Roblox y poner sus ids en `Catalog.PRODUCTS`; hasta entonces las compras quedan deshabilitadas.
+- Mapa mundial de la expansión internacional (los países y su lógica ya están).
+- Modelos de edificios por nivel de fábrica (el garaje ya busca `ServerStorage.CarEmpireAssets.Sedes.Sede1..5`).
+- Las mejoras de estaciones siguen siendo instantáneas (las obras con duración son las de instalaciones).
+- Partidas viejas: los bonos de demanda de las investigaciones de marketing desaparecen (las campañas los reemplazan) y la antigüedad de los empleados empieza en la migración.
+- Equilibrio: todos los valores nuevos son provisionales (`Catalog.STAFF`, `TRAINING`, `MARKETING`, `FACILITIES`).
