@@ -122,8 +122,15 @@ function Rules.sede(g: any): any
 end
 
 -- Suma de los efectos de las tecnologías investigadas (Catalog.RESEARCH … fx).
+-- Suma de los efectos de las tecnologías investigadas y de la fábrica (FACILITIES.factory.levels[n].fx).
 function Rules.tech(g: any, key: string): number
 	local n = 0
+	local f = g and g.facilities
+	local lvl = type(f) == "table" and tonumber(f.factory) or 1
+	local def = Catalog.FACILITIES.factory.levels[math.clamp(lvl, 1, 5)]
+	if def and def.fx and def.fx[key] then
+		n += def.fx[key]
+	end
 	if g and g.research then
 		for _, id in g.research.done do
 			local node = Catalog.researchNode(id)

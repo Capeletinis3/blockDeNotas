@@ -171,8 +171,8 @@ Catalog.PAINTS = {
 Catalog.FINISHES = {
 	["Mate"] = { unit = 0, research = nil },
 	["Metálico"] = { unit = 600, research = nil },
-	["Perlado"] = { unit = 1400, research = "pr5" },
-	["Cromado"] = { unit = 3200, research = "pr5" },
+	["Perlado"] = { unit = 1400, factory = 3 }, -- requiere la fábrica de nivel 3 (pintura industrial)
+	["Cromado"] = { unit = 3200, factory = 3 },
 }
 Catalog.FINISH_ORDER = { "Mate", "Metálico", "Perlado", "Cromado" }
 
@@ -492,7 +492,9 @@ Catalog.MATERIALS = {
 	- Oficinas centrales (g.sede, 1–5): límite GLOBAL de empleados, alcance comercial, niveles de capacitación
 	  (TRAINING.levels[i].office) y la expansión internacional. Piden ventas y reputación. Sus niveles conservan
 	  los nombres de las etapas de la empresa (Garaje inicial … Imperio automotriz).
-	- Fábrica (1–5): autos por minuto de cada línea y edificio que se ve en el garaje. No da líneas.
+	- Fábrica (1–5): autos por minuto de cada línea, calidad y costo de fabricación (fx, como lo que antes eran
+	  las investigaciones de producción), acabados perlado y cromado desde el nivel 3, y el edificio del garaje.
+	  No da líneas.
 	- Centro de investigación (1–5): PI por minuto.
 	- Líneas: la 1 viene siempre; la 2 se compra con dinero (obra); la 3 es un desbloqueo permanente con Robux
 	  (Catalog.PRODUCTS.line3), independiente de la 2. Ninguna mejora da líneas sola.
@@ -508,11 +510,11 @@ Catalog.FACILITIES = {
 	order = { "offices", "factory", "research" },
 	offices = { name = "Oficinas centrales", icon = "building" },
 	factory = { name = "Fábrica", icon = "factory", levels = {
-		{ level = 1, name = "Garaje pequeño", perLine = 15, cost = 0, days = 0, asset = "Sede1" },
-		{ level = 2, name = "Taller mecánico", perLine = 25, cost = 200000, days = 45, asset = "Sede2" },
-		{ level = 3, name = "Fábrica", perLine = 55, cost = 1500000, days = 90, asset = "Sede3" },
-		{ level = 4, name = "Planta industrial", perLine = 100, cost = 30000000, days = 150, asset = "Sede4" },
-		{ level = 5, name = "Complejo automotriz", perLine = 170, cost = 200000000, days = 240, asset = "Sede5" },
+		{ level = 1, name = "Garaje pequeño", perLine = 15, cost = 0, days = 0, asset = "Sede1", fx = {} },
+		{ level = 2, name = "Taller mecánico", perLine = 25, cost = 200000, days = 45, asset = "Sede2", fx = { quality = 1, unitCostPct = -3 } },
+		{ level = 3, name = "Fábrica", perLine = 55, cost = 1500000, days = 90, asset = "Sede3", fx = { quality = 3, unitCostPct = -6 } },
+		{ level = 4, name = "Planta industrial", perLine = 100, cost = 30000000, days = 150, asset = "Sede4", fx = { quality = 4, unitCostPct = -10 } },
+		{ level = 5, name = "Complejo automotriz", perLine = 170, cost = 200000000, days = 240, asset = "Sede5", fx = { quality = 5, unitCostPct = -15 } },
 	} },
 	research = { name = "Centro de investigación", icon = "flask", levels = {
 		{ level = 1, name = "Centro inicial", pi = 3, cost = 0, days = 0 },
@@ -523,8 +525,11 @@ Catalog.FACILITIES = {
 	} },
 	line2 = { name = "Línea de producción 2", cost = 150000, days = 30 },
 	maxLines = 3,
-	-- Mantenimiento mensual: este porcentaje de lo invertido en instalaciones (la eficiencia financiera lo baja).
+	-- Mantenimiento mensual: este porcentaje de lo invertido en instalaciones (la eficiencia financiera lo baja),
+	-- con un tope de maintenanceRevenueCap de las ventas del mes anterior: sin ventas no se cobra, así el
+	-- mantenimiento nunca deja a una empresa sin poder fabricar.
 	maintenanceRate = 0.003,
+	maintenanceRevenueCap = 0.1,
 }
 
 -- Expansión global (después del Imperio automotriz): cada región abre mercados nuevos (+15 % de demanda
@@ -662,8 +667,8 @@ Catalog.TRAINING = {
 }
 
 --[[ Investigación y desarrollo (I+D). Cuatro categorías del departamento de I+D: Chasis, Motores,
-	Seguridad y Tecnología. «Empresa (provisorio)» conserva las mejoras de producción y marketing de versiones
-	anteriores hasta que pasen a Instalaciones y Marketing. Cada nodo:
+	Seguridad y Tecnología (las mejoras de producción de versiones anteriores ahora son niveles de la fábrica y
+	las de marketing, campañas y oficinas). Cada nodo:
 	year = año en que aparece (se puede investigar hasta RESEARCH_RULES.aheadMaxYears antes, con recargo)
 	tier = complejidad s/n/i/b (o `complexity` 1–5): define el costo base en PI, dinero y días
 	req = tecnologías previas · fx = efectos automáticos de la empresa (fabricación, marketing, motores)
@@ -747,7 +752,7 @@ function Catalog.equipment(id: any): any
 	return nil
 end
 
-Catalog.RESEARCH_ORDER = { "chasis", "motores", "seguridad", "tecnologia", "empresa" }
+Catalog.RESEARCH_ORDER = { "chasis", "motores", "seguridad", "tecnologia" }
 Catalog.RESEARCH = {
 	chasis = { label = "Chasis", nodes = {
 		{ id = "ca1", name = "Carrocería reforzada", year = 1970, tier = "s", req = {}, fx = { durability = 4, safety = 2 }, gain = "+4 de durabilidad y +2 de seguridad" },
@@ -814,19 +819,6 @@ Catalog.RESEARCH = {
 		{ id = "te_pdc", name = "Sensores de estacionamiento", year = 1998, tier = "n", req = { "el2" }, fx = {}, gain = "Habilita los «Sensores de estacionamiento» en el equipamiento (+2 de seguridad, +2 de comodidad)" },
 		{ id = "te_cam", name = "Cámara de retroceso", year = 2005, tier = "n", req = { "te_pdc" }, fx = {}, gain = "Habilita la «Cámara de retroceso» en el equipamiento (+3 de seguridad, +1 de calidad)" },
 		{ id = "te_touch", name = "Pantalla táctil y conectividad", year = 2012, tier = "i", req = { "te_nav" }, fx = {}, gain = "Habilita la «Pantalla táctil» en el equipamiento (+4 de comodidad, +2 de calidad)" },
-	} },
-	empresa = { label = "Empresa (provisorio)", nodes = {
-		{ id = "pr1", name = "Línea de montaje optimizada", year = 1970, tier = "s", req = {}, fx = { prodSpeed = 10 }, gain = "+10 % de velocidad de producción" },
-		{ id = "pr2", name = "Control de calidad estadístico", year = 1974, tier = "n", req = { "pr1" }, fx = { quality = 3 }, gain = "+3 de calidad en los autos nuevos" },
-		{ id = "pr3", name = "Robots de soldadura", year = 1982, tier = "i", req = { "pr1" }, fx = { prodSpeed = 20, unitCostPct = -4 }, gain = "+20 % de producción y −4 % de costo por unidad" },
-		{ id = "pr4", name = "Producción justo a tiempo", year = 1990, tier = "i", req = { "pr3" }, fx = { unitCostPct = -6 }, gain = "−6 % de costo por unidad" },
-		{ id = "pr5", name = "Pintura robotizada", year = 1993, tier = "n", req = { "pr3" }, fx = { quality = 1 }, gain = "Habilita acabados perlado y cromado; +1 de calidad" },
-		{ id = "pr6", name = "Fábrica digital", year = 2012, tier = "b", req = { "pr4" }, fx = { prodSpeed = 30, unitCostPct = -5 }, gain = "+30 % de producción y −5 % de costo por unidad" },
-		{ id = "mk1", name = "Publicidad en radio y TV", year = 1970, tier = "s", req = {}, fx = { demand = 5, campaign = 1 }, gain = "+5 % de demanda y habilita campañas de radio y prensa (+15 % de atractivo)" },
-		{ id = "mk2", name = "Red de concesionarios", year = 1981, tier = "n", req = { "mk1" }, fx = { demand = 10 }, gain = "+10 % de demanda y habilita campañas de televisión nacional (+30 %)" },
-		{ id = "mk3", name = "Garantía extendida", year = 1987, tier = "n", req = { "mk2" }, fx = { repGain = 50 }, gain = "La reputación sube 50 % más rápido" },
-		{ id = "mk4", name = "Marketing por internet", year = 1998, tier = "n", req = { "mk2" }, fx = { demand = 10 }, gain = "+10 % de demanda y habilita la campaña digital (+45 %)" },
-		{ id = "mk5", name = "Redes sociales", year = 2009, tier = "i", req = { "mk4" }, fx = { demand = 15 }, gain = "+15 % de demanda" },
 	} },
 }
 

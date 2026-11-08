@@ -44,8 +44,8 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	g.reputation = imperio and 4.6 or (avanz and 4.2 or 3.4)
 	g.money = imperio and 250000000 or (avanz and 12500000 or 240000)
 	g.research.done = avanz
-			and { "mo1", "mo2", "mo3", "mo4", "mo5", "ca1", "ca2", "ca3", "ca4", "tr1", "tr2", "tr3", "se1", "se2", "se3", "se4", "co1", "co2", "co3", "co4", "pr1", "pr2", "pr3", "pr4", "el1", "el2", "ma1", "ma2", "ma3", "mk1", "mk2", "mk3", "ch_compacto", "ch_pickup", "var_eco", "var_sport", "te_radio", "te_win", "eng_I4_2", "eng_I4_3", "eng_I6_2" }
-		or { "mo1", "ca1", "se1", "pr1", "pr2", "mk1", "co1" }
+			and { "mo1", "mo2", "mo3", "mo4", "mo5", "ca1", "ca2", "ca3", "ca4", "tr1", "tr2", "tr3", "se1", "se2", "se3", "se4", "co1", "co2", "co3", "co4", "el1", "el2", "ma1", "ma2", "ma3", "ch_compacto", "ch_pickup", "var_eco", "var_sport", "te_radio", "te_win", "eng_I4_2", "eng_I4_3", "eng_I6_2" }
+		or { "mo1", "ca1", "se1", "co1" }
 	if imperio then
 		g.research.done = {}
 		for _, key in Catalog.RESEARCH_ORDER do

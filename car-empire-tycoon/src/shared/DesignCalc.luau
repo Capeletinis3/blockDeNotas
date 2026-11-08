@@ -156,6 +156,9 @@ function DesignCalc.finishBlock(g: any, finish: string): string?
 	if not f then
 		return "Acabado desconocido"
 	end
+	if f.factory and (tonumber(g.facilities and g.facilities.factory) or 1) < f.factory then
+		return "Requiere la fábrica de nivel " .. f.factory .. " (Compañía › Instalaciones)"
+	end
 	return DesignCalc.optionBlock(g, { year = Catalog.FINISH_YEAR[finish] or 1970, research = f.research })
 end
 

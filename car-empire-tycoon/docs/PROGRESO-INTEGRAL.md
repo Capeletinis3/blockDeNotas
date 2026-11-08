@@ -50,7 +50,8 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Líneas: 1 gratis, 2 con dinero (obra), 3 con Robux (Developer Product, independiente de la 2). Ninguna mejora da líneas.
   - Expansión internacional por países reales (sin mapa definitivo todavía).
   - Esquema 13: la sede vieja se reparte en oficinas/fábrica/centro del mismo nivel; quien tenía 2 o 3+ líneas las conserva.
-- [ ] 7. Investigación
-- [ ] 8. Ciclo automotriz
+- [x] 7. Investigación: exactamente 4 categorías. Producción (velocidad, calidad, costo, acabados premium) pasó a los niveles de la fábrica; marketing a campañas y oficinas. Esquema 14: esos ids salen de lo investigado y un proyecto en curso se reintegra (dinero y PI).
+- [x] 8. Ciclo automotriz: diseño con especificaciones fijas, un lote por modelo, reseñas guardadas, ventas con campaña, stock y deuda salarial (prueba [I8]).
+  - Ajuste: el mantenimiento tiene tope en el 10 % de las ventas del mes anterior (la estrategia simple del bot se trababa sin dinero).
 - [ ] 9. Interfaz
 - [ ] 10. Pruebas generales

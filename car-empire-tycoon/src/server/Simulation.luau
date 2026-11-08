@@ -634,8 +634,11 @@ function Simulation.monthRollover(g: any, ctx: any)
 	-- Los movimientos de este bloque pertenecen al mes que empieza.
 	Simulation.payroll(g, ctx)
 	Simulation.ensureMarket(g, ctx)
-	-- Mantenimiento de las instalaciones (se paga lo que alcanza; nunca deja el dinero negativo).
-	local maint = math.min(Rules.maintenance(g), math.max(0, g.money))
+	-- Mantenimiento de las instalaciones: con tope en una parte de las ventas del mes anterior (sin ventas no se
+	-- cobra) y nunca más que el dinero disponible.
+	local prev = g.stats.days[Rules.dayKey(g.time.day - 1)]
+	local cap = (prev and prev.revenue or 0) * Catalog.FACILITIES.maintenanceRevenueCap
+	local maint = math.min(Rules.maintenance(g), cap, math.max(0, g.money))
 	if maint > 0 then
 		g.money -= maint
 		Simulation.ledger(g, "mantenimiento", -maint, "Mantenimiento de instalaciones")

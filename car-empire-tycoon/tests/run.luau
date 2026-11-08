@@ -752,9 +752,15 @@ test("Efectos reales: una tecnología cambia el cálculo de los diseños nuevos,
 	local after = DesignCalc.computeDesign(g, g.designs[1])
 	check(after.hp > before.hp, "más potencia con la tecnología")
 	eq(findLot(g, lotId).design.calc.hp, before.hp, "el lote ya lanzado conserva su versión")
-	local cap = Rules.lineRate(g)
-	table.insert(g.research.done, "pr1")
-	check(Rules.lineRate(g) > cap, "producción industrial acelera la línea")
+	-- La fábrica (Instalaciones) reemplaza a las viejas investigaciones de producción: calidad y costo.
+	g.facilities.factory = 1
+	local c1 = DesignCalc.computeDesign(g, g.designs[1])
+	g.facilities.factory = 4
+	local c4 = DesignCalc.computeDesign(g, g.designs[1])
+	check(c4.quality > c1.quality and c4.unitCost < c1.unitCost, "una fábrica mejor fabrica con más calidad y menos costo")
+	check(DesignCalc.finishBlock(g, "Perlado") == nil or string.find(DesignCalc.finishBlock(g, "Perlado") or "", "fábrica") == nil, "acabados premium con la fábrica 3+")
+	g.facilities.factory = 1
+	check(string.find(DesignCalc.finishBlock(g, "Perlado") or "", "fábrica") ~= nil, "con el garaje no hay perlado")
 end)
 
 -- [P14] Guardado con lotes -------------------------------------------------------------------------
@@ -1198,9 +1204,14 @@ test("[C17][C18] Líneas y obras: línea 2 con dinero, línea 3 con Robux indepe
 	check(Rules.nextFacility(h, "factory").cost < cost0, "gestión: obras más baratas")
 	check(Rules.maintenance(h) < maint0, "eficiencia financiera: menos mantenimiento")
 	check(Rules.buildSpeed(h) > 1, "organización: obras más rápidas")
+	local sal = Rules.salaries(h)
 	local m0 = h.money
 	Simulation.monthRollover(h, ctx)
-	check(h.money < m0, "el mantenimiento se cobra cada mes")
+	eq(m0 - h.money, sal, "sin ventas el mes anterior no se cobra mantenimiento (no traba a la empresa); solo salarios")
+	GameState.day(h, h.time.day - 1).revenue = 1e9
+	m0 = h.money
+	Simulation.monthRollover(h, ctx)
+	eq(m0 - h.money - Rules.salaries(h), Rules.maintenance(h), "con ventas, se cobra cada mes")
 end)
 
 test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y progreso del bot", function()
@@ -3223,6 +3234,54 @@ test("[I5] Marketing: campaña de modelo y corporativa, presupuesto con rendimie
 	check(Rules.campaign(g) ~= nil, "comunicación la hace durar más de 30 días")
 	check(GameState.validate(g), "válida")
 	check(GameState.validate(jsonCopy(g)), "se guarda")
+end)
+
+test("[I8] Ciclo automotriz integrado: ventas con deuda salarial (30 %), campaña, stock agotado y migraciones de instalaciones", function()
+	local g = bigCompany("Ciclo SA")
+	local ctx = makeCtx(801)
+	local id = saveNew(g, ctx, "brisa", "Ciclo")
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 300 }).lotId
+	check(launchWhenReady(g, ctx, lotId), "fabricado, con reseñas y a la venta")
+	local lot = findLot(g, lotId)
+	-- Deuda salarial: el 30 % de los ingresos va a la deuda y el 70 % queda en la empresa.
+	g.payroll.debt = 1e9
+	g.payroll.debtMonths = 1
+	local m0, d0, rev0 = g.money, g.payroll.debt, lot.revenue
+	Simulation.simulate(g, ctx, 30)
+	local rev = lot.revenue - rev0
+	check(rev > 0, "vendió")
+	check(math.abs((d0 - g.payroll.debt) - rev * 0.3) <= 2, "30 % a la deuda (" .. Util.money(d0 - g.payroll.debt) .. " de " .. Util.money(rev) .. ")")
+	check(math.abs((g.money - m0) - rev * 0.7) <= 2, "70 % para la empresa")
+	-- Nunca se vende más que el stock; al agotarse pasa al historial.
+	g.payroll.debt, g.payroll.debtMonths = 0, 0
+	check(runUntil(g, ctx, function()
+		return findLot(g, lotId) == nil
+	end, 60), "se agota")
+	local h = findHist(g, lotId)
+	eq(h.sold + h.discarded, 300, "ni una unidad de más")
+	check(not Actions.createLot(g, ctx, { designId = id, qty = 10 }).ok, "un solo lote por modelo")
+	-- El diseño conserva sus especificaciones aunque se investigue algo nuevo.
+	local spec = jsonCopy(g.designs[1])
+	table.insert(g.research.done, "eng_I4_2")
+	eq(serde.encode("json", g.designs[1]), serde.encode("json", spec), "el diseño guardado no cambia solo")
+	-- Migraciones 12 → 13 → 14: la sede vieja se reparte sin perder nada.
+	local old = jsonCopy(newCompany("Sede Vieja SA"))
+	old.schema = 12
+	old.sede = 4
+	old.facilities = nil
+	old.research.done = { "mo1", "pr1", "mk1" }
+	old.research.projects = { { id = "pr3", progress = 5, days = 100, paidMoney = 45000, paidPi = 80, ahead = 0, startDay = 0 } }
+	local money0, rp0 = old.money, old.rp
+	local m = GameState.migrate(jsonCopy(old), 5000)
+	check(m ~= nil and GameState.validate(m), "migra y valida")
+	eq(m.facilities.factory, 4, "fábrica del nivel de la sede")
+	eq(m.facilities.research, 4, "centro del nivel de la sede")
+	eq(Rules.caps(m).lines, 3, "conserva sus líneas (hasta 3)")
+	eq(table.concat(m.research.done, ","), "mo1", "las investigaciones de «Empresa» pasan a las instalaciones")
+	eq(#m.research.projects, 0, "el proyecto de «Empresa» en curso se reintegra")
+	eq(m.money, money0 + 45000, "con su dinero")
+	eq(m.rp, rp0 + 80, "y sus PI")
+	check(m.facilities.invested > 0, "lo invertido en la sede cuenta para el mantenimiento")
 end)
 
 T.finish()

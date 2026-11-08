@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 13
+GameState.SCHEMA = 14
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -1001,6 +1001,33 @@ MIGRATIONS[12] = function(g: any, _now: number)
 	g.facilities = { factory = s, research = s, lines = lines, builds = {}, invested = 0 }
 	g.facilities.invested = Rules.facilitiesValue(g) -- lo que ya había invertido en la sede
 	g.schema = 13
+end
+
+-- 13 → 14: investigación en cuatro categorías. Las mejoras de producción pasaron a los niveles de la fábrica y
+-- las de marketing a las campañas y las oficinas: sus ids salen de lo investigado (la fábrica conserva su
+-- nivel) y un proyecto en curso de esas tecnologías se reintegra completo (dinero y PI).
+MIGRATIONS[13] = function(g: any, _now: number)
+	local r = g.research
+	if type(r) == "table" then
+		local keep = {}
+		for _, id in r.done or {} do
+			if Catalog.researchNode(id) then
+				table.insert(keep, id)
+			end
+		end
+		r.done = keep
+		local projects = {}
+		for _, p in r.projects or {} do
+			if type(p) == "table" and Catalog.researchNode(p.id) then
+				table.insert(projects, p)
+			elseif type(p) == "table" then
+				g.money = (isFinite(g.money) and g.money or 0) + (isFinite(p.paidMoney) and p.paidMoney or 0)
+				g.rp = (isFinite(g.rp) and g.rp or 0) + (isFinite(p.paidPi) and p.paidPi or 0)
+			end
+		end
+		r.projects = projects
+	end
+	g.schema = 14
 end
 
 function GameState.migrate(g: any, now: number): (any?, string?)
