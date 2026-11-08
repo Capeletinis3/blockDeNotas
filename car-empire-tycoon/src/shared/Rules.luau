@@ -507,37 +507,97 @@ function Rules.rivalOffers(type: string, yearFrac: number, g: any?): { any }
 	return out
 end
 
--- Campaña publicitaria activa (Catalog.CAMPAIGNS) o nil. g.promo guarda el nivel (0 = sin campaña).
+-- Marketing --------------------------------------------------------------------------------
+
+-- Campaña activa (g.campaign) o nil.
 function Rules.campaign(g: any): any
-	local lvl = tonumber(g.promo) or 0
-	return Catalog.CAMPAIGNS[lvl]
+	return type(g.campaign) == "table" and g.campaign or nil
 end
 
--- Motivo por el que no se puede usar un nivel de campaña, o nil.
-function Rules.campaignBlock(g: any, lvl: number): string?
-	local c = Catalog.CAMPAIGNS[lvl]
-	if not c then
-		return "Nivel de campaña desconocido"
+function Rules.marketingEra(g: any): number
+	return Catalog.interp(Catalog.MARKETING.era, Rules.year(g))
+end
+
+-- Modelos con lote en venta (la campaña corporativa cuesta más cuantos más haya).
+function Rules.modelsOnSale(g: any): number
+	local seen, n = {}, 0
+	for _, l in g.lots do
+		if l.saleState == "en venta" and not seen[l.designId] then
+			seen[l.designId] = true
+			n += 1
+		end
 	end
-	if not Rules.has(g, c.research) then
-		local n = Catalog.researchNode(c.research)
-		return "Requiere investigar «" .. (n and n.name or c.research) .. "»"
+	return n
+end
+
+--[[ Plan de una campaña: lo muestra la interfaz y lo cobra el servidor (mismo cálculo).
+	req = { kind, designId?, budget (mensual), days }. Devuelve { cost, boost, days, kind, designId, name } o
+	(nil, motivo). boost = efecto base; la creatividad del personal de Marketing lo multiplica en vivo. ]]
+function Rules.campaignPlan(g: any, req: any): (any?, string?)
+	local MK = Catalog.MARKETING
+	if type(req) ~= "table" then
+		return nil, "Datos de la campaña inválidos."
 	end
-	return nil
+	local kind = MK.kinds[req.kind]
+	if not kind then
+		return nil, "Elegí el tipo de campaña."
+	end
+	local era = Rules.marketingEra(g)
+	local lo, hi = Util.round(MK.budgetMin * era), Util.round(MK.budgetMax * era)
+	local budget, days = req.budget, req.days
+	if not Util.isFiniteNumber(budget) or budget < lo or budget > hi then
+		return nil, "El presupuesto mensual tiene que estar entre " .. Util.money(lo) .. " y " .. Util.money(hi) .. "."
+	end
+	if not Util.isFiniteNumber(days) or days ~= math.floor(days) or days < MK.daysMin or days > MK.daysMax then
+		return nil, "La duración tiene que estar entre " .. MK.daysMin .. " y " .. MK.daysMax .. " días."
+	end
+	local name
+	if req.kind == "modelo" then
+		for _, l in g.lots do
+			if l.designId == req.designId and l.saleState ~= "agotado" and l.saleState ~= "retirado" then
+				name = l.design.name
+			end
+		end
+		if not name then
+			return nil, "Elegí un modelo que esté en fabricación o a la venta."
+		end
+	else
+		name = g.company.name
+	end
+	local cost = budget * days / 30
+	if req.kind == "corporativa" then
+		cost *= (1 + kind.sizeCost * (Rules.officeLevel(g) - 1) + kind.perModelCost * Rules.modelsOnSale(g)) * Rules.marketFactor(g)
+	end
+	cost = Util.round(cost * (1 - Rules.staff(g, "analisis")) / 10) * 10
+	local boost = kind.maxBoost * (1 - math.exp(-budget / (MK.budgetRef * era)))
+	return { cost = cost, boost = boost, days = days, kind = req.kind, designId = req.kind == "modelo" and req.designId or nil, name = name, budget = budget, min = lo, max = hi }, nil
 end
 
-function Rules.campaignCost(g: any, lvl: number): number
-	local c = Catalog.CAMPAIGNS[lvl]
-	return c and Util.round(Rules.sede(g).campaign * c.cost * Rules.marketFactor(g) / 100) * 100 or 0
+-- Efecto actual de la campaña (con la creatividad del personal de Marketing, en vivo).
+function Rules.campaignBoost(g: any): number
+	local c = Rules.campaign(g)
+	return c and c.boost * (1 + Rules.staff(g, "mk_creatividad")) or 0
 end
 
--- Multiplicador comercial de la empresa: alcance de la sede × reputación × tecnologías × campaña.
+-- Multiplicador de demanda de un lote por la campaña activa (modelo: solo ese; corporativa: todos).
+function Rules.campaignMult(g: any, lot: any): number
+	local c = Rules.campaign(g)
+	if not c or (c.kind == "modelo" and c.designId ~= lot.designId) then
+		return 1
+	end
+	return 1 + Rules.campaignBoost(g)
+end
+
+-- Días de campaña que avanza cada día de juego (comunicación: la campaña dura más).
+function Rules.campaignSpeed(g: any): number
+	return 1 / (1 + Rules.staff(g, "comunicacion"))
+end
+
+-- Multiplicador comercial de la empresa: alcance × reputación × tecnologías (la campaña va por lote).
 function Rules.playerMult(g: any): number
 	local rep = 0.6 + g.reputation * 0.14
 	local tech = 1 + Rules.tech(g, "demand") / 100
-	local c = Rules.campaign(g)
-	local campaign = c and (1 + c.boost) or 1
-	return Rules.reach(g) * rep * tech * campaign
+	return Rules.reach(g) * rep * tech
 end
 
 -- Factor de precio: vender por encima del precio de referencia baja las ventas (y al revés). Cada tipo
@@ -556,7 +616,7 @@ end
 function Rules.lotWeight(g: any, lot: any, yearFrac: number): number
 	local baseline = Rules.eraBaseline(yearFrac)
 	local seg = Catalog.SEGMENTS[lot.design.spec.segment] or Catalog.SEGMENTS.Masivo
-	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop * Rules.reviewFactor(lot)
+	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop * Rules.reviewFactor(lot) * Rules.campaignMult(g, lot)
 end
 
 --[[ Reparto de la demanda de un tipo entre: el resto del mercado (peso fijo), los modelos rivales y los

@@ -276,7 +276,7 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	App.go("ventas")
 	M.task.wait()
 	check(named("Modelo_" .. l.id) ~= nil, "tarjeta del modelo en venta")
-	for _, n in { "Encargadas", "Fabricadas", "Pendientes", "Disponibles", "Vendidas", "Ritmo", "Ingresos", "Gastos", "Resultado", "ModificarPrecio", "CerrarVenta", "Campana_0", "Campana_1" } do
+	for _, n in { "Encargadas", "Fabricadas", "Pendientes", "Disponibles", "Vendidas", "Ritmo", "Ingresos", "Gastos", "Resultado", "ModificarPrecio", "CerrarVenta", "Campana", "NuevaCampana" } do
 		check(named(n) ~= nil, "la tarjeta muestra " .. n)
 	end
 	check(find("En venta") ~= nil, "estado comercial En venta")
@@ -413,7 +413,7 @@ test("Todos los diálogos se construyen", function()
 		{ "help", { screen = "fabrica" } }, { "future", { what = "amigos" } }, { "future", { what = "eventos" } }, { "future", { what = "tienda" } },
 		{ "news", {} }, { "prevModels", {} }, { "testDrive", {} },
 		{ "deleteCompany", { slot = "1", expected = "Ruta Norte", name = "Ruta Norte" } },
-		{ "training", { scope = "general" } }, { "training", { scope = "departamento", dept = "investigacion" } },
+		{ "campaign", {} }, { "training", { scope = "general" } }, { "training", { scope = "departamento", dept = "investigacion" } },
 	}
 	for _, k in kinds do
 		table.clear(M.log)
@@ -1149,6 +1149,52 @@ test("Personal en la interfaz: departamentos, mercado laboral, contratar, detall
 	App.go("juego")
 	M.task.wait()
 	noErrors("Personal")
+end)
+
+test("Marketing en la interfaz: nueva campaña con presupuesto y duración, cancelar sin reembolso", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.closeAllDialogs()
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	sess.game.money = 50000000
+	sess.game.campaign = nil
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 50000000
+	end)
+	App.go("ventas")
+	M.task.wait()
+	clickN("NuevaCampana")
+	M.task.wait()
+	eq(topKind(), "campaign", "abre el diálogo")
+	clickN("Tipo_corporativa")
+	clickN("Presupuesto_2")
+	clickN("Dias_60")
+	M.task.wait()
+	check(named("Precios") ~= nil, "muestra costo y efecto antes de pagar")
+	local m0 = App.g.money
+	clickN("LanzarCampana")
+	check(waitFor(function()
+		return App.g.campaign ~= nil
+	end), "campaña activa")
+	eq(App.g.campaign.days, 60, "60 días")
+	check(App.g.money < m0, "pagada al empezar")
+	check(named("CancelarCampana") ~= nil, "se puede cancelar")
+	clickN("CancelarCampana")
+	M.task.wait()
+	clickN("Confirmar")
+	check(waitFor(function()
+		return App.g.campaign == nil
+	end), "cancelada")
+	check(named("NuevaCampana") ~= nil, "y se puede empezar otra")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Marketing")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

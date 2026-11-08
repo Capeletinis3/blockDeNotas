@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 11
+GameState.SCHEMA = 12
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -88,7 +88,9 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		stats = { days = {}, month = { sold = 0, rel = 0, salesPi = 0, bonusPi = 0 } },
 		tutorial = { skipped = false, tips = true },
 		daily = { last = "", streak = 0 },
-		promo = 0, -- nivel de campaña publicitaria (0 = sin campaña; Catalog.CAMPAIGNS)
+		-- campaña publicitaria activa (una por empresa) o nil:
+		-- { id, kind = "modelo" | "corporativa", designId?, name, budget, boost, days, progress, cost, startDay }
+		campaign = nil,
 		-- Deudas: préstamos { id, principal, balance, monthlyRate, takenDay }. Base para un sistema de
 		-- préstamos futuro; hoy ninguna acción los crea (Rules.debt los suma).
 		loans = {},
@@ -473,8 +475,12 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("El historial de «" .. e.name .. "» no es coherente.")
 		end
 	end
-	if not isInt(g.promo, 0, #Catalog.CAMPAIGNS) then
-		return fail("La campaña publicitaria está dañada.")
+	if g.campaign ~= nil then
+		local c = g.campaign
+		if type(c) ~= "table" or not Catalog.MARKETING.kinds[c.kind] or not isFinite(c.boost) or c.boost < 0 or c.boost > 1
+			or not isFinite(c.days) or c.days <= 0 or not isFinite(c.progress) or c.progress < 0 or c.progress > c.days or type(c.name) ~= "string" then
+			return fail("La campaña publicitaria está dañada.")
+		end
 	end
 	if not isList(g.loans) then
 		return fail("Las deudas están dañadas.")
@@ -944,6 +950,21 @@ MIGRATIONS[10] = function(g: any, _now: number)
 	g.schema = 11
 end
 
+-- 11 → 12: marketing nuevo. La campaña por niveles (cobro mensual) que estaba activa ya tenía pagado el mes:
+-- sigue como campaña corporativa con el mismo efecto por los días que le quedaban a ese mes.
+local OLD_CAMPAIGN_BOOST = { 0.15, 0.3, 0.45 }
+MIGRATIONS[11] = function(g: any, _now: number)
+	local lvl = tonumber(g.promo) or 0
+	g.promo = nil
+	g.campaign = nil
+	local boost = OLD_CAMPAIGN_BOOST[lvl]
+	if boost then
+		local left = math.max(1, math.floor((Rules.monthMinutes(g.time.day) - (g.time.minute or 0)) / Catalog.RULES.gameDayMinutes))
+		g.campaign = { id = "m-mig", kind = "corporativa", name = g.company.name, budget = 0, boost = math.min(boost, 1), days = left, progress = 0, cost = 0, startDay = Rules.absDay(g) }
+	end
+	g.schema = 12
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1285,6 +1306,7 @@ function GameState.live(g: any): any
 		money = g.money, rp = g.rp, xp = g.xp, level = g.level, reputation = g.reputation, bankFull = g.bankFull,
 		payroll = table.clone(g.payroll),
 		trainings = Util.deepCopy(g.trainings),
+		campaign = g.campaign and table.clone(g.campaign) or false,
 		time = table.clone(g.time),
 		counters = table.clone(g.counters),
 		month = table.clone(g.stats.month),
@@ -1300,7 +1322,7 @@ end
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
-		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
+		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), g.campaign and g.campaign.id or "-", tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
 	end

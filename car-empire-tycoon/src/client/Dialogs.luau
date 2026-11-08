@@ -790,6 +790,83 @@ Dialogs.training = function(box: Frame, params: any)
 	footer(box, { closeBtn("Cancelar"), ok })
 end
 
+--[[ Nueva campaña: tipo, modelo (de modelo), presupuesto mensual y duración. Muestra costo total y efecto
+	antes de pagar con el mismo cálculo que cobra el servidor (Rules.campaignPlan). ]]
+local BUDGET_STEPS = { 0.25, 0.5, 1, 2, 4, 8 }
+local DAY_STEPS = { 15, 30, 60, 90, 120, 180 }
+Dialogs.campaign = function(box: Frame, _params: any)
+	local g = App.g
+	local MK = Catalog.MARKETING
+	local era = Rules.marketingEra(g)
+	local st = App.ui.campaignDraft
+	if not st then
+		st = { kind = "modelo", designId = nil, budget = Util.round(MK.budgetRef * era), days = 30 }
+		App.ui.campaignDraft = st
+	end
+	header(box, "Nueva campaña publicitaria")
+	local b = body(box)
+	local kinds = {}
+	for _, k in MK.order do
+		local kd = MK.kinds[k]
+		table.insert(kinds, Ui.opt(kd.name, st.kind == k, function()
+			st.kind = k
+			App.renderDialog()
+		end, { name = "Tipo_" .. k, fill = true, height = 36 }))
+	end
+	Ui.col({ Ui.lbl("Tipo"), Ui.grid(kinds, 2, nil, 8), Ui.text(MK.kinds[st.kind].desc, { size = Ui.S.xs, color = T.mut }) }, 6).Parent = b
+	if st.kind == "modelo" then
+		local models = {}
+		for _, l in g.lots do
+			if l.saleState ~= "agotado" and l.saleState ~= "retirado" then
+				table.insert(models, { l.designId, l.design.name .. " · " .. l.saleState })
+			end
+		end
+		if #models > 0 and not st.designId then
+			st.designId = models[1][1]
+		end
+		if #models > 0 then
+			Ui.selectF("Modelo promocionado", st.designId, models, function(v: any)
+				st.designId = v
+				App.renderDialog()
+			end, { height = 34, name = "ModeloCampana" }).Parent = b
+		end
+	end
+	local budgets = {}
+	for _, m in BUDGET_STEPS do
+		local v = Util.round(MK.budgetRef * era * m / 100) * 100
+		table.insert(budgets, Ui.opt(Util.money(v), st.budget == v, function()
+			st.budget = v
+			App.renderDialog()
+		end, { name = "Presupuesto_" .. m, fill = true, height = 34 }))
+	end
+	Ui.col({ Ui.lbl("Presupuesto mensual"), Ui.grid(budgets, App.isPhone() and 2 or 3, nil, 6) }, 6).Parent = b
+	local days = {}
+	for _, d in DAY_STEPS do
+		table.insert(days, Ui.opt(d .. " días", st.days == d, function()
+			st.days = d
+			App.renderDialog()
+		end, { name = "Dias_" .. d, fill = true, height = 34 }))
+	end
+	Ui.col({ Ui.lbl("Duración"), Ui.grid(days, App.isPhone() and 2 or 3, nil, 6) }, 6).Parent = b
+	local plan, why = Rules.campaignPlan(g, { kind = st.kind, designId = st.designId, budget = st.budget, days = st.days })
+	if plan then
+		local eff = plan.boost * (1 + Rules.staff(g, "mk_creatividad"))
+		priceCard({ "Efecto|+" .. Util.round(eff * 100) .. " % de demanda", "Duración|" .. plan.days .. " días de juego" }, Util.money(plan.cost)).Parent = b
+		Ui.text("Más presupuesto suma efecto, cada vez menos (rendimientos decrecientes). Se paga al empezar; cancelar no devuelve dinero.", { size = Ui.S.xs, color = T.mut }).Parent = b
+	else
+		Ui.note("y", why or "Campaña inválida.").Parent = b
+	end
+	local ok
+	ok = Ui.button("Pagar y lanzar", "p", function()
+		local r = App.request("startCampaign", { kind = st.kind, designId = st.designId, budget = st.budget, days = st.days }, { button = ok })
+		if r and r.ok then
+			App.ui.campaignDraft = nil
+			App.closeDialog()
+		end
+	end, { name = "LanzarCampana", disabled = plan == nil or Rules.campaign(g) ~= nil or g.money < plan.cost, why = Rules.campaign(g) and "Ya hay una campaña activa" or (plan and "Fondos insuficientes" or why) })
+	footer(box, { closeBtn("Cancelar"), ok })
+end
+
 Dialogs.deleteCompany = function(box: Frame, params: any)
 	header(box, "¿Eliminar " .. tostring(params.name) .. "?", false)
 	local b = body(box)

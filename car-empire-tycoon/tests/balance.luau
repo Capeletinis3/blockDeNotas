@@ -326,23 +326,24 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 			end
 		end
 	end
-	-- Campaña: el nivel que más ganancia extra deja (estimada con el margen de los últimos 3 meses).
+	-- Campaña corporativa de 60 días si la ganancia extra estimada (margen de los últimos 3 meses) supera el costo.
 	local function campaign()
-		if flat or g.time.day % 3 ~= 0 then
+		if flat or Rules.campaign(g) or Rules.modelsOnSale(g) == 0 then
 			return
 		end
 		local monthly = Rules.finance(g, 3).margin / 3
-		local best, bestV = 0, 0
-		for lvl = 1, #Catalog.CAMPAIGNS do
-			if Rules.campaignBlock(g, lvl) == nil then
-				local v = monthly * Catalog.CAMPAIGNS[lvl].boost * 0.5 - Rules.campaignCost(g, lvl)
-				if v > bestV then
-					best, bestV = lvl, v
+		local best, bestV
+		for _, m in { 0.5, 1, 2, 4 } do
+			local plan = Rules.campaignPlan(g, { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g) * m), days = 60 })
+			if plan then
+				local v = monthly * 2 * plan.boost * 0.5 - plan.cost
+				if v > 0 and (not bestV or v > bestV) then
+					best, bestV = plan, v
 				end
 			end
 		end
-		if (tonumber(g.promo) or 0) ~= best then
-			Actions.setCampaign(g, ctx, { level = best })
+		if best and g.money > best.cost * 3 then
+			Actions.startCampaign(g, ctx, { kind = "corporativa", budget = best.budget, days = 60 })
 		end
 	end
 	local lastYear = Rules.year(g)

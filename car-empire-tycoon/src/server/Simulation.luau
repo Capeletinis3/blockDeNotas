@@ -570,6 +570,19 @@ function Simulation.stepTrainings(g: any, ctx: any, minutes: number)
 	end
 end
 
+-- Campaña: avanza con el calendario (comunicación la hace durar más) y termina sola.
+function Simulation.stepCampaign(g: any, ctx: any, minutes: number)
+	local c = Rules.campaign(g)
+	if not c then
+		return
+	end
+	c.progress = math.min(c.days, c.progress + minutes / Catalog.RULES.gameDayMinutes * Rules.campaignSpeed(g))
+	if c.progress >= c.days - 1e-9 then
+		g.campaign = nil
+		Simulation.notify(g, ctx, "info", "Terminó la campaña «" .. c.name .. "».", "ventas")
+	end
+end
+
 -- Adaptación diaria de quienes trabajan fuera de su especialidad.
 function Simulation.stepStaff(g: any, minutes: number)
 	local S = Catalog.STAFF
@@ -588,13 +601,11 @@ function Simulation.monthRollover(g: any, ctx: any)
 	-- Los movimientos de este bloque pertenecen al mes que empieza.
 	Simulation.payroll(g, ctx)
 	Simulation.ensureMarket(g, ctx)
+	-- Campaña corporativa: reconocimiento de marca (la reputación sube un poco cada mes, según el efecto).
 	local camp = Rules.campaign(g)
-	if camp then
-		local cost = Rules.campaignCost(g, camp.level)
-		if not Simulation.spend(g, cost, "promocion", "Campaña «" .. camp.name .. "» del mes") then
-			g.promo = 0
-			Simulation.notify(g, ctx, "aviso", "La campaña publicitaria se detuvo por falta de fondos.", "ventas")
-		end
+	if camp and camp.kind == "corporativa" then
+		local k = Catalog.MARKETING.kinds.corporativa
+		g.reputation = clamp(g.reputation + k.repPerMonth * Rules.campaignBoost(g) / k.maxBoost, 1, 5)
 	end
 	-- Reputación: se acerca al nivel que justifica el atractivo de lo que vendiste el mes pasado.
 	local m = g.stats.month
@@ -685,6 +696,7 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		Simulation.stepResearch(g, ctx, step)
 		Simulation.stepStaff(g, step)
 		Simulation.stepTrainings(g, ctx, step)
+		Simulation.stepCampaign(g, ctx, step)
 	end
 end
 

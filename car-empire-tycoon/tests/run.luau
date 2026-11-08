@@ -1065,7 +1065,7 @@ test("Migración 3 → 4: historial permanente desde los lotes, campaña y segur
 	old.schema = 3
 	old.lotHistory = jsonCopy(full)
 	old.modelHistory, old.launched, old.marketShare = nil, nil, nil
-	old.promo = true
+	old.promo = true -- campaña de la versión 3 (radio y prensa)
 	old.designs[1].parts.seguridad = nil
 	local m, err = GameState.migrate(old, 1)
 	check(m ~= nil, "migra: " .. tostring(err))
@@ -1074,7 +1074,7 @@ test("Migración 3 → 4: historial permanente desde los lotes, campaña y segur
 	eq(m.schema, GameState.SCHEMA, "esquema actual")
 	eq(#m.modelHistory, 1, "un resumen")
 	eq(m.modelHistory[1].sold, 20 + 40 + 60, "con todas las ventas")
-	eq(m.promo, 1, "la campaña activa pasa a radio y prensa")
+	check(m.promo == nil and m.campaign ~= nil and m.campaign.kind == "corporativa" and math.abs(m.campaign.boost - 0.15) < 1e-9, "la campaña activa sigue como corporativa con su efecto")
 	eq(m.designs[1].parts.seguridad, "basica", "seguridad básica en los diseños viejos")
 	check(m.lotHistory[1].design.calc == nil, "historial reciente liviano")
 	eq(m.money, old.money, "no cambia el dinero")
@@ -1119,18 +1119,10 @@ test("[C24] Competidores: generaciones, precios que importan y reacción a tu cu
 	check((g.marketShare.compacto or 0) > 0, "la cuota de mercado se registra")
 end)
 
-test("Inversiones: campaña paga el primer mes al activarse, duplicar paga ingeniería", function()
+test("Inversiones: duplicar paga ingeniería", function()
 	local g = newCompany("Gasto SA")
 	local ctx = makeCtx(48)
 	g.money = 500000
-	check(not Actions.setCampaign(g, ctx, { level = 1 }).ok, "sin investigar no hay campaña")
-	table.insert(g.research.done, "mk1")
-	local m = g.money
-	check(Actions.setCampaign(g, ctx, { level = 1 }).ok, "radio y prensa")
-	eq(g.money, m - Rules.campaignCost(g, 1), "primer mes cobrado enseguida")
-	check(not Actions.setCampaign(g, ctx, { level = 2 }).ok, "televisión requiere otra investigación")
-	check(Actions.setCampaign(g, ctx, { level = 0 }).ok, "apagar")
-	eq(g.money, m - Rules.campaignCost(g, 1), "apagar no devuelve ni cobra")
 	local id = saveNew(g, ctx, "brisa")
 	local m2 = g.money
 	check(Actions.dupDesign(g, ctx, { designId = id }).ok, "duplicar")
@@ -1800,11 +1792,6 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 	end, 10), "y se termina")
 	-- Modelo nuevo, campaña, empleado y lote.
 	local id = saveNew(g, ctx, "brisa", "Posterior")
-	check(Actions.setCampaign(g, ctx, { level = 1 }).ok or Rules.campaignBlock(g, 1) ~= nil, "campaña (si está investigada)")
-	if Rules.campaignBlock(g, 1) ~= nil then
-		table.insert(g.research.done, "mk1")
-		check(Actions.setCampaign(g, ctx, { level = 1 }).ok, "campaña activada")
-	end
 	check(Actions.searchCandidates(g, ctx, { kind = "general" }).ok, "busca candidatos")
 	local cand = g.candidates[1]
 	check(cand ~= nil and Actions.hire(g, ctx, { candidateId = cand.id }).ok, "contrata")
@@ -1812,8 +1799,11 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 	check(lot.ok, lot.msg)
 	check(launchWhenReady(g, ctx, lot.lotId), "terminado, con reseñas y a la venta")
 	check(orderLot(g, ctx, id, 40000).ok, "otro modelo en fabricación durante los años extra")
+	local camp = Actions.startCampaign(g, ctx, { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = 180 })
+	check(camp.ok, "campaña corporativa: " .. camp.msg)
+	check(g.ledger[#g.ledger].type == "promocion", "se cobra la campaña")
 	local produced0, sold0 = g.counters.unitsProduced, g.counters.unitsSold
-	local promo0, sal0 = 0, 0
+	local sal0 = 0
 	local day0 = g.time.day
 	-- Tres horas reales después del final del calendario.
 	runReal(g, ctx, 180)
@@ -1822,13 +1812,11 @@ test("[F2] Después del último año: producción, ventas, campañas, salarios, 
 	check(g.counters.unitsProduced > produced0, "sigue fabricando")
 	check(g.counters.unitsSold > sold0, "sigue vendiendo")
 	for _, e in g.ledger do
-		if e.type == "promocion" then
-			promo0 += 1
-		elseif e.type == "salarios" then
+		if e.type == "salarios" then
 			sal0 += 1
 		end
 	end
-	check(promo0 > 0, "se cobran las campañas")
+	check(Rules.campaign(g) == nil, "la campaña terminó sola")
 	check(sal0 > 0, "se pagan los salarios")
 	lotInvariants(g)
 	-- Nueva generación después de 2030: hace falta un año comercial desde la anterior.
@@ -1975,14 +1963,17 @@ test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué in
 	g.sede = 5
 	check(not Actions.expandGlobal(g, ctx, {}).ok, "sin las ventas pedidas no hay expansión")
 	g.counters.unitsSold = 1000000
-	table.insert(g.research.done, "mk1")
-	local dem, camp, line = Rules.demand(g, "sedan"), Rules.campaignCost(g, 1), Rules.lineRate(g)
+	local function corpCost(): number
+		local p = Rules.campaignPlan(g, { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = 30 })
+		return p and p.cost or 0
+	end
+	local dem, camp, line = Rules.demand(g, "sedan"), corpCost(), Rules.lineRate(g)
 	local nx = Rules.nextExpansion(g)
 	local m = g.money
 	check(Actions.expandGlobal(g, ctx, {}).ok, "se expande")
 	eq(g.money, m - nx.cost, "cobra el costo")
 	check(math.abs(Rules.demand(g, "sedan") / dem - (1 + Catalog.EXPANSION.demand)) < 1e-6, "+15 % de demanda")
-	check(Rules.campaignCost(g, 1) > camp and Rules.lineRate(g) > line, "campañas más caras y líneas más rápidas")
+	check(corpCost() > camp and Rules.lineRate(g) > line, "campañas corporativas más caras y líneas más rápidas")
 	check(Rules.nextExpansion(g).cost > nx.cost, "la siguiente región cuesta más")
 	g.money = 1e12
 	for _ = 2, #Catalog.EXPANSION.regions do
@@ -3108,6 +3099,79 @@ test("[I4] Capacitaciones: niveles por oficinas, mejora garantizada, simultánea
 	local gen = Staff.trainingPlan(g, { scope = "general", level = "basico", skill = "organizacion" }, Rules.officeLevel(g), Rules.year(g))
 	check(gen ~= nil and #gen.members >= 1, "general para quienes pueden mejorar")
 	check(GameState.validate(g), "válida al final")
+end)
+
+test("[I5] Marketing: campaña de modelo y corporativa, presupuesto con rendimientos decrecientes, una activa y cancelación", function()
+	local Staff = require("./.build/shared/Staff")
+	local g = bigCompany("Marca SA")
+	local ctx = makeCtx(501)
+	local idA = saveNew(g, ctx, "brisa", "Sedán A")
+	local idB = saveNew(g, ctx, "duna", "Coupé B")
+	local la = Actions.createLot(g, ctx, { designId = idA, qty = 4000 }).lotId
+	local lb = Actions.createLot(g, ctx, { designId = idB, qty = 4000 }).lotId
+	check(launchWhenReady(g, ctx, la) and launchWhenReady(g, ctx, lb), "dos modelos a la venta")
+	local A, B = findLot(g, la), findLot(g, lb)
+	local era = Rules.marketingEra(g)
+	local ref = Catalog.MARKETING.budgetRef * era
+	-- El servidor calcula costo y efecto: no acepta montos fuera de rango ni duraciones inválidas.
+	check(Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = 1, days = 30 }) == nil, "presupuesto fuera de rango")
+	check(Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref, days = 7 }) == nil, "duración fuera de rango")
+	check(Rules.campaignPlan(g, { kind = "modelo", designId = "nada", budget = ref, days = 30 }) == nil, "modelo inexistente")
+	-- Rendimientos decrecientes.
+	local p1 = Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref, days = 30 })
+	local p2 = Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref * 2, days = 30 })
+	local p4 = Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref * 4, days = 30 })
+	check(p2.boost > p1.boost and p4.boost > p2.boost, "más presupuesto, más efecto")
+	check(p4.boost - p2.boost < p2.boost - p1.boost, "cada vez menos (rendimientos decrecientes)")
+	eq(p2.cost, 2 * p1.cost, "el costo sigue al presupuesto")
+	local p60 = Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref, days = 60 })
+	eq(p60.cost, 2 * p1.cost, "y a la duración")
+	-- Campaña de modelo: solo ese auto.
+	local rA, rB = Rules.lotPotentialRate(g, A), Rules.lotPotentialRate(g, B)
+	local m0 = g.money
+	local r = Actions.startCampaign(g, ctx, { kind = "modelo", designId = idA, budget = ref, days = 30, cost = 1 })
+	check(r.ok, r.msg)
+	eq(m0 - g.money, p1.cost, "se paga al empezar lo que calcula el servidor (ignora montos del cliente)")
+	check(Rules.lotPotentialRate(g, A) > rA * 1.05 and Rules.campaignMult(g, A) > 1.4, "el modelo promocionado vende más (" .. Util.num(rA, 1) .. " → " .. Util.num(Rules.lotPotentialRate(g, A), 1) .. "/min)")
+	check(math.abs(Rules.lotPotentialRate(g, B) - rB) / rB < 0.2, "el otro casi igual (solo compite con el promocionado)")
+	check(not Actions.startCampaign(g, ctx, { kind = "corporativa", budget = ref, days = 30 }).ok, "una sola campaña activa")
+	-- Cancelar: no devuelve dinero y permite empezar otra enseguida.
+	local m1 = g.money
+	check(Actions.cancelCampaign(g, ctx, {}).ok, "cancelada")
+	eq(g.money, m1, "sin reembolso")
+	-- Corporativa: más cara (tamaño y modelos en venta), afecta a todos y suma reputación.
+	local corp = Rules.campaignPlan(g, { kind = "corporativa", budget = ref, days = 30 })
+	check(corp.cost > p1.cost, "la corporativa cuesta más (" .. Util.money(corp.cost) .. " vs " .. Util.money(p1.cost) .. ")")
+	rA, rB = Rules.lotPotentialRate(g, A), Rules.lotPotentialRate(g, B)
+	check(Actions.startCampaign(g, ctx, { kind = "corporativa", budget = ref, days = 30 }).ok, "corporativa inmediatamente después")
+	check(Rules.lotPotentialRate(g, A) > rA and Rules.lotPotentialRate(g, B) > rB, "todos los modelos venden más")
+	local rep0 = g.reputation
+	Simulation.monthRollover(g, ctx)
+	check(g.reputation > rep0, "reconocimiento de marca")
+	-- Avanza con el calendario y termina sola (la pausa = no se simula).
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 29)
+	check(Rules.campaign(g) ~= nil, "todavía activa al día 29")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 1.5)
+	check(Rules.campaign(g) == nil, "terminó a los 30 días")
+	-- Personal de Marketing: más efecto, menos costo y más duración.
+	Simulation.ensureMarket(g, ctx)
+	for _ = 1, 3 do
+		local c = Simulation.makeCandidate(g, ctx, "marketing")
+		c.spec = "marketing"
+		for _, k in Staff.dept("marketing").skills do
+			c.skills[k], c.potential[k] = 90, 100
+		end
+		table.insert(g.candidates, c)
+		check(Actions.hire(g, ctx, { candidateId = c.id, dept = "marketing" }).ok, "contrata marketing")
+	end
+	local staffed = Rules.campaignPlan(g, { kind = "modelo", designId = idA, budget = ref, days = 30 })
+	check(staffed.cost < p1.cost, "análisis de mercado baja el costo")
+	check(Actions.startCampaign(g, ctx, { kind = "modelo", designId = idA, budget = ref, days = 30 }).ok, "otra campaña")
+	check(Rules.campaignBoost(g) > staffed.boost, "creatividad sube el efecto")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 31)
+	check(Rules.campaign(g) ~= nil, "comunicación la hace durar más de 30 días")
+	check(GameState.validate(g), "válida")
+	check(GameState.validate(jsonCopy(g)), "se guarda")
 end)
 
 T.finish()

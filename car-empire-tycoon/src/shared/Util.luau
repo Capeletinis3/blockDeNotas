@@ -218,6 +218,9 @@ function Util.mergeLive(game: any, live: any)
 	game.bankFull = live.bankFull
 	game.payroll = live.payroll or game.payroll
 	game.trainings = live.trainings or game.trainings
+	if live.campaign ~= nil then
+		game.campaign = live.campaign or nil
+	end
 	if game.stats then
 		game.stats.month = live.month or game.stats.month
 		if live.dayKey and live.day then

@@ -38,7 +38,11 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Individual, por departamento y general; básico desde el inicio, intermedio y avanzado con oficinas nivel 2 y 3.
   - Costo, días y resultado de cada participante visibles antes de pagar (mismo cálculo en servidor); sin azar; tope = potencial.
   - Varias a la vez, una por empleado; productividad 80 % mientras dura; avanza con el reloj único. Esquema 11.
-- [ ] 5. Marketing
+- [x] 5. Marketing (`Catalog.MARKETING`, `Rules.campaignPlan`)
+  - Campaña de modelo (un auto) o corporativa (todos los modelos en venta + reputación; más cara según tamaño y modelos en venta).
+  - Presupuesto mensual y duración elegibles; efecto con rendimientos decrecientes; costo y efecto calculados en el servidor.
+  - Una activa, pago al inicio, avanza con el calendario, cancelable sin reembolso. Personal: creatividad (efecto), análisis (costo), comunicación (duración).
+  - Esquema 12: la campaña por niveles activa sigue como corporativa por el resto del mes ya pagado.
 - [ ] 6. Instalaciones
 - [ ] 7. Investigación
 - [ ] 8. Ciclo automotriz

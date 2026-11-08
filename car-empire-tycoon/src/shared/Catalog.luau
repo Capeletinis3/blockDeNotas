@@ -99,12 +99,23 @@ Catalog.ECON = {
 	researchMoneyPerPi = { { 1970, 600 }, { 1980, 1500 }, { 1990, 4000 }, { 2000, 8000 }, { 2010, 12000 }, { 2030, 16000 } },
 }
 
--- Campañas publicitarias: cada nivel requiere su investigación (y su época). boost = atractivo extra para
--- todos los autos en venta; cost = multiplicador del costo mensual base de la sede (SEDES[i].campaign).
-Catalog.CAMPAIGNS = {
-	{ level = 1, name = "Radio y prensa", research = "mk1", boost = 0.15, cost = 1 },
-	{ level = 2, name = "Televisión nacional", research = "mk2", boost = 0.3, cost = 2.5 },
-	{ level = 3, name = "Campaña digital", research = "mk4", boost = 0.45, cost = 5 },
+--[[ Marketing (valores provisionales). Una campaña activa por empresa, pagada al empezar y cancelable sin
+	reembolso. El jugador elige tipo, modelo (si corresponde), presupuesto MENSUAL y duración en días de juego.
+	Costo = presupuesto × días / 30 (corporativa: × tamaño de la empresa y modelos en venta) × época de la
+	economía − análisis de mercado. Efecto = maxBoost × (1 − e^(−presupuesto / referencia)): más presupuesto,
+	más efecto, con rendimientos decrecientes. ]]
+Catalog.MARKETING = {
+	kinds = {
+		modelo = { name = "Campaña de modelo", desc = "Más demanda para un auto específico.", maxBoost = 0.8 },
+		corporativa = { name = "Campaña corporativa", desc = "Más demanda para todos los modelos en venta y reconocimiento de marca.", maxBoost = 0.35, sizeCost = 0.25, perModelCost = 0.15, repPerMonth = 0.06 },
+	},
+	order = { "modelo", "corporativa" },
+	budgetMin = 1000, -- presupuesto mensual (× época)
+	budgetMax = 200000,
+	budgetRef = 12000, -- presupuesto con el que se logra ≈ 63 % del efecto máximo
+	daysMin = 15,
+	daysMax = 180,
+	era = { { 1970, 1 }, { 1980, 2.5 }, { 1990, 6 }, { 2000, 12 }, { 2010, 20 }, { 2030, 28 } },
 }
 
 -- Investigación: duración objetivo por nivel de importancia (minutos reales con la sede esperada de la época).

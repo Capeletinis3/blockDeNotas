@@ -547,40 +547,33 @@ function Actions.upgradeStation(g: any, ctx: any, payload: any): any
 	return { ok = true, msg = st[2] .. " mejorada a nivel " .. s.level .. ": la fábrica produce " .. Util.num(Rules.lineRate(g), 1) .. " autos/min por línea." }
 end
 
---[[ Campaña publicitaria por niveles (Catalog.CAMPAIGNS): cada nivel requiere su investigación. Al activar
-	o subir de nivel se paga el primer mes enseguida (así no se puede activar justo después del cobro mensual
-	y apagarla antes del siguiente); bajar o apagar no devuelve nada. payload = { level = 0..3 } ]]
-function Actions.setCampaign(g: any, _ctx: any, payload: any): any
-	local lvl = arg(payload, "level")
-	if not isInt(lvl, 0, #Catalog.CAMPAIGNS) then
-		return fail("Nivel de campaña inválido.")
+--[[ Campaña publicitaria: payload = { kind = "modelo" | "corporativa", designId?, budget (mensual), days }.
+	Una sola activa por empresa; se paga completa al empezar (Rules.campaignPlan calcula costo y efecto en el
+	servidor, sin confiar en montos del cliente). ]]
+function Actions.startCampaign(g: any, _ctx: any, payload: any): any
+	if Rules.campaign(g) then
+		return fail("Ya hay una campaña activa. Cancelala para empezar otra.")
 	end
-	local cur = tonumber(g.promo) or 0
-	if lvl == cur then
-		return { ok = true, quiet = true }
+	local plan, why = Rules.campaignPlan(g, { kind = arg(payload, "kind"), designId = arg(payload, "designId"), budget = arg(payload, "budget"), days = arg(payload, "days") })
+	if not plan then
+		return fail(why or "Campaña inválida.")
 	end
-	if lvl == 0 then
-		g.promo = 0
-		return { ok = true, msg = "Campaña publicitaria desactivada." }
+	local kind = Catalog.MARKETING.kinds[plan.kind]
+	if not Simulation.spend(g, plan.cost, "promocion", kind.name .. ": " .. plan.name) then
+		return fail("Fondos insuficientes: la campaña cuesta " .. money(plan.cost) .. ".")
 	end
-	local why = Rules.campaignBlock(g, lvl)
-	if why then
-		return fail(why .. ".")
-	end
-	local c = Catalog.CAMPAIGNS[lvl]
-	local cost = Rules.campaignCost(g, lvl)
-	if lvl > cur then
-		if not Simulation.spend(g, cost, "promocion", "Campaña «" .. c.name .. "» (primer mes)") then
-			return fail("Fondos insuficientes: el primer mes cuesta " .. money(cost) .. ".")
-		end
-	end
-	g.promo = lvl
-	return { ok = true, msg = "Campaña «" .. c.name .. "»: +" .. round(c.boost * 100) .. " % de atractivo para todos tus autos, " .. money(cost) .. " por mes." }
+	g.campaign = { id = GameState.uid(g, "m"), kind = plan.kind, designId = plan.designId, name = plan.name, budget = plan.budget, boost = plan.boost, days = plan.days, progress = 0, cost = plan.cost, startDay = Rules.absDay(g) }
+	return { ok = true, msg = kind.name .. " «" .. plan.name .. "»: " .. money(plan.cost) .. ", " .. plan.days .. " días, +" .. round(Rules.campaignBoost(g) * 100) .. " % de demanda." }
 end
 
--- Compatibilidad: el botón anterior prendía o apagaba la campaña del primer nivel.
-function Actions.toggleCampaign(g: any, ctx: any, _payload: any): any
-	return Actions.setCampaign(g, ctx, { level = ((tonumber(g.promo) or 0) > 0) and 0 or 1 })
+-- Cancelar la campaña: termina enseguida y no devuelve dinero; se puede empezar otra inmediatamente.
+function Actions.cancelCampaign(g: any, _ctx: any, _payload: any): any
+	local c = Rules.campaign(g)
+	if not c then
+		return fail("No hay ninguna campaña activa.")
+	end
+	g.campaign = nil
+	return { ok = true, msg = "Campaña cancelada. El dinero ya invertido no se devuelve." }
 end
 
 -- Investigación ------------------------------------------------------------------------------
@@ -841,7 +834,7 @@ Actions.handlers = {
 	setIdentity = Actions.setIdentity, expandSede = Actions.expandSede, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
-	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
+	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, startCampaign = Actions.startCampaign, cancelCampaign = Actions.cancelCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
 	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept, startTraining = Actions.startTraining,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
@@ -854,7 +847,7 @@ Actions.readOnly = { saveNow = true }
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
-	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
+	upgradeStation = true, startCampaign = true, cancelCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
 	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
 }
 

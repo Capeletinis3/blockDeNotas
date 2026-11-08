@@ -198,7 +198,7 @@ function Screen.build(main: Frame, side: Frame)
 		Rules.expansion(g) > 0 and Ui.between("Mercado mundial (" .. Rules.expansion(g) .. " regiones)", "×" .. Util.num(Rules.marketFactor(g), 2)) or nil,
 		Ui.between("Reputación", Util.num(g.reputation, 1) .. " / 5"),
 		Ui.between("Multiplicador comercial", "×" .. Util.num(Rules.playerMult(g), 2)),
-		Rules.campaign(g) and Ui.between("Campaña «" .. Rules.campaign(g).name .. "»", "+" .. Util.round(Rules.campaign(g).boost * 100) .. " %", { color = T.gr }) or nil,
+		Rules.campaign(g) and Ui.between("Campaña «" .. Rules.campaign(g).name .. "»", "+" .. Util.round(Rules.campaignBoost(g) * 100) .. " %", { color = T.gr }) or nil,
 	}, { gap = 6, name = "TuEmpresa" }).Parent = side
 end
 

@@ -55,7 +55,7 @@ function Screen.head(g: any): { Instance }
 	local out = { Ui.chip(n .. (n == 1 and " modelo en venta" or " modelos en venta"), "cg") }
 	local camp = Rules.campaign(g)
 	if camp then
-		table.insert(out, Ui.chip("Campaña: " .. camp.name, "cy"))
+		table.insert(out, Ui.chip(Catalog.MARKETING.kinds[camp.kind].name .. ": " .. camp.name, "cy"))
 	end
 	return out
 end
@@ -256,23 +256,33 @@ function Screen.build(main: Frame, side: Frame)
 		Ui.between("Ingresos (últimos 3 meses)", Util.money(f.revenue), { color = T.gr }),
 		Ui.between("Margen de lo vendido", Util.money(f.margin), { color = f.margin >= 0 and T.gr or T.re2 }),
 	}, { gap = 6, name = "Ritmo" }).Parent = side
-	-- Campaña publicitaria por niveles: cada uno requiere su investigación; el primer mes se paga al activarla.
-	local cur = tonumber(g.promo) or 0
-	local opts: { Instance? } = {}
-	table.insert(opts, Ui.opt("Sin campaña", cur == 0, function()
-		App.request("setCampaign", { level = 0 })
-	end, { height = 34, fill = true, name = "Campana_0" }))
-	for _, c in Catalog.CAMPAIGNS do
-		local why = Rules.campaignBlock(g, c.level)
-		table.insert(opts, Ui.opt(c.name .. " · +" .. Util.round(c.boost * 100) .. " % · " .. Util.money(Rules.campaignCost(g, c.level)) .. "/mes", cur == c.level, function()
-			App.request("setCampaign", { level = c.level })
-		end, { height = 34, fill = true, autoY = true, name = "Campana_" .. c.level, disabled = why ~= nil, why = why }))
+	-- Marketing: una campaña activa por empresa (de modelo o corporativa), pagada al empezar.
+	local camp = Rules.campaign(g)
+	local mk: { Instance? } = { Ui.lbl("Marketing") }
+	if camp then
+		local bar = Ui.bar(camp.progress / camp.days * 100, T.ye)
+		table.insert(mk, Ui.text(Catalog.MARKETING.kinds[camp.kind].name .. " · «" .. camp.name .. "»", { size = Ui.S.sm, weight = W.bold }))
+		table.insert(mk, bar)
+		table.insert(mk, Ui.text("+" .. Util.round(Rules.campaignBoost(g) * 100) .. " % de demanda · " .. math.floor(camp.progress) .. "/" .. camp.days .. " días", { size = Ui.S.xs, color = T.mut }))
+		table.insert(mk, Ui.button("Cancelar campaña", "q", function()
+			App.openDialog("confirm", {
+				title = "¿Cancelar la campaña?",
+				body = "Termina enseguida y el dinero invertido (" .. Util.money(camp.cost) .. ") no se devuelve. Después podés empezar otra.",
+				okLabel = "Cancelar campaña",
+				cancel = "Seguir",
+				danger = true,
+				onOk = function()
+					App.request("cancelCampaign", {})
+				end,
+			})
+		end, { small = true, fill = true, name = "CancelarCampana" }))
+	else
+		table.insert(mk, Ui.text("Sin campaña activa. Una campaña de modelo promociona un auto; la corporativa, toda la marca.", { size = Ui.S.xs, color = T.mut }))
+		table.insert(mk, Ui.button("Nueva campaña", "p", function()
+			App.openDialog("campaign", {})
+		end, { small = true, fill = true, name = "NuevaCampana" }))
 	end
-	Ui.card({
-		Ui.lbl("Campaña publicitaria"),
-		Ui.text("Suma atractivo a todos tus autos en venta. Se paga cada mes; al activarla o subir de nivel se cobra el primer mes enseguida.", { size = Ui.S.xs, color = T.mut }),
-		Ui.col(opts, 6),
-	}, { gap = 8, name = "Campana" }).Parent = side
+	Ui.card(mk, { gap = 8, name = "Campana" }).Parent = side
 	Ui.card({
 		Ui.lbl("Qué hace vender un auto"),
 		Ui.text("• <b>Demanda</b> del tipo de vehículo en el año actual (Mercado).\n• <b>Atractivo</b>: calidad y prestaciones según el objetivo del diseño, frente a lo que el mercado espera en esa época.\n• <b>Precio</b>: por encima del de referencia vende menos; por debajo, más.\n• <b>Reputación</b> (" .. Util.num(g.reputation, 1) .. "/5) y <b>alcance</b> de la sede (×" .. Util.num(Rules.sede(g).reach, 1) .. ").\n• <b>Rivales</b>: marcas que venden el mismo tipo.\nNo hay negociación: lo terminado se vende solo.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
