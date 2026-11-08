@@ -11,6 +11,7 @@ local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local DesignCalc = require(Shared.DesignCalc)
 local Rules = require(Shared.Rules)
+local Staff = require(Shared.Staff)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
@@ -731,6 +732,64 @@ Dialogs.testDrive = function(box: Frame)
 end
 
 -- Eliminar una ranura con datos dañados: se pide escribir BORRAR.
+--[[ Capacitación: params = { scope = "individual" | "departamento" | "general", employeeId?, dept? }. Muestra
+	antes de pagar el costo, la duración, la mejora garantizada y el resultado de cada participante (el mismo
+	cálculo que cobra el servidor: Staff.trainingPlan). ]]
+Dialogs.training = function(box: Frame, params: any)
+	local g = App.g
+	local st = App.ui.trainDraft
+	if not st or st.scope ~= params.scope or st.employeeId ~= params.employeeId or st.dept ~= params.dept then
+		local dept = params.dept or "produccion"
+		st = { scope = params.scope or "general", employeeId = params.employeeId, dept = params.dept, level = "basico", skill = Staff.dept(dept).skills[1] }
+		App.ui.trainDraft = st
+	end
+	header(box, "Capacitación · " .. (Catalog.TRAINING.scopes[st.scope] or st.scope))
+	local b = body(box)
+	local office = Rules.officeLevel(g)
+	local levels = {}
+	for _, l in Catalog.TRAINING.levels do
+		local locked = office < l.office
+		table.insert(levels, Ui.opt(l.name .. " · +" .. l.gain .. " · " .. l.days .. " días" .. (locked and (" · oficinas nivel " .. l.office) or ""), st.level == l.id, function()
+			if not locked then
+				st.level = l.id
+				App.renderDialog()
+			end
+		end, { name = "Nivel_" .. l.id, fill = true, height = 36, disabled = locked }))
+	end
+	Ui.col({ Ui.lbl("Nivel"), Ui.grid(levels, App.isPhone() and 1 or 3, nil, 8) }, 6).Parent = b
+	local skills = {}
+	for _, id in Staff.DEPT_ORDER do
+		for _, k in Staff.dept(id).skills do
+			table.insert(skills, { k, Staff.dept(id).name .. " · " .. Staff.skill(k).name })
+		end
+	end
+	Ui.selectF("Habilidad a mejorar", st.skill, skills, function(v: any)
+		st.skill = v
+		App.renderDialog()
+	end, { height = 34, name = "HabilidadCapacitacion" }).Parent = b
+	local plan, why = Staff.trainingPlan(g, { scope = st.scope, level = st.level, skill = st.skill, employeeId = st.employeeId, dept = st.dept }, office, Rules.year(g))
+	if not plan then
+		Ui.note("y", why or "No se puede capacitar.").Parent = b
+	else
+		priceCard({ "Participantes|" .. #plan.members, "Duración|" .. plan.days .. " días de juego", "Mejora garantizada|+" .. plan.gain .. " (hasta el potencial)" }, Util.money(plan.cost)).Parent = b
+		local rows: { Instance? } = { Ui.lbl("Resultado final de cada participante") }
+		for _, m in plan.members do
+			table.insert(rows, Ui.row({ Ui.grow(Ui.text(m.name, { size = Ui.S.sm })), Ui.inline(m.from .. " → " .. m.to, { size = Ui.S.sm, weight = W.bold, color = T.gr }) }, 8))
+		end
+		Ui.card(rows, { gap = 4, name = "Participantes" }).Parent = b
+		Ui.text("Mientras se capacitan siguen trabajando al " .. Util.round(Catalog.STAFF.trainingProductivity * 100) .. " % y al terminar recuperan su productividad. Cada empleado hace una capacitación a la vez.", { size = Ui.S.xs, color = T.mut }).Parent = b
+	end
+	local ok
+	ok = Ui.button("Pagar y empezar", "p", function()
+		local r = App.request("startTraining", { scope = st.scope, level = st.level, skill = st.skill, employeeId = st.employeeId, dept = st.dept }, { button = ok })
+		if r and r.ok then
+			App.ui.trainDraft = nil
+			App.closeDialog()
+		end
+	end, { name = "EmpezarCapacitacion", disabled = plan == nil or g.money < plan.cost, why = plan and "Fondos insuficientes" or why })
+	footer(box, { closeBtn("Cancelar"), ok })
+end
+
 Dialogs.deleteCompany = function(box: Frame, params: any)
 	header(box, "¿Eliminar " .. tostring(params.name) .. "?", false)
 	local b = body(box)

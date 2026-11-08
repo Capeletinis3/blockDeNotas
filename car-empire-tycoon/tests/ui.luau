@@ -413,6 +413,7 @@ test("Todos los diálogos se construyen", function()
 		{ "help", { screen = "fabrica" } }, { "future", { what = "amigos" } }, { "future", { what = "eventos" } }, { "future", { what = "tienda" } },
 		{ "news", {} }, { "prevModels", {} }, { "testDrive", {} },
 		{ "deleteCompany", { slot = "1", expected = "Ruta Norte", name = "Ruta Norte" } },
+		{ "training", { scope = "general" } }, { "training", { scope = "departamento", dept = "investigacion" } },
 	}
 	for _, k in kinds do
 		table.clear(M.log)
@@ -1081,6 +1082,73 @@ test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultá
 		clickN("Descartar")
 	end
 	noErrors("Etapa 3")
+end)
+
+test("Personal en la interfaz: departamentos, mercado laboral, contratar, detalle y capacitación", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.closeAllDialogs()
+	App.ui.editor = nil
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	sess.game.money = 5000000
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 5000000
+	end)
+	App.ui.staff = nil
+	App.go("personal")
+	M.task.wait()
+	for _, id in { "produccion", "investigacion", "marketing", "administracion" } do
+		check(named("Tarjeta_" .. id) ~= nil, "tarjeta " .. id)
+	end
+	clickN("AbrirMercado")
+	M.task.wait()
+	local c = App.g.candidates[1]
+	check(c ~= nil and named("Candidato_" .. c.id) ~= nil, "candidatos del mes")
+	local before = #App.g.employees
+	clickN("Contratar_" .. c.id)
+	check(waitFor(function()
+		return #App.g.employees == before + 1
+	end), "contrata desde el mercado")
+	local e = App.g.employees[#App.g.employees]
+	eq(e.dept, c.spec, "en su especialidad por defecto")
+	-- Búsqueda: pide confirmación antes de reemplazar.
+	clickN("BusquedaGeneral")
+	M.task.wait()
+	eq(topKind(), "confirm", "confirma antes de reemplazar a los candidatos")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return App.g.market.searches >= 1
+	end), "búsqueda hecha")
+	-- Departamento: lista y detalle; capacitación con vista previa.
+	App.ui.staff.view = "depto"
+	App.ui.staff.dept = e.dept
+	App.ui.staff.sel = e.id
+	App.forceRender()
+	M.task.wait()
+	check(named("ListaEmpleados") ~= nil and named("Detalle_" .. e.id) ~= nil, "lista a la izquierda y detalle a la derecha")
+	clickN("Capacitar_" .. e.id)
+	M.task.wait()
+	eq(topKind(), "training", "abre la capacitación")
+	check(named("Participantes") ~= nil or find("potencial") ~= nil, "muestra participantes y resultado (o el motivo)")
+	if named("Participantes") then
+		clickN("EmpezarCapacitacion")
+		check(waitFor(function()
+			return #(App.g.trainings or {}) >= 1
+		end), "capacitación en curso")
+	end
+	App.closeAllDialogs()
+	clickN("Capacitaciones")
+	M.task.wait()
+	check(App.ui.staff.view == "capacitaciones", "vista de capacitaciones")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Personal")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

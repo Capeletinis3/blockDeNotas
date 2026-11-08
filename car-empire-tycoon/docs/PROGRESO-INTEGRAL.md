@@ -34,7 +34,10 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
   - Sueldos al empezar el mes, deuda salarial, productividad que baja, 30 % de las ventas a la deuda; indemnización salario × años.
   - 8 candidatos por mes, búsqueda general/especializada (+50 % por búsqueda, contador compartido); sin costo de contratación.
   - Esquema 10: migración de empleados viejos (rol → departamento, habilidad y salario conservados).
-- [ ] 4. Capacitaciones
+- [x] 4. Capacitaciones (`Catalog.TRAINING`, `Staff.trainingPlan`)
+  - Individual, por departamento y general; básico desde el inicio, intermedio y avanzado con oficinas nivel 2 y 3.
+  - Costo, días y resultado de cada participante visibles antes de pagar (mismo cálculo en servidor); sin azar; tope = potencial.
+  - Varias a la vez, una por empleado; productividad 80 % mientras dura; avanza con el reloj único. Esquema 11.
 - [ ] 5. Marketing
 - [ ] 6. Instalaciones
 - [ ] 7. Investigación

@@ -144,6 +144,12 @@ function Rules.salaries(g: any): number
 	return Staff.salaries(g)
 end
 
+-- Nivel de las oficinas centrales (límite de empleados y niveles de capacitación).
+function Rules.officeLevel(g: any): number
+	local f = g.facilities
+	return (type(f) == "table" and tonumber(f.offices)) or g.sede or 1
+end
+
 -- Costo por unidad de un lote nuevo: el del diseño menos la eficiencia de Producción.
 function Rules.lotUnitCost(g: any, unitCost: number): number
 	return math.max(1, Util.round(unitCost * (1 - Rules.staff(g, "eficiencia"))))

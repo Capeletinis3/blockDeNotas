@@ -596,6 +596,20 @@ Catalog.STAFF = {
 	exceptionalChance = 0.03, -- candidato extraordinario, posible aun con reputación baja
 }
 
+--[[ Capacitaciones (valores provisionales). costo = cost × participantes × época; días de juego; gain = puntos
+	GARANTIZADOS (sin azar), que nunca superan el potencial de cada participante. office = nivel de oficinas
+	centrales que la habilita (Compañía › Instalaciones). Un empleado hace una sola a la vez y sigue
+	trabajando con menos productividad (STAFF.trainingProductivity). ]]
+Catalog.TRAINING = {
+	levels = {
+		{ id = "basico", name = "Básico", cost = 800, days = 20, gain = 3, office = 1 },
+		{ id = "intermedio", name = "Intermedio", cost = 2500, days = 45, gain = 7, office = 2 },
+		{ id = "avanzado", name = "Avanzado", cost = 7000, days = 90, gain = 12, office = 3 },
+	},
+	scopes = { individual = "Individual", departamento = "Departamento", general = "General (toda la empresa)" },
+	maxActive = 12, -- capacitaciones simultáneas como máximo (cada empleado, en una sola)
+}
+
 --[[ Investigación y desarrollo (I+D). Cuatro categorías del departamento de I+D: Chasis, Motores,
 	Seguridad y Tecnología. «Empresa (provisorio)» conserva las mejoras de producción y marketing de versiones
 	anteriores hasta que pasen a Instalaciones y Marketing. Cada nodo:

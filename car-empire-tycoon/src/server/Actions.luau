@@ -683,6 +683,36 @@ function Actions.searchCandidates(g: any, ctx: any, payload: any): any
 	return { ok = true, msg = "Búsqueda " .. (focus and ("especializada en " .. Staff.dept(focus).name) or "general") .. ": " .. #g.candidates .. " candidatos nuevos (" .. money(cost) .. "). La próxima del mes cuesta " .. money(Staff.searchCost(g, focus ~= nil, Rules.year(g))) .. "." }
 end
 
+--[[ Capacitación: payload = { scope = "individual" | "departamento" | "general", level, skill, employeeId?, dept? }.
+	El costo y el resultado de cada participante se calculan en el servidor (Staff.trainingPlan, el mismo cálculo
+	que muestra la vista previa), se pagan al empezar y la mejora es la anunciada. ]]
+function Actions.startTraining(g: any, _ctx: any, payload: any): any
+	g.trainings = g.trainings or {}
+	if #g.trainings >= Catalog.TRAINING.maxActive then
+		return fail("Ya hay " .. Catalog.TRAINING.maxActive .. " capacitaciones en curso.")
+	end
+	local req = {
+		scope = arg(payload, "scope"), level = arg(payload, "level"), skill = arg(payload, "skill"),
+		employeeId = arg(payload, "employeeId"), dept = arg(payload, "dept"),
+	}
+	local plan, why = Staff.trainingPlan(g, req, Rules.officeLevel(g), Rules.year(g))
+	if not plan then
+		return fail(why or "No se puede capacitar.")
+	end
+	if not Simulation.spend(g, plan.cost, "capacitacion", "Capacitación " .. plan.level.name .. " en " .. Staff.skill(req.skill).name) then
+		return fail("Fondos insuficientes: la capacitación cuesta " .. money(plan.cost) .. ".")
+	end
+	local t = { id = GameState.uid(g, "t"), level = plan.level.id, skill = req.skill, scope = req.scope, members = {}, results = {}, progress = 0, days = plan.days, cost = plan.cost }
+	for _, m in plan.members do
+		table.insert(t.members, m.id)
+		t.results[m.id] = m.to
+		local e = findById(g.employees, m.id)
+		e.training = t.id
+	end
+	table.insert(g.trainings, t)
+	return { ok = true, msg = "Capacitación " .. plan.level.name .. " en " .. Staff.skill(req.skill).name .. ": " .. #plan.members .. (#plan.members == 1 and " participante" or " participantes") .. ", " .. money(plan.cost) .. ", " .. plan.days .. " días. Mejora garantizada: +" .. plan.gain .. " (hasta el potencial de cada uno)." }
+end
+
 -- Despido: requiere pagar la indemnización (salario × años trabajados, proporcional). Nunca es automático.
 function Actions.fire(g: any, _ctx: any, payload: any): any
 	local e, i = findById(g.employees, arg(payload, "employeeId"))
@@ -813,7 +843,7 @@ Actions.handlers = {
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, toggleCampaign = Actions.toggleCampaign, setCampaign = Actions.setCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
-	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept,
+	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept, startTraining = Actions.startTraining,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
 	setSpeed = Actions.setSpeed,
 }
@@ -824,7 +854,7 @@ Actions.readOnly = { saveNow = true }
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
 	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
-	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true,
+	upgradeStation = true, toggleCampaign = true, setCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
 	claimMission = true, claimDaily = true, expandSede = true, expandGlobal = true,
 }
 

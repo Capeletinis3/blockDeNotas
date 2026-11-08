@@ -217,6 +217,7 @@ function Util.mergeLive(game: any, live: any)
 	end
 	game.bankFull = live.bankFull
 	game.payroll = live.payroll or game.payroll
+	game.trainings = live.trainings or game.trainings
 	if game.stats then
 		game.stats.month = live.month or game.stats.month
 		if live.dayKey and live.day then

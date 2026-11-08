@@ -180,4 +180,76 @@ function Staff.searchCost(g: any, special: boolean, year: number): number
 	return Util.round(base * math.pow(S.searchGrowth, n))
 end
 
+-- Capacitaciones ---------------------------------------------------------------------------
+
+function Staff.trainingLevel(id: any): any
+	for _, l in Catalog.TRAINING.levels do
+		if l.id == id then
+			return l
+		end
+	end
+	return nil
+end
+
+--[[ Plan de una capacitación (lo muestra la interfaz y lo cobra el servidor: mismo cálculo).
+	req = { scope = "individual" | "departamento" | "general", level, skill, employeeId?, dept? }
+	officeLevel = nivel de las oficinas centrales; year = año (escala el costo).
+	Devuelve { members = { { id, name, from, to } }, cost, days, gain, level } o (nil, motivo).
+	Solo participan quienes no están en otra capacitación y todavía pueden mejorar esa habilidad. ]]
+function Staff.trainingPlan(g: any, req: any, officeLevel: number, year: number): (any?, string?)
+	if type(req) ~= "table" then
+		return nil, "Datos de la capacitación inválidos."
+	end
+	local lvl = Staff.trainingLevel(req.level)
+	if not lvl then
+		return nil, "Nivel de capacitación desconocido."
+	end
+	if officeLevel < lvl.office then
+		return nil, "El nivel " .. lvl.name .. " requiere oficinas centrales de nivel " .. lvl.office .. " (Compañía › Instalaciones)."
+	end
+	local sk = Staff.skill(req.skill)
+	if not sk then
+		return nil, "Elegí la habilidad a mejorar."
+	end
+	local pool = {}
+	if req.scope == "individual" then
+		for _, e in g.employees do
+			if e.id == req.employeeId then
+				table.insert(pool, e)
+			end
+		end
+		if #pool == 0 then
+			return nil, "Ese empleado ya no está."
+		end
+		if pool[1].training ~= nil then
+			return nil, pool[1].name .. " ya está en una capacitación."
+		end
+	elseif req.scope == "departamento" then
+		if not Staff.dept(req.dept) then
+			return nil, "Departamento desconocido."
+		end
+		for _, e in g.employees do
+			if e.dept == req.dept then
+				table.insert(pool, e)
+			end
+		end
+	elseif req.scope == "general" then
+		pool = table.clone(g.employees)
+	else
+		return nil, "Tipo de capacitación desconocido."
+	end
+	local members = {}
+	for _, e in pool do
+		local from, pot = e.skills[req.skill] or 0, e.potential[req.skill] or 0
+		if e.training == nil and from < pot then
+			table.insert(members, { id = e.id, name = e.name, from = from, to = math.min(pot, from + lvl.gain) })
+		end
+	end
+	if #members == 0 then
+		return nil, "Nadie puede hacer esta capacitación: ya están en otra o llegaron a su potencial en " .. sk.name .. "."
+	end
+	local cost = Util.round(lvl.cost * #members * Staff.eraMult(year) / 10) * 10
+	return { members = members, cost = cost, days = lvl.days, gain = lvl.gain, level = lvl }, nil
+end
+
 return Staff

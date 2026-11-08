@@ -3051,6 +3051,65 @@ test("[I3] Mercado laboral: 8 por mes que se reemplazan, búsquedas con precio c
 	eq(#mg.candidates, 0, "los candidatos viejos se reemplazan al abrir")
 end)
 
+test("[I4] Capacitaciones: niveles por oficinas, mejora garantizada, simultáneas, una por empleado y productividad", function()
+	local Staff = require("./.build/shared/Staff")
+	local g = bigCompany("Capacita SA")
+	local ctx = makeCtx(401)
+	Simulation.ensureMarket(g, ctx)
+	for _, c in table.clone(g.candidates) do
+		check(Actions.hire(g, ctx, { candidateId = c.id, dept = c.spec }).ok, "contrata a " .. c.name)
+		if #g.employees >= 3 then
+			break
+		end
+	end
+	local a, b = g.employees[1], g.employees[2]
+	local skill = Staff.dept(a.dept).skills[1]
+	a.skills[skill], a.potential[skill] = 40, 100
+	-- Niveles: básico desde el comienzo; intermedio y avanzado con mejores oficinas.
+	g.sede = 1
+	local plan, why = Staff.trainingPlan(g, { scope = "individual", level = "intermedio", skill = skill, employeeId = a.id }, Rules.officeLevel(g), Rules.year(g))
+	check(plan == nil and string.find(why or "", "oficinas") ~= nil, "intermedio bloqueado con las oficinas iniciales")
+	check(not Actions.startTraining(g, ctx, { scope = "individual", level = "avanzado", skill = skill, employeeId = a.id }).ok, "el servidor también lo bloquea")
+	-- Vista previa = lo que se cobra y lo que se obtiene.
+	local req = { scope = "individual", level = "basico", skill = skill, employeeId = a.id }
+	plan = Staff.trainingPlan(g, req, Rules.officeLevel(g), Rules.year(g))
+	check(plan ~= nil and plan.members[1].from == 40 and plan.members[1].to == 43, "básico: 40 → 43 garantizado")
+	local m0 = g.money
+	local prod0 = Staff.productivity(g, a)
+	check(Actions.startTraining(g, ctx, req).ok, "empieza")
+	eq(m0 - g.money, plan.cost, "cobra lo anunciado")
+	check(Staff.productivity(g, a) < prod0, "mientras se capacita rinde menos (sigue trabajando)")
+	check(not Actions.startTraining(g, ctx, req).ok, "una capacitación a la vez por empleado")
+	-- Otra en paralelo, por departamento, que no incluye a quien ya se capacita.
+	g.sede = 3
+	local other = Staff.dept(b.dept).skills[2]
+	b.skills[other], b.potential[other] = 90, 95
+	local r = Actions.startTraining(g, ctx, { scope = "departamento", level = "avanzado", skill = other, dept = b.dept })
+	check(r.ok, "avanzada por departamento en paralelo: " .. r.msg)
+	eq(#g.trainings, 2, "dos simultáneas")
+	local t2 = g.trainings[2]
+	check(not table.find(t2.members, a.id) or a.dept ~= b.dept, "quien ya se capacita no entra en la otra")
+	eq(t2.results[b.id], 95, "nunca supera el potencial (90 + 12 → 95)")
+	-- Avanza con el calendario (la pausa = no se simula) y termina con lo anunciado.
+	local days = Staff.trainingLevel("basico").days
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * (days - 1))
+	eq(a.skills[skill], 40, "todavía en curso")
+	check(GameState.validate(g), "válida en curso")
+	local saved = jsonCopy(g)
+	check(GameState.validate(saved) and #saved.trainings == 2 and saved.trainings[1].progress > 0, "se guarda con su avance")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 1.5)
+	eq(a.skills[skill], 43, "recibe exactamente +3")
+	eq(a.training, nil, "termina")
+	eq(Staff.productivity(g, a), prod0, "recupera su productividad")
+	eq(#g.trainings, 1, "la otra sigue")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 100)
+	eq(b.skills[other], 95, "la avanzada llega al potencial y no lo pasa")
+	-- General: toda la empresa.
+	local gen = Staff.trainingPlan(g, { scope = "general", level = "basico", skill = "organizacion" }, Rules.officeLevel(g), Rules.year(g))
+	check(gen ~= nil and #gen.members >= 1, "general para quienes pueden mejorar")
+	check(GameState.validate(g), "válida al final")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

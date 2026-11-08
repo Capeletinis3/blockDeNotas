@@ -196,6 +196,44 @@ local function searchButton(g: any, special: boolean): Frame
 	end, { small = true, disabled = g.money < cost, why = "Fondos insuficientes", name = special and "BusquedaEspecial" or "BusquedaGeneral" })
 end
 
+-- Capacitaciones en curso y acceso a una capacitación general.
+function Screen.trainings(g: any, main: Frame, side: Frame)
+	local list = g.trainings or {}
+	if #list == 0 then
+		Ui.empty("flask", "No hay capacitaciones en curso. Podés capacitar a una persona (desde su detalle), a un departamento o a toda la empresa.").Parent = main
+	end
+	for _, t in list do
+		local lvl = Staff.trainingLevel(t.level)
+		local names = {}
+		for _, id in t.members do
+			for _, e in g.employees do
+				if e.id == id then
+					table.insert(names, e.name .. " (" .. (e.skills[t.skill] or 0) .. " → " .. (t.results[id] or 0) .. ")")
+				end
+			end
+		end
+		local bar = Ui.bar(t.progress / t.days * 100, T.vi)
+		Ui.card({
+			Ui.row({ Ui.grow(Ui.text(lvl.name .. " · " .. Staff.skill(t.skill).name, { size = Ui.S.base, weight = W.bold })), Ui.chip(math.floor(t.progress) .. "/" .. t.days .. " días", "cv") }, 8),
+			bar,
+			Ui.text(table.concat(names, " · "), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+		}, { gap = 6, name = "Capacitacion_" .. t.id }).Parent = main
+	end
+	local office = Rules.officeLevel(g)
+	local rows: { Instance? } = { Ui.lbl("Niveles") }
+	for _, l in Catalog.TRAINING.levels do
+		local open = office >= l.office
+		table.insert(rows, Ui.row({
+			Ui.grow(Ui.text(l.name .. " · +" .. l.gain .. " · " .. l.days .. " días · " .. Util.money(Util.round(l.cost * Staff.eraMult(Rules.year(g)) / 10) * 10) .. " por persona", { size = Ui.S.xs })),
+			Ui.chip(open and "Disponible" or ("Oficinas nivel " .. l.office), open and "cg" or "cy"),
+		}, 6))
+	end
+	table.insert(rows, Ui.button("Capacitación general", "p", function()
+		App.openDialog("training", { scope = "general" })
+	end, { small = true, fill = true, disabled = #g.employees == 0, why = "Sin empleados", name = "CapacitacionGeneral" }))
+	Ui.card(rows, { gap = 6 }).Parent = side
+end
+
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
 	local s = st()

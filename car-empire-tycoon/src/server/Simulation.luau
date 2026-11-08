@@ -537,6 +537,39 @@ function Simulation.payroll(g: any, ctx: any)
 	end
 end
 
+--[[ Capacitaciones: avanzan por días simulados (respetan velocidades y pausa). Al terminar cada participante
+	recibe exactamente el resultado anunciado (nunca más que su potencial), vuelve a su productividad normal y,
+	si se capacitó en una habilidad de un departamento que no es su especialidad, se adapta más rápido. ]]
+function Simulation.stepTrainings(g: any, ctx: any, minutes: number)
+	local list = g.trainings
+	if not list or #list == 0 then
+		return
+	end
+	local days = minutes / Catalog.RULES.gameDayMinutes
+	for i = #list, 1, -1 do
+		local t = list[i]
+		t.progress = math.min(t.days, t.progress + days)
+		if t.progress >= t.days - 1e-9 then
+			table.remove(list, i)
+			local sk = Staff.skill(t.skill)
+			for _, id in t.members do
+				for _, e in g.employees do
+					if e.id == id and e.training == t.id then
+						e.skills[t.skill] = math.min(e.potential[t.skill] or 0, math.max(e.skills[t.skill] or 0, t.results[id] or 0))
+						e.training = nil
+						if sk and sk.dept ~= e.spec then
+							e.adapt = e.adapt or {}
+							e.adapt[sk.dept] = math.min(1, (e.adapt[sk.dept] or Catalog.STAFF.adaptStart) + Catalog.STAFF.trainingAdapt)
+						end
+						e.salary = math.max(e.salary, Staff.salaryFor(e, Rules.year(g)))
+					end
+				end
+			end
+			Simulation.notify(g, ctx, "ok", "Capacitación terminada: " .. #t.members .. " en " .. (sk and sk.name or t.skill) .. ".", "personal")
+		end
+	end
+end
+
 -- Adaptación diaria de quienes trabajan fuera de su especialidad.
 function Simulation.stepStaff(g: any, minutes: number)
 	local S = Catalog.STAFF
@@ -651,6 +684,7 @@ function Simulation.simulate(g: any, ctx: any, minutes: number)
 		Simulation.stepSales(g, ctx, step)
 		Simulation.stepResearch(g, ctx, step)
 		Simulation.stepStaff(g, step)
+		Simulation.stepTrainings(g, ctx, step)
 	end
 end
 

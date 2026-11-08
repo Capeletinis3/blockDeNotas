@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 10
+GameState.SCHEMA = 11
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -71,6 +71,8 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		candidates = {}, -- 8 por mes (Simulation.ensureMarket); se reemplazan, no se acumulan
 		market = { month = -1, searches = 0 }, -- mes de los candidatos actuales y búsquedas pagas del mes
 		payroll = { debt = 0, debtMonths = 0 }, -- sueldos atrasados y meses seguidos con deuda
+		-- capacitaciones en curso { id, level, skill, scope, members = { empleados }, results = { [id] = valor final }, progress, days, cost }
+		trainings = {},
 		stations = freshStations(),
 		ledger = {},
 		-- projects = investigaciones en curso { id, progress (días), days, paidMoney, paidPi, ahead, startDay }
@@ -412,6 +414,29 @@ function GameState.validate(g: any): (boolean, string?)
 	end
 	if type(g.payroll) ~= "table" or not nonNeg(g.payroll.debt) or not isInt(g.payroll.debtMonths, 0) then
 		return fail("La deuda salarial está dañada.")
+	end
+	if not isList(g.trainings) or #g.trainings > Catalog.TRAINING.maxActive then
+		return fail("Las capacitaciones están dañadas.")
+	end
+	local inTraining = {}
+	for _, t in g.trainings do
+		if type(t) ~= "table" or type(t.id) ~= "string" or not Staff.trainingLevel(t.level) or not Staff.skill(t.skill) or not isList(t.members) or type(t.results) ~= "table" then
+			return fail("Hay una capacitación dañada.")
+		end
+		if not isFinite(t.progress) or not isFinite(t.days) or t.days <= 0 or t.progress < 0 or t.progress > t.days then
+			return fail("El avance de una capacitación es inválido.")
+		end
+		for _, id in t.members do
+			if inTraining[id] or not isInt(t.results[id], 0, 100) then
+				return fail("Un empleado figura en dos capacitaciones.")
+			end
+			inTraining[id] = t.id
+		end
+	end
+	for _, e in g.employees do
+		if e.training ~= nil and inTraining[e.id] ~= e.training then
+			return fail("La capacitación de " .. e.name .. " no existe.")
+		end
 	end
 	for _, l in g.ledger do
 		if type(l) ~= "table" or not isFinite(l.amount) or type(l.type) ~= "string" then
@@ -908,6 +933,17 @@ MIGRATIONS[9] = function(g: any, _now: number)
 	g.schema = 10
 end
 
+-- 10 → 11: capacitaciones (nadie estaba capacitándose).
+MIGRATIONS[10] = function(g: any, _now: number)
+	g.trainings = {}
+	for _, e in g.employees or {} do
+		if type(e) == "table" then
+			e.training = nil
+		end
+	end
+	g.schema = 11
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1248,6 +1284,7 @@ function GameState.live(g: any): any
 	return {
 		money = g.money, rp = g.rp, xp = g.xp, level = g.level, reputation = g.reputation, bankFull = g.bankFull,
 		payroll = table.clone(g.payroll),
+		trainings = Util.deepCopy(g.trainings),
 		time = table.clone(g.time),
 		counters = table.clone(g.counters),
 		month = table.clone(g.stats.month),
@@ -1263,7 +1300,7 @@ end
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
-		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
+		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), tostring(g.promo), tostring(#g.modelHistory), tostring(g.expansion) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
 	end
