@@ -1,9 +1,12 @@
 --!strict
 --[[
-	Producción por lotes: el jugador elige un diseño y cuántas unidades fabricar; la fábrica produce
-	exactamente esa cantidad y se detiene. Cada línea de la sede fabrica un lote a la vez; los demás
-	esperan en cola (se pueden reordenar o pausar). Las unidades se pagan a medida que se terminan y
-	se venden solas (Centro de ventas). Al costado: capacidad, estaciones (mejoras) y cómo funciona.
+	Ventas › Producción. A la izquierda (≈ 28 %), las líneas de producción; a la derecha, el detalle de la
+	elegida:
+	- bloqueada: cómo se desbloquea (línea 2 con dinero del juego, línea 3 con Robux para toda la cuenta);
+	- libre: «Iniciar producción» abre el catálogo de modelos finalizados (Dialogs.lot);
+	- ocupada: el lote que fabrica, con vista 3D, avance, días restantes, costo pagado y bonificaciones.
+	La fabricación no se pausa ni se cancela: la línea completa el lote (todo lo valida el servidor). Abajo, las
+	estaciones (mejoras de velocidad) como antes.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21,13 +24,24 @@ local W = Ui.W
 local Screen = {
 	title = "Producción",
 	icon = "factory",
+	noSide = true, -- dos columnas propias (líneas y detalle) en lugar de la columna lateral
 }
+
+-- Estilo común de Producción y Ventas (azul oscuro, paneles semitransparentes, acentos azules).
+local STYLE = {
+	panel = Ui.hex("#0B1220"),
+	card = Ui.hex("#111A2B"),
+	line = Ui.hex("#22304A"),
+	accent = Ui.hex("#3B8BFF"),
+	accent2 = Ui.hex("#8DB8FF"),
+}
+Screen.STYLE = STYLE
 
 -- Estados de producción de un lote: { texto, chip }
 Screen.PROD = {
 	produciendo = { "Fabricando", "cg" },
-	cola = { "En cola", "cn" },
-	pausado = { "En pausa", "cy" },
+	cola = { "Esperando una línea", "cn" },
+	pausado = { "Esperando una línea", "cn" },
 	["sin fondos"] = { "Sin fondos", "cr" },
 	completado = { "Lote completo", "cb" },
 	cancelado = { "Cancelado", "cn" },
@@ -50,157 +64,313 @@ local function findLot(g: any, id: string): any
 	return nil
 end
 
--- Tiempo real restante del lote a la velocidad actual de su línea.
-function Screen.etaText(g: any, l: any): string
-	local pending = l.qty - l.produced
-	if pending <= 0 then
-		return "terminado"
+-- Panel con el estilo de Producción / Ventas.
+function Screen.panel(children: { Instance? }, props: { [string]: any }?): Frame
+	local p: { [string]: any } = props or {}
+	return Ui.card(children, {
+		bg = STYLE.panel, transparency = 0.1, stroke = { STYLE.line, 1, 0 }, radius = 14, pad = p.pad or { 14, 16 }, gap = p.gap or 10, name = p.name,
+	})
+end
+
+-- Días de juego → texto («≈ 12 días»). El tiempo real depende de la velocidad elegida (1×, 2×, 3×).
+function Screen.daysText(days: number): string
+	if days == math.huge then
+		return "—"
 	end
-	local rate = g.derived.lineRate * math.max(0, g.time.speed)
-	if rate <= 0 then
+	if days < 1 then
+		return "menos de un día"
+	end
+	local d = math.ceil(days)
+	return "≈ " .. Util.num(d) .. (d == 1 and " día" or " días")
+end
+
+-- Tiempo real equivalente a `days` días de juego a la velocidad actual (en pausa: «en pausa»).
+function Screen.realText(g: any, days: number): string
+	local speed = g.time.speed
+	if days == math.huge then
+		return "—"
+	end
+	if speed <= 0 then
 		return "en pausa"
 	end
-	return "≈ " .. Util.realTime(pending / rate * 60) .. " para terminar"
+	return "≈ " .. Util.realTime(days * Catalog.CALENDAR.realSecondsPerDay / speed) .. " reales a " .. speed .. "×"
 end
 
-local function liveText(g: any, l: any): string
-	local base = Util.num(l.produced) .. " de " .. Util.num(l.qty) .. " fabricadas"
-	if l.prodState == "produciendo" then
-		return base .. " · " .. Util.num(g.derived.lineRate, 1) .. "/min · " .. Screen.etaText(g, l)
-	elseif l.prodState == "sin fondos" then
-		return base .. " · espera " .. Util.money(l.unitCost) .. " para la próxima unidad"
-	elseif l.prodState == "pausado" then
-		return base .. " · en pausa"
-	end
-	return base .. " · espera una línea libre"
-end
-
-local function lotRow(g: any, l: any, i: number, total: number): Frame
-	local st = Screen.PROD[l.prodState] or Screen.PROD.cola
-	local bar, fill = Ui.bar(l.produced / math.max(1, l.qty) * 100, l.prodState == "sin fondos" and T.re or nil)
-	local live = Ui.inline(liveText(g, l), { size = Ui.S.xs, name = "EnVivo" })
-	local chip = Ui.chip(st[1], st[2])
-	App.live(function(gg: any)
-		local x = findLot(gg, l.id)
-		if x then
-			Ui.setBar(fill, x.produced / math.max(1, x.qty) * 100)
-			live.Text = liveText(gg, x)
+-- Estado de una línea: "bloqueada", "obra", "libre" u "ocupada" (y su lote).
+function Screen.lineState(g: any, n: number): (string, any)
+	if not Rules.ownsLine(g, n) then
+		if n == 2 and Rules.build(g, "line2") then
+			return "obra", nil
 		end
-	end)
-	local spec = l.design.spec
-	return Ui.card({
+		return "bloqueada", nil
+	end
+	local lot = Rules.lineLot(g, n)
+	if lot then
+		return "ocupada", lot
+	end
+	return "libre", nil
+end
+
+local function selectedLine(g: any): number
+	local sel = tonumber(App.ui.lineSel)
+	if sel and sel >= 1 and sel <= Catalog.FACILITIES.maxLines then
+		return sel
+	end
+	for n = 1, Catalog.FACILITIES.maxLines do
+		if Rules.lineLot(g, n) then
+			return n
+		end
+	end
+	return 1
+end
+Screen.selectedLine = selectedLine
+
+-- Tarjeta compacta de una línea (columna izquierda).
+local function lineCard(g: any, n: number, selected: boolean): TextButton
+	local state, lot = Screen.lineState(g, n)
+	local sub, color = "", T.mut
+	if state == "bloqueada" then
+		sub = n == 3 and "Bloqueada · Robux (toda la cuenta)" or "Bloqueada · dinero del juego"
+		color = T.ye
+	elseif state == "obra" then
+		sub = "Obra en curso"
+		color = T.ye
+	elseif state == "libre" then
+		sub = "Libre · lista para fabricar"
+		color = T.gr
+	else
+		sub = "Fabricando «" .. lot.design.name .. "»"
+		color = STYLE.accent2
+	end
+	local items: { Instance? } = {
 		Ui.row({
-			Ui.paintChip(spec, 34, 22),
+			Ui.ico(state == "bloqueada" and "lock" or "factory", state == "bloqueada" and T.ye or (state == "ocupada" and STYLE.accent2 or T.tx), state == "ocupada" and STYLE.accent or Ui.hex("#16223A"), 32, { alpha = state == "ocupada" and 0.5 or 1, radius = 8, iconSize = 16 }),
 			Ui.grow(Ui.col({
-				Ui.text(l.design.name .. " <font color=\"#A3AAB8\" size=\"12\">" .. (spec.generation or "") .. "</font>", { size = 15, weight = W.bold }),
-				Ui.text("Lote de " .. Util.num(l.qty) .. " · " .. Util.money(l.unitCost) .. " por unidad · se vende a " .. Util.money(l.price), { size = Ui.S.xs, color = T.mut }),
-			}, 2)),
-			chip,
-		}, 10, { wrap = true }),
-		Ui.row({ Ui.grow(bar), live }, 10, { wrap = App.isPhone() }),
-		l.prodState == "sin fondos" and Ui.note("r", "No alcanza el dinero para terminar la próxima unidad. La producción sigue sola cuando entren ventas; nunca se genera deuda.") or nil,
-		Ui.row({
-			Ui.button("", "default", function()
-				App.request("moveLot", { lotId = l.id, delta = -1 })
-			end, { small = true, icon = "up", iconSize = 14, disabled = i == 1, why = "Ya es el primero", name = "Subir" }),
-			Ui.button("", "default", function()
-				App.request("moveLot", { lotId = l.id, delta = 1 })
-			end, { small = true, icon = "down", iconSize = 14, disabled = i == total, why = "Ya es el último", name = "Bajar" }),
-			Ui.button(l.prodState == "pausado" and "Reanudar" or "Pausar", "default", function()
-				App.request("toggleLotPause", { lotId = l.id })
-			end, { small = true, icon = l.prodState == "pausado" and "play" or "pause", iconSize = 14, name = "Pausa" }),
-			Ui.spacer(),
-			Ui.button("Ver en ventas", "default", function()
-				App.go("ventas")
-			end, { small = true, name = "VerVentas" }),
-		}, 6, { wrap = true }),
-	}, { gap = 8, pad = { 10, 12 }, name = "Lote_" .. l.id })
+				Ui.text("Línea " .. n, { size = 15, weight = W.bold }),
+				Ui.text(sub, { size = Ui.S.xs, color = color, name = "EstadoLinea" }),
+			}, 1)),
+		}, 10),
+	}
+	if lot then
+		local bar, fill = Ui.bar(Rules.lotProgress(lot) * 100, STYLE.accent, 4)
+		local pct = Ui.inline(Util.round(Rules.lotProgress(lot) * 100) .. " %", { size = Ui.S.xs, color = T.mut, name = "AvanceLinea" })
+		App.live(function(gg: any)
+			local x = findLot(gg, lot.id)
+			if x then
+				Ui.setBar(fill, Rules.lotProgress(x) * 100)
+				pct.Text = Util.round(Rules.lotProgress(x) * 100) .. " %"
+			end
+		end)
+		table.insert(items, Ui.row({ Ui.grow(bar), pct }, 8))
+	end
+	local card = Ui.new("TextButton", {
+		Name = "Linea_" .. n, Text = "", AutoButtonColor = false,
+		BackgroundColor3 = selected and STYLE.accent or STYLE.card, BackgroundTransparency = selected and 0.82 or 0.15,
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12,
+		Stroke = selected and { STYLE.accent, 2 } or { STYLE.line, 1 }, Pad = { 10, 12 }, List = { dir = "V", gap = 8 },
+	}, items)
+	card:SetAttribute("estado", state)
+	card.Activated:Connect(function()
+		App.ui.lineSel = n
+		App.forceRender()
+	end)
+	return card
 end
 
-function Screen.build(main: Frame, side: Frame)
-	local g = App.g
-	Sheet.salesNav("fabrica").Parent = main
-	local caps = g.derived.caps
-	local canLot = false
-	for _, d in g.designs do
-		if not d.template then
-			canLot = true
+local function kv(label: string, value: string, opts: { [string]: any }?): Frame
+	local o: { [string]: any } = opts or {}
+	return Ui.col({
+		Ui.text(label, { size = Ui.S.xs, color = T.mut }),
+		Ui.text(value, { size = o.size or 15, weight = W.bold, color = o.color, name = o.name }),
+	}, 2)
+end
+
+local function bonusList(g: any): Frame
+	local rows: { Instance? } = {}
+	for _, b in Rules.productionBonuses(g) do
+		table.insert(rows, Ui.between(b[1], b[2], { color = T.gr }))
+	end
+	if #rows == 0 then
+		table.insert(rows, Ui.text("Sin bonificaciones por ahora: mejoran con las estaciones, la fábrica, la tecnología y el personal de Producción.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }))
+	end
+	return Ui.col(rows, 4, { Name = "Bonificaciones" })
+end
+Screen.bonusList = bonusList
+
+-- Detalle de la línea elegida (columna derecha).
+local function lineDetail(g: any, n: number): Frame
+	local state, lot = Screen.lineState(g, n)
+	local items: { Instance? } = {}
+	if state == "ocupada" then
+		local spec = lot.design.spec
+		local phone = App.isPhone()
+		local pctLabel = Ui.inline(Util.round(Rules.lotProgress(lot) * 100) .. " %", { size = 26, weight = W.heavy, name = "Porcentaje" })
+		local bar, fill = Ui.bar(Rules.lotProgress(lot) * 100, STYLE.accent, 8)
+		local made = Ui.text(Util.num(lot.produced) .. " de " .. Util.num(lot.qty) .. " unidades", { size = Ui.S.sm, color = T.tx2, name = "Fabricadas" })
+		local daysLabel = Ui.text(Screen.daysText(Rules.lotDaysLeft(g, lot)), { size = 15, weight = W.bold, name = "DiasRestantes" })
+		local realLabel = Ui.text(Screen.realText(g, Rules.lotDaysLeft(g, lot)), { size = Ui.S.xs, color = T.mut, name = "TiempoReal" })
+		local st = Screen.PROD[lot.prodState] or Screen.PROD.produciendo
+		local chip = Ui.chip(st[1], st[2])
+		App.live(function(gg: any)
+			local x = findLot(gg, lot.id)
+			if x then
+				Ui.setBar(fill, Rules.lotProgress(x) * 100)
+				pctLabel.Text = Util.round(Rules.lotProgress(x) * 100) .. " %"
+				made.Text = Util.num(x.produced) .. " de " .. Util.num(x.qty) .. " unidades"
+				daysLabel.Text = Screen.daysText(Rules.lotDaysLeft(gg, x))
+				realLabel.Text = Screen.realText(gg, Rules.lotDaysLeft(gg, x))
+			end
+		end)
+		local base = Catalog.base(spec.baseId)
+		local motor = Catalog.part("motor", spec.parts and spec.parts.motor)
+		items = {
+			Ui.row({
+				Ui.grow(Ui.col({
+					Ui.inline("LÍNEA " .. n .. " · EN FABRICACIÓN", { size = Ui.S.xs, weight = W.bold, color = STYLE.accent2 }),
+					Ui.text(lot.design.name, { size = 20, weight = W.bold, name = "ModeloLinea" }),
+					Ui.text((spec.generation or "") .. " · " .. (base and base.name or "") .. (motor and (" · " .. (string.gsub(motor.name, " · nivel %d+$", "")) .. " nivel " .. tostring(spec.motorLevel or 1)) or ""), { size = Ui.S.xs, color = T.mut }),
+				}, 3)),
+				chip,
+			}, 10, { v = "T" }),
+			Ui.row({
+				Ui.carThumb(spec, phone and 150 or 300, phone and 90 or 170),
+				Ui.grow(Ui.col({
+					Ui.row({ pctLabel, Ui.inline("completado", { size = Ui.S.sm, color = T.mut }) }, 8, { v = "B" }),
+					bar,
+					made,
+					Ui.grid({
+						Ui.col({ Ui.text("Días restantes (estimado)", { size = Ui.S.xs, color = T.mut }), daysLabel, realLabel }, 2),
+						kv("Costo total pagado", Util.money(lot.costSpent), { name = "CostoPagado" }),
+					}, 2, nil, 10),
+				}, 8)),
+			}, 16, { v = "T", wrap = phone }),
+		}
+		table.insert(items, Ui.grid({
+			kv("Cantidad del lote", Util.num(lot.qty) .. " unidades"),
+			kv("Costo por unidad", Util.money(lot.unitCost)),
+			kv("Velocidad de la línea", Util.num(g.derived.lineRate, 1) .. " autos/min real a 1×"),
+		}, phone and 1 or 3, nil, 10))
+		table.insert(items, Ui.col({ Ui.lbl("Bonificaciones activas"), bonusList(g) }, 6))
+		table.insert(items, Ui.note("b", "La fabricación no se puede cancelar ni pausar: la línea completa el lote. Avanza con el calendario de la empresa (1×, 2× o 3×) y se detiene en pausa o sin conexión. Al terminar llegan las reseñas y elegís el precio en Ventas."))
+	elseif state == "libre" then
+		local available = 0
+		for _, d in g.designs do
+			if not d.template and not d.lotLaunched then
+				available += 1
+			end
 		end
+		items = {
+			Ui.inline("LÍNEA " .. n, { size = Ui.S.xs, weight = W.bold, color = STYLE.accent2 }),
+			Ui.text("Libre", { size = 20, weight = W.bold }),
+			Ui.text("Elegí un modelo finalizado y la cantidad. El lote se paga completo al confirmarlo y la línea lo fabrica hasta terminarlo.", { size = Ui.S.sm, color = T.mut, lineHeight = 1.35 }),
+			Ui.grid({
+				kv("Velocidad por línea", Util.num(g.derived.lineRate, 1) .. " autos/min real a 1×"),
+				kv("Modelos disponibles", tostring(available)),
+			}, 2, nil, 10),
+			Ui.col({ Ui.lbl("Bonificaciones de fabricación"), bonusList(g) }, 6),
+			Ui.button("Iniciar producción", "p", function()
+				App.ui.lotDraft = nil
+				App.openDialog("lot", { line = n, wide = true })
+			end, { icon = "factory", name = "IniciarProduccion" }),
+			available == 0 and Ui.note("b", "No tenés modelos para fabricar: los borradores no se fabrican y cada modelo produce un solo lote. Finalizá un diseño nuevo o una nueva generación en el editor.", Ui.button("Abrir el editor", "default", function()
+				App.go("editor")
+			end, { small = true })) or nil,
+		}
+	elseif state == "obra" then
+		local b = Rules.build(g, "line2")
+		items = {
+			Ui.inline("LÍNEA 2", { size = Ui.S.xs, weight = W.bold, color = STYLE.accent2 }),
+			Ui.text("En construcción", { size = 20, weight = W.bold }),
+			(Ui.bar(b.progress / math.max(1, b.days) * 100, T.ye)),
+			Ui.text(math.floor(b.progress) .. " de " .. b.days .. " días de obra. Al terminar, la línea queda disponible para siempre en esta empresa.", { size = Ui.S.sm, color = T.mut }),
+		}
+	elseif n == 3 then
+		local product = Catalog.PRODUCTS.line3
+		local ready = product.id ~= 0
+		items = {
+			Ui.inline("LÍNEA 3", { size = Ui.S.xs, weight = W.bold, color = STYLE.accent2 }),
+			Ui.text("Bloqueada", { size = 20, weight = W.bold }),
+			Ui.text("Compra permanente con Robux para tu cuenta: vale en todas tus empresas, también en las que crees después. No hace falta tener la línea 2.", { size = Ui.S.sm, color = T.mut, lineHeight = 1.35 }),
+			Ui.button("Desbloquear con Robux", "p", function()
+				App.request("buyProduct", { product = "line3" })
+			end, { icon = "lock", name = "DesbloquearLinea_3", disabled = not ready or g.demo ~= nil, why = (not ready) and "Compra no configurada todavía" or "No disponible en demostraciones" }),
+			(not ready) and Ui.text("La compra todavía no está configurada en este juego.", { size = Ui.S.xs, color = T.mut }) or nil,
+		}
+	else
+		local nx = Rules.nextFacility(g, "line2")
+		local checks: { Instance? } = {}
+		local ok = nx ~= nil
+		for _, c in Rules.facilityChecks(g, "line2") do
+			ok = ok and c[1]
+			table.insert(checks, Ui.text((c[1] and "✓ " or "✕ ") .. c[2], { size = Ui.S.xs, color = c[1] and T.gr or T.re2 }))
+		end
+		items = {
+			Ui.inline("LÍNEA 2", { size = Ui.S.xs, weight = W.bold, color = STYLE.accent2 }),
+			Ui.text("Bloqueada", { size = 20, weight = W.bold }),
+			Ui.text("Se desbloquea para siempre en esta empresa con dinero del juego: es una obra que se paga al empezar y tarda unos días.", { size = Ui.S.sm, color = T.mut, lineHeight = 1.35 }),
+			nx and Ui.grid({ kv("Costo", Util.money(nx.cost)), kv("Duración de la obra", nx.days .. " días") }, 2, nil, 10) or nil,
+			#checks > 0 and Ui.col(checks, 3) or nil,
+			nx and Ui.button("Desbloquear línea 2 · " .. Util.money(nx.cost), "p", function()
+				App.openDialog("confirm", {
+					title = "¿Construir la línea 2?",
+					body = "Se paga " .. Util.money(nx.cost) .. " al empezar y la obra dura " .. nx.days .. " días de juego. La línea queda disponible para siempre en esta empresa.",
+					okLabel = "Empezar la obra",
+					onOk = function()
+						App.request("upgradeFacility", { kind = "line2" })
+					end,
+				})
+			end, { icon = "lock", name = "DesbloquearLinea_2", disabled = not ok, why = "Faltan requisitos" }) or nil,
+		}
 	end
-	Ui.row({
-		Ui.button("Lanzar lote", "p", function()
-			App.openDialog("lot", { wide = true })
-		end, { icon = "plus", disabled = not canLot, why = "Primero finalizá un diseño en el editor", name = "LanzarLote" }),
-		Ui.inline("Capacidad: " .. Util.num(caps.capacity, 1) .. " autos/min en " .. caps.lines .. (caps.lines == 1 and " línea" or " líneas"), { size = Ui.S.sm, color = T.mut }),
-	}, 10, { wrap = true }).Parent = main
-	if not canLot then
-		Ui.note("b", "Para fabricar necesitás un diseño finalizado (los borradores no se fabrican).", Ui.button("Abrir el editor", "default", function()
-			App.go("editor")
-		end, { small = true })).Parent = main
-	end
+	return Screen.panel(items, { name = "DetalleLinea", gap = 12, pad = { 16, 18 } })
+end
+
+function Screen.build(main: Frame, _side: Frame)
+	local g = App.g
+	local phone = App.isPhone()
+	Sheet.salesNav("fabrica").Parent = main
 	-- Recién finalizado en el editor: acceso directo a su lote (la cantidad se elige acá, no en el editor).
-	local fresh = nil
 	for _, d in g.designs do
 		if d.id == App.ui.lastFinalized and not d.lotLaunched then
-			fresh = d
+			local free = Rules.freeLine(g)
+			Ui.note("g", "«" .. d.name .. "» está finalizado y listo para fabricar. Cada modelo tiene un solo lote: elegí cuántas unidades." .. (free and "" or " Todas las líneas están ocupadas: esperá a que una termine."), free and Ui.button("Fabricar «" .. d.name .. "»", "p", function()
+				App.ui.lotDraft = nil
+				App.openDialog("lot", { line = free, designId = d.id, wide = true })
+			end, { small = true, name = "LoteRecienFinalizado" }) or nil).Parent = main
 		end
 	end
-	if fresh then
-		Ui.note("g", "«" .. fresh.name .. "» está finalizado y listo para fabricar. Cada modelo tiene un solo lote: elegí cuántas unidades.", Ui.button("Lanzar lote de «" .. fresh.name .. "»", "p", function()
-			App.openDialog("lot", { designId = fresh.id, wide = true })
-		end, { small = true, name = "LoteRecienFinalizado" })).Parent = main
+	local sel = selectedLine(g)
+	local lines: { Instance? } = { Ui.lbl("Líneas de producción") }
+	for n = 1, Catalog.FACILITIES.maxLines do
+		table.insert(lines, lineCard(g, n, n == sel))
 	end
-
-	-- Lotes con producción pendiente (en línea, en cola o en pausa)
-	local pending = {}
+	-- Lotes de partidas anteriores que esperan una línea (antes había una cola).
+	local waiting = 0
 	for _, l in g.lots do
-		if Rules.lotProducing(l) then
-			table.insert(pending, l)
+		if Rules.lotProducing(l) and l.line == nil then
+			waiting += 1
 		end
 	end
-	local onLine = {}
-	for _, l in Rules.producingLots(g) do
-		onLine[l.id] = true
+	if waiting > 0 then
+		table.insert(lines, Ui.text(waiting .. (waiting == 1 and " lote espera" or " lotes esperan") .. " una línea libre (de una versión anterior): toman la próxima que se libere.", { size = Ui.S.xs, color = T.ye, lineHeight = 1.3, name = "LotesEnEspera" }))
 	end
-	local section = Ui.card({
-		Ui.row({
-			Ui.grow(Ui.inline("Lotes en producción", { size = 15, weight = W.bold })),
-			(not App.isPhone()) and Ui.inline(#pending > 0 and (#pending .. " lote" .. (#pending > 1 and "s" or "") .. " · las líneas toman los primeros de la lista") or "Fábrica libre", { size = Ui.S.xs, color = T.mut }) or nil,
-		}, 10, { wrap = true }),
-	}, { gap = 8, name = "Produccion" })
-	if #pending == 0 then
-		Ui.empty("factory", "No hay lotes en producción. Ordená un lote: la fábrica produce exactamente esa cantidad y se detiene.", nil, { pad = 14 }).Parent = section
+	local caps = g.derived.caps
+	table.insert(lines, Ui.text(caps.lines .. (caps.lines == 1 and " línea propia" or " líneas propias") .. " · " .. Util.num(caps.capacity, 1) .. " autos/min en total", { size = Ui.S.xs, color = T.mut }))
+	local left = Screen.panel(lines, { name = "ListaLineas", gap = 8, pad = { 12, 12 } })
+	local right = lineDetail(g, sel)
+	if phone then
+		left.Parent = main
+		right.Parent = main
+	else
+		left.Size = UDim2.new(0.28, -7, 0, 0)
+		right.Size = UDim2.new(0.72, -7, 0, 0)
+		Ui.row({ left, right }, 14, { Name = "Produccion", v = "T" }).Parent = main
 	end
-	for i, l in pending do
-		local row = lotRow(g, l, i, #pending)
-		if onLine[l.id] then
-			row:SetAttribute("linea", true)
-		end
-		row.Parent = section
-	end
-	section.Parent = main
-
-	-- Lotes ya fabricados que siguen a la venta
-	local done = {}
-	for _, l in g.lots do
-		if not Rules.lotProducing(l) then
-			table.insert(done, l)
-		end
-	end
-	if #done > 0 then
-		local items: { Instance? } = { Ui.lbl("Fabricados · vendiéndose") }
-		for _, l in done do
-			table.insert(items, Ui.card({
-				Ui.paintChip(l.design.spec, 26, 18),
-				Ui.grow(Ui.text(l.design.name .. " × " .. Util.num(l.qty) .. " <font color=\"#A3AAB8\" size=\"11\">· " .. Util.num(Rules.lotAvailable(l)) .. " sin vender</font>", { size = Ui.S.sm, weight = W.bold })),
-				Ui.chip("Producción detenida", "cn"),
-			}, { dir = "H", v = "C", gap = 10, wrap = true }))
-		end
-		table.insert(items, Ui.text("Un lote terminado no se repite solo. Para fabricar más, lanzá un lote nuevo.", { size = Ui.S.xs, color = T.mut }))
-		Ui.col(items, 8).Parent = main
+	if not Ui.reduceMotion then
+		Ui.fadeIn(right)
 	end
 
-	-- Estaciones (mejoras de velocidad)
+	-- Estaciones (mejoras de velocidad para todas las líneas).
 	local stations = {}
 	local maxL = Rules.maxStationLevel(g)
 	for _, st in Catalog.STATIONS do
@@ -213,31 +383,13 @@ function Screen.build(main: Frame, side: Frame)
 			Ui.button("Mejorar · " .. Util.money(up), "default", function()
 				App.request("upgradeStation", { station = id })
 			end, { small = true, fill = true, disabled = s.level >= maxL or g.money < up, why = s.level >= maxL and "Nivel máximo para esta sede" or "Fondos insuficientes", name = "Mejorar_" .. id }),
-		}, { gap = 6, name = "Estacion_" .. id }))
+		}, { gap = 6, name = "Estacion_" .. id, bg = STYLE.card, transparency = 0.15, stroke = STYLE.line }))
 	end
-	Ui.col({
+	Screen.panel({
 		Ui.lbl("Estaciones"),
-		Ui.grid(stations, App.isPhone() and 2 or 3, nil, 10),
-		Ui.text("Cada nivel por encima del primero suma un " .. Util.round(Catalog.STATION_SPEED * 100) .. " % de velocidad a todas las líneas. El nivel máximo depende de la sede (ahora " .. maxL .. ").", { size = Ui.S.xs, color = T.mut }),
-	}, 8).Parent = main
-
-	-- Columna lateral
-	local nx = Rules.nextFacility(g, "factory")
-	Ui.card({
-		Ui.lbl("Capacidad"),
-		Ui.between("Líneas", tostring(caps.lines)),
-		Ui.between("Por línea", Util.num(caps.perLine, 1) .. " autos/min"),
-		Ui.between("Total", Util.num(caps.capacity, 1) .. " autos/min", { color = T.gr }),
-		nx and Ui.text("Con «" .. nx.name .. "»: " .. nx.def.perLine .. " autos/min de base por línea (Compañía › Instalaciones).", { size = Ui.S.xs, color = T.mut }) or nil,
-	}, { gap = 6, name = "Capacidad" }).Parent = side
-	Ui.card({
-		Ui.lbl("Cómo funciona"),
-		Ui.text("1. Ordená un lote: elegís el modelo y la cantidad; el costo total se paga al ordenarlo.\n2. Cada modelo tiene un solo lote: para volver a fabricar, creá un modelo nuevo o una nueva generación.\n3. Cada línea fabrica un lote; al completar la cantidad se detiene.\n4. Al terminar, cuatro críticos evalúan el auto.\n5. Elegís el precio y se vende solo según la demanda, las reseñas, el precio y la reputación.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
-	}, { gap = 4, name = "ComoFunciona" }).Parent = side
-	Ui.card({
-		Ui.lbl("Tiempo"),
-		Ui.text("A 1×, un año de juego dura " .. Util.round(Catalog.CALENDAR.realSecondsPerYear / 60) .. " minutos reales. Los ritmos se muestran en autos por minuto real; a 2× y 3× todo va más rápido. En pausa (o con un menú abierto) no se fabrica ni se vende.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
-	}, { gap = 4 }).Parent = side
+		Ui.grid(stations, phone and 2 or 4, nil, 10),
+		Ui.text("Cada nivel por encima del primero suma un " .. Util.round(Catalog.STATION_SPEED * 100) .. " % de velocidad a todas las líneas (también al lote que se está fabricando: su tiempo restante se recalcula). Nivel máximo con esta sede: " .. maxL .. ".", { size = Ui.S.xs, color = T.mut, lineHeight = 1.35 }),
+	}, { name = "Estaciones" }).Parent = main
 end
 
 return Screen

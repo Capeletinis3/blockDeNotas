@@ -126,7 +126,17 @@ local function orderLot(g: any, ctx: any, designId: string, qty: number, price: 
 			designId = g.designs[#g.designs].id
 		end
 	end
+	-- Cada línea fabrica un lote por vez: si están todas ocupadas se espera a que se libere una.
+	runUntil(g, ctx, function()
+		return Rules.freeLine(g) ~= nil
+	end, 600)
 	return Actions.createLot(g, ctx, { designId = designId, qty = qty, price = price })
+end
+
+-- La empresa compra la línea 2 y tiene la línea 3 de la cuenta (como un jugador que las desbloqueó).
+local function allLines(g: any)
+	g.facilities.lines["2"] = true
+	g.facilities.accountLine3 = true
 end
 
 local function launchWhenReady(g: any, ctx: any, lotId: string, price: number?, maxRealMinutes: number?): boolean
@@ -305,6 +315,7 @@ test("Lotes: cantidad libre (100, 1.000, 10.000, 50.000), un lote por modelo y v
 	local ctx = makeCtx(4)
 	local id = saveNew(g, ctx, "brisa")
 	local unit = DesignCalc.computeDesign(g, g.designs[1]).unitCost
+	allLines(g)
 	for _, q in { 100, 1000, 10000, 50000 } do
 		local r = orderLot(g, ctx, id, q)
 		check(r.ok, "lote de " .. q .. ": " .. tostring(r.msg))
@@ -318,7 +329,9 @@ test("Lotes: cantidad libre (100, 1.000, 10.000, 50.000), un lote por modelo y v
 		check(not Actions.createLot(g, ctx, { designId = fresh, qty = q }).ok, "cantidad inválida " .. q)
 	end
 	check(not Actions.createLot(g, ctx, { designId = "x", qty = 10 }).ok, "diseño inexistente")
-	check(not Actions.createLot(g, ctx, { designId = fresh, qty = 10, price = 1 }).ok, "precio fuera de rango")
+	for _, p in { 0, -5, 0 / 0, math.huge, Catalog.ECON.priceCap + 1 } do
+		check(not Actions.createLot(g, ctx, { designId = fresh, qty = 10, price = p }).ok, "precio inválido " .. tostring(p))
+	end
 	local poor = g.money
 	g.money = unit * 5
 	check(not Actions.createLot(g, ctx, { designId = fresh, qty = 6 }).ok, "sin dinero para el lote completo no se ordena")
@@ -388,21 +401,84 @@ test("Fondos: el lote se paga completo al ordenarlo y nunca queda a medio fabric
 	check(g.money >= 0, "nunca en negativo")
 end)
 
-test("Varios lotes: las líneas de la sede se reparten y el resto espera en cola", function()
-	local g = newCompany("Cola SA")
+test("Líneas: cada una fabrica un lote, sin cola, pausa ni cancelación; la 3 es de la cuenta", function()
+	local g = newCompany("Líneas SA")
 	local ctx = makeCtx(7)
 	local a = saveNew(g, ctx, "brisa", "Modelo A")
 	local b = saveNew(g, ctx, "brisa", "Modelo B")
+	local c = saveNew(g, ctx, "duna", "Modelo C")
 	g.money = 1000000
-	check(Actions.createLot(g, ctx, { designId = a, qty = 30 }).ok, "lote A")
-	check(Actions.createLot(g, ctx, { designId = b, qty = 30 }).ok, "lote B")
+	eq(Rules.freeLine(g), 1, "la línea 1 está desde la fundación")
+	local ra = Actions.createLot(g, ctx, { designId = a, qty = 30 })
+	check(ra.ok and ra.line == 1, "lote A en la línea 1")
+	local m = g.money
+	check(not Actions.createLot(g, ctx, { designId = b, qty = 30 }).ok, "con la única línea ocupada no se inicia otro")
+	check(not Actions.createLot(g, ctx, { designId = b, qty = 30, line = 1 }).ok, "ni eligiendo la línea ocupada")
+	check(not Actions.createLot(g, ctx, { designId = b, qty = 30, line = 2 }).ok, "la línea 2 sin comprar no se usa")
+	check(not Actions.createLot(g, ctx, { designId = b, qty = 30, line = 3 }).ok, "la línea 3 sin la compra de la cuenta no se usa")
+	eq(g.money, m, "los intentos fallidos no cobran")
+	-- La línea 3 (Robux, de la cuenta) no necesita la 2.
+	g.facilities.accountLine3 = true
+	local rb = Actions.createLot(g, ctx, { designId = b, qty = 30, line = 3 })
+	check(rb.ok and rb.line == 3, "lote B en la línea 3 sin tener la 2")
+	g.facilities.lines["2"] = true
+	local rc = Actions.createLot(g, ctx, { designId = c, qty = 30 })
+	check(rc.ok and rc.line == 2, "lote C en la primera libre (la 2)")
 	Simulation.simulate(g, ctx, 60)
-	eq(#Rules.producingLots(g), 1, "garaje: una línea")
-	eq(g.lots[2].prodState, "cola", "el segundo espera")
-	check(Actions.moveLot(g, ctx, { lotId = g.lots[2].id, delta = -1 }).ok, "subir en la cola")
-	eq(g.lots[1].designId, b, "ahora B va primero")
-	check(Actions.toggleLotPause(g, ctx, { lotId = g.lots[1].id }).ok, "pausar B")
-	eq(Rules.producingLots(g)[1].designId, a, "la línea toma A mientras B está en pausa")
+	eq(#Rules.producingLots(g), 3, "tres líneas fabricando a la vez")
+	for _, lot in g.lots do
+		eq(lot.prodState, "produciendo", lot.design.name .. " fabricando")
+	end
+	-- No se pausa, no se reordena y no se cancela.
+	check(not Actions.toggleLotPause(g, ctx, { lotId = g.lots[1].id }).ok, "no se pausa")
+	check(not Actions.moveLot(g, ctx, { lotId = g.lots[2].id, delta = -1 }).ok, "no se reordena")
+	check(not Actions.closeSale(g, ctx, { lotId = g.lots[1].id }).ok, "no se cancela cerrando la venta")
+	eq(#Rules.producingLots(g), 3, "siguen las tres")
+	check(GameState.validate(g), "válida")
+	-- El mismo modelo no fabrica dos lotes (ni a la vez ni después).
+	check(not Actions.createLot(g, ctx, { designId = a, qty = 5 }).ok, "un modelo, un lote")
+end)
+
+test("Partidas anteriores: la cola y las pausas pasan a líneas sin perder avance ni dinero", function()
+	local g = newCompany("Vieja Cola SA")
+	local ctx = makeCtx(77)
+	g.money = 1000000
+	local ids = { saveNew(g, ctx, "brisa", "Viejo A"), saveNew(g, ctx, "brisa", "Viejo B"), saveNew(g, ctx, "duna", "Viejo C") }
+	g.money = 50000000
+	g.facilities.lines["2"] = true
+	for _, id in ids do
+		runUntil(g, ctx, function()
+			return Rules.freeLine(g) ~= nil
+		end, 1)
+		g.facilities.lines["3"] = true -- truco: lugar para crear el tercero en esta partida de prueba
+		check(Actions.createLot(g, ctx, { designId = id, qty = 400 }).ok, "lote")
+	end
+	g.facilities.lines["3"] = nil
+	Simulation.simulate(g, ctx, 60)
+	-- Como una partida del esquema 16: sin líneas, con una pausa y avance hecho.
+	local old = jsonCopy(g)
+	old.schema = 16
+	for _, l in old.lots do
+		l.line = nil
+	end
+	old.lots[1].prodState = "pausado"
+	local p1, money = old.lots[1].produced, old.money
+	local mg, err = GameState.migrate(old, 1)
+	check(mg ~= nil, err)
+	eq(mg.schema, GameState.SCHEMA, "esquema actual")
+	check(GameState.validate(mg), "válida")
+	eq(mg.lots[1].prodState, "cola", "la pausa se reanuda")
+	eq(mg.lots[1].produced, p1, "sin perder avance")
+	eq(mg.money, money, "ni dinero")
+	local withLine = 0
+	for _, l in mg.lots do
+		withLine += l.line and 1 or 0
+	end
+	eq(withLine, 2, "dos líneas propias: dos lotes fabricando")
+	check(mg.lots[3].line == nil, "el tercero espera una línea libre")
+	check(runUntil(mg, ctx, function()
+		return mg.lots[3].line ~= nil
+	end, 60), "y toma la que se libera")
 end)
 
 -- [P6]–[P8] Ventas automáticas -----------------------------------------------------------------
@@ -415,6 +491,7 @@ test("[P6][P7][P8] Ventas automáticas sin negociar, nunca más que lo fabricado
 	local a = saveNew(g, ctx, "brisa", "Sedán A")
 	local b = saveNew(g, ctx, "brisa", "Sedán B")
 	local c = saveNew(g, ctx, "duna", "Coupé C")
+	allLines(g)
 	local la = Actions.createLot(g, ctx, { designId = a, qty = 400 }).lotId
 	local lb = Actions.createLot(g, ctx, { designId = b, qty = 400 }).lotId
 	local lc = Actions.createLot(g, ctx, { designId = c, qty = 400 }).lotId
@@ -479,12 +556,12 @@ end)
 
 -- [P9]–[P11] Cerrar venta e historial -----------------------------------------------------------
 
-test("[P9][P10][P11] Cerrar venta: descarta lo no vendido sin reintegro, reintegra lo no fabricado y nunca más vende", function()
+test("[P9][P10][P11] Cerrar venta: descarta lo no vendido sin reintegro; la fabricación nunca se cancela", function()
 	local g = bigCompany("Cierre SA")
 	local ctx = makeCtx(10)
 	local id = saveNew(g, ctx, "brisa")
 	local calc = DesignCalc.computeDesign(g, g.designs[1])
-	local hi = select(2, Actions.priceRange({ unitCost = calc.unitCost, refPrice = calc.price }))
+	local hi = calc.price * 3 -- precio alto (el precio es libre)
 	local r = Actions.createLot(g, ctx, { designId = id, qty = 5000 })
 	local lot = findLot(g, r.lotId)
 	check(launchWhenReady(g, ctx, r.lotId, hi), "fabricado y a la venta a precio alto")
@@ -528,34 +605,33 @@ test("[P9][P10][P11] Cerrar venta: descarta lo no vendido sin reintegro, reinteg
 	eq(note.type, "descarte", "registro del descarte")
 	eq(note.amount, 0, "el registro no mueve dinero (ya se pagó al ordenar)")
 	check(GameState.validate(g), "partida válida")
-	-- Un lote cerrado a medio fabricar: se reintegra lo que no se llegó a fabricar.
+	-- Un lote a medio fabricar no se cancela: ni cerrando la venta ni con reintegro; la línea lo termina.
 	local r2 = orderLot(g, ctx, id, 5000)
 	local lot2 = findLot(g, r2.lotId)
 	runReal(g, ctx, 1)
 	local made = lot2.produced
 	check(made > 0 and made < 5000, "a medio fabricar (" .. made .. ")")
 	local m2 = g.money
-	check(Actions.closeSale(g, ctx, { lotId = lot2.id }).ok, "cerrar")
-	eq(g.money - m2, (5000 - made) * lot2.unitCost, "se reintegra lo no fabricado")
-	eq(lot2.prodState, "cancelado", "producción cancelada")
-	eq(lot2.discarded, made, "lo fabricado y no vendido se descarta")
-	eq(lot2.costSpent, made * lot2.unitCost, "costo = solo lo fabricado")
+	check(not Actions.closeSale(g, ctx, { lotId = lot2.id }).ok, "cerrar la venta no cancela la fabricación")
+	eq(g.money, m2, "sin reintegro")
+	check(runUntil(g, ctx, function()
+		return lot2.prodState == "completado"
+	end, 200), "la línea completa el lote")
+	eq(lot2.produced, 5000, "las 5.000 unidades")
+	eq(lot2.costSpent, 5000 * lot2.unitCost, "pagadas una sola vez")
 end)
 
-test("Cerrar venta de un lote que todavía no fabricó nada: se cancela y se reintegra", function()
+test("Un lote recién ordenado tampoco se cancela ni se reintegra", function()
 	local g = newCompany("Nada SA")
 	local ctx = makeCtx(11)
 	local id = saveNew(g, ctx, "brisa")
 	local m = g.money
 	local r = Actions.createLot(g, ctx, { designId = id, qty = 10 })
 	check(r.ok and g.money < m, "el lote se pagó al ordenarlo")
-	local res = Actions.closeSale(g, ctx, { lotId = r.lotId })
-	check(res.ok, res.msg)
-	eq(g.money, m, "cerrado sin fabricar: se reintegra todo")
-	local h = findHist(g, r.lotId)
-	eq(h.produced, 0, "nada fabricado")
-	eq(h.discarded, 0, "nada descartado")
-	eq(h.saleState, "retirado", "retirado")
+	local paid = g.money
+	check(not Actions.closeSale(g, ctx, { lotId = r.lotId }).ok, "no se cancela")
+	eq(g.money, paid, "sin reintegro")
+	eq(findLot(g, r.lotId).qty, 10, "ni cambia su cantidad")
 end)
 
 test("[P11] Contabilidad: dinero = inicial − desarrollo − fabricado + ventas; sin doble costo", function()
@@ -935,7 +1011,7 @@ test("[C6][C7][C8][C9] Lotes de 100, 1.000 y 50.000: se fabrica exactamente esa 
 		local ctx = makeCtx(40 + q % 7)
 		local id = saveNew(g, ctx, "brisa")
 		local calc = DesignCalc.computeDesign(g, g.designs[1])
-		local hi = select(2, Rules.priceRange(calc.unitCost, calc.price))
+		local hi = calc.price * 3
 		local lotId = Actions.createLot(g, ctx, { designId = id, qty = q, price = hi }).lotId
 		local lot = findLot(g, lotId)
 		check(runUntil(g, ctx, function()
@@ -964,7 +1040,13 @@ test("[C13] Cambiar el precio cambia el ritmo de ventas desde ese momento", func
 	check(Actions.setLotPrice(g, ctx, { lotId = lotId, price = lot.price * 1.3 }).ok, "precio más alto")
 	local r1 = Rules.lotPotentialRate(g, lot)
 	check(r1 < r0, "vende más lento")
-	check(not Actions.setLotPrice(g, ctx, { lotId = lotId, price = 1 }).ok, "fuera de rango")
+	-- Precio libre: por debajo del costo o muy por encima se acepta; cero, negativos y no números, no.
+	check(Actions.setLotPrice(g, ctx, { lotId = lotId, price = 1 }).ok and lot.price == 1, "un dólar es un precio válido")
+	check(Actions.setLotPrice(g, ctx, { lotId = lotId, price = lot.refPrice * 10 }).ok, "muy por encima también")
+	check(Actions.setLotPrice(g, ctx, { lotId = lotId, price = 1234.6 }).ok and lot.price == 1235, "se redondea al dólar")
+	for _, p in { 0, -100, math.huge, Catalog.ECON.priceCap + 1, "500" } do
+		check(not Actions.setLotPrice(g, ctx, { lotId = lotId, price = p }).ok, "precio inválido " .. tostring(p))
+	end
 	check(not Actions.setLotPrice(g, ctx, { lotId = lotId, price = 0 / 0 }).ok, "un número inválido se rechaza")
 	-- Ninguna estrategia de precio domina siempre: el más caro deja más margen pero vende menos.
 	local c = DesignCalc.computeDesign(g, g.designs[1])
@@ -1049,6 +1131,10 @@ test("[C23] Historial permanente: los modelos se conservan después de muchos lo
 		local r = orderLot(g, ctx, id, 10 + i)
 		check(r.ok, "lote " .. i)
 		local designId = findLot(g, r.lotId).designId
+		-- La fabricación no se cancela: se cierra la venta cuando la línea termina el lote.
+		runUntil(g, ctx, function()
+			return findLot(g, r.lotId).prodState == "completado"
+		end, 60)
 		Actions.closeSale(g, ctx, { lotId = r.lotId })
 		if designId ~= id then
 			Actions.delDesign(g, ctx, { designId = designId })
@@ -1279,7 +1365,7 @@ test("[C25] Equilibrio por década: autos rentables, investigación en tiempo y 
 	local ctx = makeCtx(50)
 	local id = saveNew(g, ctx, "brisa")
 	local c = DesignCalc.computeDesign(g, g.designs[1])
-	local hi = select(2, Rules.priceRange(c.unitCost, c.price))
+	local hi = c.price * 3 -- precio alto (el precio es libre)
 	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 15 }).lotId
 	launchWhenReady(g, ctx, lotId, hi)
 	runReal(g, ctx, 2)
@@ -1638,8 +1724,13 @@ test("Demostraciones de la V3: se juegan en memoria y no tocan las ranuras", fun
 	-- Los modelos de la demostración ya tuvieron su lote: se fabrica un modelo nuevo (duplicado).
 	check(mgr:request(p, "dupDesign", { designId = mgr.list[p].game.designs[1].id, requestId = rid() }).ok, "duplicar en la demostración")
 	local dg = mgr.list[p].game
+	local free = Rules.freeLine(dg)
 	local r = mgr:request(p, "createLot", { designId = dg.designs[#dg.designs].id, qty = 100, requestId = rid() })
-	check(r.ok, "las acciones funcionan en la demostración: " .. tostring(r.msg))
+	if free then
+		check(r.ok, "las acciones funcionan en la demostración: " .. tostring(r.msg))
+	else
+		check(not r.ok and string.find(r.msg, "líneas", 1, true) ~= nil, "con todas las líneas fabricando, el servidor lo explica: " .. tostring(r.msg))
+	end
 	mgr:request(p, "leaveCompany", {})
 	mgr:remove(p)
 	local saved = store.data["player_31"].profile
@@ -1683,13 +1774,20 @@ test("[P14] Guardar y cargar con lotes: 50.000 unidades, historial y estado de c
 	local r = mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Grande"), requestId = rid() })
 	check(r.ok, r.msg)
 	r = mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Chico"), requestId = rid() })
+	g.facilities.lines["2"] = true -- dos lotes a la vez: la empresa tiene la línea 2
 	local big = mgr:request(p, "createLot", { designId = g.designs[1].id, qty = 50000, requestId = rid() })
 	check(big.ok, big.msg)
-	local small = mgr:request(p, "createLot", { designId = g.designs[2].id, qty = 3000, requestId = rid() })
-	for _ = 1, 240 do
+	local small = mgr:request(p, "createLot", { designId = g.designs[2].id, qty = 30, requestId = rid() })
+	check(small.ok, small.msg)
+	-- El chico termina (la fabricación no se cancela) y recién ahí se cierra su venta.
+	for _ = 1, 2000 do
 		clock.t += 1
 		clock.c += 1
 		mgr:tick()
+		local x = findLot(g, small.lotId)
+		if x and x.prodState == "completado" then
+			break
+		end
 	end
 	local cr = mgr:request(p, "closeSale", { lotId = small.lotId, requestId = rid() })
 	check(cr.ok, "cerrar la venta del chico: " .. tostring(cr.msg) .. " " .. tostring(small.msg))
@@ -1730,6 +1828,14 @@ test("Reenviar Cerrar venta o Lanzar lote con el mismo identificador no los dupl
 	check(mgr:request(p, "createLot", { designId = s.game.designs[1].id, qty = 20, requestId = id }).ok, "lanzado")
 	check(mgr:request(p, "createLot", { designId = s.game.designs[1].id, qty = 20, requestId = id }).duplicate, "reenvío reconocido")
 	eq(#s.game.lots, 1, "un solo lote")
+	for _ = 1, 2000 do
+		clock.t += 1
+		clock.c += 1
+		mgr:tick()
+		if s.game.lots[1].prodState == "completado" then
+			break
+		end
+	end
 	local cid = rid()
 	check(mgr:request(p, "closeSale", { lotId = s.game.lots[1].id, requestId = cid }).ok, "cerrado")
 	check(mgr:request(p, "closeSale", { lotId = s.game.lotHistory[1].id, requestId = cid }).duplicate, "reenvío del cierre")
@@ -2545,7 +2651,7 @@ test("[E2] Primer ciclo completo: sedán I4 → lote de 100 → reseñas → pre
 	lot.review.avg = saved
 	check(better > base and worse < base, "6. mejores reseñas venden más")
 	-- 7. Precio y puesta a la venta (y modificación posterior).
-	check(not mgr:request(p, "launchSale", { lotId = lot.id, price = 1, requestId = rid() }).ok, "7. precio fuera de rango rechazado")
+	check(not mgr:request(p, "launchSale", { lotId = lot.id, price = 0, requestId = rid() }).ok, "7. precio inválido rechazado")
 	check(mgr:request(p, "launchSale", { lotId = lot.id, price = lot.refPrice * 1.2, requestId = rid() }).ok, "7. a la venta")
 	local hiRate = Rules.lotPotentialRate(g, lot)
 	check(mgr:request(p, "setLotPrice", { lotId = lot.id, price = lot.refPrice, requestId = rid() }).ok, "7. precio modificado")
@@ -3784,6 +3890,154 @@ test("[ED] Revisiones del borrador: una respuesta o un reintento atrasado no pis
 	check(not GameState.validate(bad), "también una no entera")
 	local loaded = jsonCopy(g)
 	check(GameState.validate(loaded) and loaded.drafts[1].rev == 4, "la revisión sobrevive a guardar y cargar")
+end)
+
+
+-- Producción y ventas definitivas ------------------------------------------------------------------------
+test("[PV] Fabricación con el calendario: duración estimada real, 1×/2×/3×, pausa, bonificaciones y sin conexión", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 601 }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	g.money = 50000000
+	check(mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Ritmo"), requestId = rid() }).ok, "diseño")
+	local id = g.designs[#g.designs].id
+	local qty = 600
+	local estimate = Rules.daysFor(g, qty)
+	local r = mgr:request(p, "createLot", { designId = id, qty = qty, line = 1, requestId = rid() })
+	check(r.ok, r.msg)
+	local lot = findLot(g, r.lotId)
+	eq(lot.line, 1, "en la línea 1")
+	local cost = g.money
+	-- 1×: avanza con el calendario de la empresa.
+	local d0, p0 = Rules.absDay(g), Rules.lotProgress(lot)
+	ticks(mgr, clock, 20)
+	local days1, prog1 = Rules.absDay(g) - d0, Rules.lotProgress(lot) - p0
+	eq(days1, 10, "1×: 20 s reales = 10 días")
+	check(prog1 > 0, "avanza")
+	-- La estimación coincide con el avance real (por día de juego).
+	local perDay = prog1 / days1
+	check(math.abs(1 / perDay - estimate) / estimate < 0.15, "duración estimada coherente: " .. Util.num(estimate, 1) .. " días estimados, " .. Util.num(1 / perDay, 1) .. " reales")
+	-- 2× y 3×: el mismo avance por día de juego, más días por segundo real.
+	mgr:request(p, "setSpeed", { speed = 2, requestId = rid() })
+	local a2 = Rules.lotProgress(lot)
+	ticks(mgr, clock, 10)
+	local prog2 = Rules.lotProgress(lot) - a2
+	mgr:request(p, "setSpeed", { speed = 3, requestId = rid() })
+	local a3 = Rules.lotProgress(lot)
+	ticks(mgr, clock, 10)
+	local prog3 = Rules.lotProgress(lot) - a3
+	local base = prog1 / 2 -- 1× en 10 s
+	check(math.abs(prog2 / base - 2) < 0.3 and math.abs(prog3 / base - 3) < 0.4, "2× y 3× fabrican el doble y el triple por segundo real (" .. Util.num(prog2 / base, 2) .. "× y " .. Util.num(prog3 / base, 2) .. "×)")
+	-- Pausa de la empresa y menú abierto: no avanza.
+	mgr:request(p, "setSpeed", { speed = 0, requestId = rid() })
+	local paused = lot.produced + lot.prodProgress
+	ticks(mgr, clock, 20)
+	eq(lot.produced + lot.prodProgress, paused, "en pausa no se fabrica")
+	mgr:request(p, "setSpeed", { speed = 1, requestId = rid() })
+	mgr:request(p, "setUiPause", { paused = true })
+	ticks(mgr, clock, 20)
+	eq(lot.produced + lot.prodProgress, paused, "con un menú abierto tampoco")
+	mgr:request(p, "setUiPause", { paused = false })
+	-- Bonificaciones: con estaciones mejoradas el tiempo restante baja sin perder avance.
+	local left0 = Rules.lotDaysLeft(g, lot)
+	local made = lot.produced
+	for _, st in g.stations do
+		st.level = 4
+	end
+	check(Rules.lotDaysLeft(g, lot) < left0 and lot.produced == made, "los días restantes se recalculan y el avance se conserva")
+	check(#Rules.productionBonuses(g) >= 1, "las bonificaciones activas se informan")
+	-- Sin conexión no avanza; al volver sigue desde donde quedó, sin cobrar otra vez.
+	local snapshot = lot.produced
+	mgr:request(p, "leaveCompany", {})
+	mgr:remove(p)
+	clock.t += 3600
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "volver")
+	local g2 = mgr2.list[p].game
+	local lot2 = findLot(g2, r.lotId)
+	eq(lot2.produced, snapshot, "sin conexión no se fabricó")
+	eq(lot2.line, 1, "conserva la línea")
+	eq(g2.money, cost, "sin cobros extra")
+	eq(#g2.lots, 1, "sin lotes duplicados")
+	for _ = 1, 6000 do
+		ticks(mgr2, clock, 1)
+		if lot2.prodState == "completado" then
+			break
+		end
+	end
+	eq(lot2.produced, qty, "la línea completa el lote")
+	check(#lot2.review.scores == 4, "con sus cuatro reseñas")
+end)
+
+test("[PV] Reseñas una sola vez, demanda en cinco niveles del modelo real, precio libre y ventas sin duplicar", function()
+	local g = newCompany("Demanda SA")
+	local ctx = makeCtx(602)
+	g.money = 5000000
+	local id = saveNew(g, ctx, "brisa", "Mercado")
+	local r = Actions.createLot(g, ctx, { designId = id, qty = 300 })
+	check(r.ok, r.msg)
+	local lot = findLot(g, r.lotId)
+	check(runUntil(g, ctx, function()
+		return lot.saleState == "por lanzar"
+	end, 100), "terminado")
+	local review = jsonCopy(lot.review)
+	eq(#review.scores, 4, "cuatro críticos")
+	local sum = 0
+	for _, sc in review.scores do
+		check(sc.score >= 1 and sc.score <= 10 and type(sc.text) == "string" and #sc.text > 0 and sc.name ~= nil, "nota de 1 a 10 con comentario: " .. tostring(sc.name))
+		sum += sc.score
+	end
+	check(math.abs(review.avg - sum / 4) < 0.06, "la nota final es el promedio")
+	Simulation.reviewLot(g, ctx, lot)
+	eq(serde.encode("json", lot.review), serde.encode("json", review), "no se recalculan")
+	-- Demanda: cinco niveles; sube al bajar el precio, con mejores reseñas, más reputación y campaña.
+	local function level(price: number?): number
+		return Rules.demandInfo(g, lot, price).level
+	end
+	local ref = lot.refPrice
+	check(level(ref * 6) < level(ref) and level(ref * 0.5) >= level(ref), "el precio cambia la demanda (" .. level(ref * 0.5) .. " / " .. level(ref) .. " / " .. level(ref * 6) .. ")")
+	local info = Rules.demandInfo(g, lot, ref)
+	check(info.level >= 1 and info.level <= 5 and Catalog.DEMAND_LEVELS.labels[info.level] == info.label, "nivel y etiqueta: " .. info.label)
+	local ratioRef = info.ratio
+	lot.review.avg = 9.5
+	check(Rules.demandInfo(g, lot, ref).ratio > ratioRef, "mejores reseñas, más demanda")
+	lot.review.avg = review.avg
+	local rep = g.reputation
+	g.reputation = 5
+	check(Rules.demandInfo(g, lot, ref).ratio > ratioRef, "más reputación, más demanda")
+	g.reputation = rep
+	-- La vista previa usa el mismo peso con el que el servidor reparte la demanda.
+	local wPreview = Rules.demandInfo(g, lot, ref).ratio
+	lot.price = ref
+	local rivals, rsum = Rules.rivalOffers(lot.design.type, Rules.yearFrac(g), g), 0
+	for _, x in rivals do
+		rsum += x.weight
+	end
+	check(math.abs(Rules.lotWeight(g, lot, Rules.yearFrac(g)) / (rsum / #rivals) - wPreview) < 1e-6, "misma cuenta que la simulación")
+	-- Precio libre: por debajo del costo también; nunca más ventas que stock ni ingresos duplicados.
+	check(Actions.launchSale(g, ctx, { lotId = lot.id, price = math.floor(lot.unitCost * 0.6) }).ok, "a la venta por debajo del costo")
+	local moneyBefore, revBefore = g.money, lot.revenue
+	runReal(g, ctx, 5, lotInvariants)
+	check(lot.sold > 0, "vende")
+	eq(lot.revenue - revBefore, (lot.sold) * lot.price, "ingresos = vendidas × precio (sin duplicar)")
+	check(Rules.lotAvailable(lot) >= 0 and lot.sold <= lot.produced, "nunca más que el stock")
+	check(g.money - moneyBefore <= lot.revenue - revBefore, "la caja no recibe más que lo vendido")
+	-- Un precio nuevo afecta lo que viene: lo ya cobrado no cambia.
+	local revNow = lot.revenue
+	check(Actions.setLotPrice(g, ctx, { lotId = lot.id, price = lot.refPrice * 2 }).ok, "precio nuevo")
+	eq(lot.revenue, revNow, "los ingresos ya cobrados no cambian")
+	check(runUntil(g, ctx, function()
+		return findLot(g, lot.id) == nil
+	end, 400), "se agota")
+	local h = findHist(g, lot.id)
+	eq(h.saleState, "agotado", "agotado")
+	eq(h.sold, 300, "las 300 vendidas")
+	check(not Actions.createLot(g, ctx, { designId = id, qty = 10 }).ok, "agotado: no se fabrica otro lote del mismo modelo")
 end)
 
 T.finish()

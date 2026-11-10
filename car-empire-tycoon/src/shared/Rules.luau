@@ -449,14 +449,105 @@ function Rules.lotProducing(lot: any): boolean
 	return lot.prodState ~= "completado" and lot.prodState ~= "cancelado"
 end
 
--- Lotes que ocupan una línea en este momento: los primeros N con producción pendiente y sin pausa manual.
+--[[ Líneas de producción: cada lote con fabricación pendiente ocupa UNA línea (lot.line) hasta completarse.
+	No hay cola manual, pausa ni cancelación: la línea termina el lote. ]]
+function Rules.lineLot(g: any, n: number): any
+	for _, lot in g.lots do
+		if lot.line == n and Rules.lotProducing(lot) then
+			return lot
+		end
+	end
+	return nil
+end
+
+-- Primera línea propia y libre (o nil si todas están ocupadas).
+function Rules.freeLine(g: any): number?
+	for n = 1, Catalog.FACILITIES.maxLines do
+		if Rules.ownsLine(g, n) and not Rules.lineLot(g, n) then
+			return n
+		end
+	end
+	return nil
+end
+
+-- Lotes de partidas anteriores sin línea (había una cola): toman las líneas que se liberan, en orden.
+function Rules.assignLines(g: any)
+	for _, lot in g.lots do
+		if Rules.lotProducing(lot) and lot.line == nil then
+			local n = Rules.freeLine(g)
+			if not n then
+				return
+			end
+			lot.line = n
+		end
+	end
+end
+
+-- Lotes que se fabrican en este momento (los que tienen una línea propia asignada), por número de línea.
 function Rules.producingLots(g: any): { any }
 	local out = {}
-	local lines = Rules.lineCount(g)
-	for _, lot in g.lots do
-		if Rules.lotProducing(lot) and lot.prodState ~= "pausado" and #out < lines then
+	for n = 1, Catalog.FACILITIES.maxLines do
+		local lot = Rules.lineLot(g, n)
+		if lot and Rules.ownsLine(g, n) then
 			table.insert(out, lot)
 		end
+	end
+	return out
+end
+
+-- Avance general del lote (0–1). Con la fabricación avanzada (futura) se podrá desglosar en fases.
+function Rules.lotProgress(lot: any): number
+	if lot.qty <= 0 then
+		return 1
+	end
+	return Util.clamp((lot.produced + (lot.prodProgress or 0)) / lot.qty, 0, 1)
+end
+
+-- Días de juego que faltan para terminar el lote con la velocidad de línea actual (fábrica, estaciones,
+-- tecnología, personal y expansión). Se recalcula solo si cambian las bonificaciones; el avance no se pierde.
+function Rules.lotDaysLeft(g: any, lot: any): number
+	local left = math.max(0, lot.qty - lot.produced - (lot.prodProgress or 0))
+	return Rules.daysFor(g, left)
+end
+
+-- Días de juego para fabricar `units` unidades en una línea (1 día = realSecondsPerDay s reales a 1×).
+function Rules.daysFor(g: any, units: number): number
+	local rate = Rules.lineRate(g) -- autos por minuto real a 1×
+	if rate <= 0 then
+		return math.huge
+	end
+	return units / rate * 60 / Catalog.CALENDAR.realSecondsPerDay
+end
+
+-- Bonificaciones de fabricación vigentes (para mostrarlas; los cálculos usan Rules.lineRate y lotUnitCost).
+function Rules.productionBonuses(g: any): { any }
+	local out = {}
+	local levels = 0
+	for _, st in Catalog.STATIONS do
+		levels += (g.stations[st[1]].level - 1)
+	end
+	if levels > 0 then
+		table.insert(out, { "Estaciones mejoradas", "+" .. Util.round(Catalog.STATION_SPEED * levels * 100) .. " % de velocidad" })
+	end
+	local tech = Rules.tech(g, "prodSpeed")
+	if tech > 0 then
+		table.insert(out, { "Tecnología de producción", "+" .. Util.round(tech) .. " % de velocidad" })
+	end
+	local vel = Rules.staff(g, "velocidad")
+	if vel > 0 then
+		table.insert(out, { "Personal de Producción (velocidad)", "+" .. Util.round(vel * 100) .. " % de velocidad" })
+	end
+	local exp = Catalog.EXPANSION.line * Rules.expansion(g)
+	if exp > 0 then
+		table.insert(out, { "Expansión internacional", "+" .. Util.round(exp * 100) .. " % de velocidad" })
+	end
+	local eff = Rules.staff(g, "eficiencia")
+	if eff > 0 then
+		table.insert(out, { "Personal de Producción (eficiencia)", "−" .. Util.round(eff * 100) .. " % de costo por unidad" })
+	end
+	local q = Rules.staff(g, "calidad")
+	if q > 0 then
+		table.insert(out, { "Personal de Producción (calidad)", "+" .. Util.num(q, 1) .. " de calidad al terminar" })
 	end
 	return out
 end
@@ -776,9 +867,22 @@ function Rules.priceFactor(price: number, ref: number, type: string?): number
 	return Util.clamp(math.pow(ref / math.max(1, price), e), 0.02, 3)
 end
 
--- Precio permitido para un lote: desde la mitad del costo hasta 3 veces el precio de referencia, de a $10.
-function Rules.priceRange(unitCost: number, refPrice: number): (number, number)
-	return math.max(10, Util.round(unitCost * ECON.priceMin / 10) * 10), Util.round(refPrice * ECON.priceMax / 10) * 10
+-- Precio de venta: libre (por encima o por debajo del costo). Solo se exige un número entero de dólares,
+-- positivo, finito y por debajo del tope técnico. Se conserva la firma (mínimo, máximo) por compatibilidad.
+function Rules.priceRange(_unitCost: number?, _refPrice: number?): (number, number)
+	return 1, ECON.priceCap
+end
+
+-- Precio válido redondeado al dólar, o nil (el cliente no envía precios inválidos; el servidor lo vuelve a revisar).
+function Rules.validPrice(p: any): number?
+	if not Util.isFiniteNumber(p) then
+		return nil
+	end
+	local r = Util.round(p)
+	if r < 1 or r > ECON.priceCap then
+		return nil
+	end
+	return r
 end
 
 -- Peso de un lote del jugador en el reparto de la demanda de su tipo.
@@ -830,6 +934,33 @@ function Rules.lotPotentialRate(g: any, lot: any): number
 	end
 	local w = Rules.lotWeight(g, lot, Rules.yearFrac(g))
 	return m.demand * w / (m.total + w)
+end
+
+--[[ Demanda estimada en cinco niveles (Catalog.DEMAND_LEVELS): peso comercial del lote con el precio indicado
+	(el mismo de Rules.lotWeight: atractivo, precio frente a su referencia, reseñas, reputación, alcance,
+	segmento y campaña) frente al peso promedio de los modelos rivales de su tipo este año. No da una cifra de
+	ventas: la venta real la decide la simulación. Devuelve { level (1–5), label, ratio }. ]]
+function Rules.demandInfo(g: any, lot: any, price: number?): any
+	local yf = Rules.yearFrac(g)
+	local saved = lot.price
+	if price then
+		lot.price = price
+	end
+	local w = Rules.lotWeight(g, lot, yf)
+	lot.price = saved
+	local sum, n = 0, 0
+	for _, r in Rules.rivalOffers(lot.design.type, yf, g) do
+		sum += r.weight
+		n += 1
+	end
+	local ratio = w / (n > 0 and sum / n or 1)
+	local level = 1
+	for i, t in Catalog.DEMAND_LEVELS.thresholds do
+		if ratio >= t then
+			level = i + 1
+		end
+	end
+	return { level = level, label = Catalog.DEMAND_LEVELS.labels[level], ratio = ratio }
 end
 
 -- Estimación para un diseño que todavía no se fabricó (diálogo de lote y editor).

@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 16
+GameState.SCHEMA = 17
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -371,6 +371,9 @@ function GameState.validate(g: any): (boolean, string?)
 		if l.sold + l.discarded > l.produced then
 			return "El lote " .. l.id .. " vendió o descartó más de lo fabricado."
 		end
+		if l.line ~= nil and not isInt(l.line, 1, Catalog.FACILITIES.maxLines) then
+			return "El lote " .. l.id .. " tiene una línea inválida."
+		end
 		if not GameState.PROD_STATES[l.prodState] or not GameState.SALE_STATES[l.saleState] then
 			return "El lote " .. l.id .. " tiene un estado desconocido."
 		end
@@ -395,7 +398,15 @@ function GameState.validate(g: any): (boolean, string?)
 	if not isList(g.lots) or not isList(g.lotHistory) then
 		return fail("La lista de lotes está dañada.")
 	end
+	local lineUsed = {}
 	for _, l in g.lots do
+		-- Una línea fabrica un solo lote por vez.
+		if l.line ~= nil and l.prodState ~= "completado" and l.prodState ~= "cancelado" then
+			if lineUsed[l.line] then
+				return fail("Dos lotes ocupan la línea " .. tostring(l.line) .. ".")
+			end
+			lineUsed[l.line] = true
+		end
 		local e = checkLot(l, true)
 		if e then
 			return fail(e)
@@ -1083,6 +1094,22 @@ MIGRATIONS[15] = function(g: any, _now: number)
 		g.drafts = {}
 	end
 	g.schema = 16
+end
+
+-- 16 → 17: producción por líneas. Cada lote con fabricación pendiente ocupa una línea (lot.line); ya no hay pausa
+-- ni cola manual. Los lotes en pausa se reanudan; los que no entran en las líneas propias quedan sin línea y
+-- toman la primera que se libere (Rules.assignLines). No se pierde avance ni dinero.
+MIGRATIONS[16] = function(g: any, _now: number)
+	for _, lot in g.lots or {} do
+		if lot.prodState == "pausado" then
+			lot.prodState = "cola"
+		end
+		lot.line = nil
+	end
+	if type(g.facilities) == "table" and type(g.stations) == "table" then
+		Rules.assignLines(g)
+	end
+	g.schema = 17
 end
 
 function GameState.migrate(g: any, now: number): (any?, string?)

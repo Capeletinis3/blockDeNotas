@@ -153,3 +153,24 @@ Respaldo: tag `respaldo-pre-guardado-borradores` y copia del `.rbxl` anterior.
   - El servidor descarta revisiones iguales o más viejas que la guardada (`Actions.saveDraft`). Los borradores sin revisión (partidas o clientes anteriores) se guardan como antes.
 - **Salida protegida.** `App.guardEditor` usa `ScreenEditor.ensureSaved`: espera un envío en curso y, si falta, guarda ya. Mientras el servidor no confirme, no se sale del editor, no se abre otro borrador ni un proyecto nuevo, no se vuelve al menú y no se finaliza.
 - **Aviso.** El diálogo «No se pudo guardar el borrador» muestra el motivo y ofrece Reintentar, Seguir editando o Salir igual (elección explícita). El borrador sigue en memoria y se reintenta solo cada 10 s, nunca con un envío por clic.
+
+## Producción y Ventas definitivas (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-produccion-ventas` y copia del `.rbxl` anterior. La protección de borradores es la de la entrega anterior (sin cambios).
+- **Líneas** (`Rules.lineLot`, `freeLine`, `assignLines`, esquema 17):
+  - Cada lote ocupa una línea (`lot.line`) hasta terminar. No hay cola, pausa ni cancelación: `toggleLotPause` y `moveLot` se rechazan, y `closeSale` solo funciona con el lote ya fabricado (sin reintegros).
+  - Línea 1 desde la fundación; la 2 con dinero del juego (obra existente) y la 3 con Robux de la cuenta (no requiere la 2).
+  - Migración 16 → 17: los lotes que fabricaban toman línea; los que estaban en cola o en pausa esperan la próxima línea libre, sin perder avance ni dinero.
+- **Producción (Ventas › Producción):**
+  - Líneas a la izquierda (≈ 28 %) y detalle a la derecha: bloqueada (cómo desbloquearla), libre («Iniciar producción») u ocupada (vista 3D, % y barra en vivo, días restantes y tiempo real, costo pagado, bonificaciones, estado).
+- **Lote** (`Dialogs.lot`):
+  - Catálogo de modelos finalizados con vista 3D, motor, generación, costo estimado y estado; los que ya usaron su lote figuran no disponibles, con la explicación.
+  - Cantidad libre (sin valor predeterminado, con atajos), costo total, duración (`Rules.daysFor`) y bonificaciones (`Rules.productionBonuses`).
+  - Confirmación obligatoria con la advertencia de que no se cancela. El servidor revalida todo y usa la línea indicada.
+- **Reseñas:** se calculan una sola vez (como antes) y se muestran de a una por segundo. Se pueden saltar y la pantalla se cierra sola al terminar; la primera vez lleva a Ventas con el modelo elegido.
+- **Ventas:**
+  - Lista de modelos a la izquierda y detalle a la derecha: precio, costo, recomendado, demanda en 5 niveles, vendidas, stock, ingresos y críticos.
+  - Precio libre (`Rules.validPrice`: dólares enteros > 0 hasta un tope técnico), con demanda prevista y margen en vivo.
+- **Demanda:** `Rules.demandInfo` compara el peso comercial del auto (el mismo de la simulación: precio, atractivo, reseñas, reputación, alcance, segmento y campaña) con el de los rivales del año. Umbrales en `Catalog.DEMAND_LEVELS`.
+- **Fabricación avanzada:** queda preparada como futura (`Catalog.RULES.advancedManufacturing = false`, `Rules.lotProgress`), sin fases que cambien la simulación.
+- Pruebas: `tests/run.luau` [PV] y líneas, `tests/ui.luau` (recorrido completo, catálogo, reseñas automáticas).

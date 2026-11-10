@@ -472,7 +472,8 @@ Actions.priceRange = priceRange
 	generación. El lote se paga COMPLETO al ordenarlo (qty × costo por unidad; si no alcanza, no se ordena), así
 	nunca queda un lote a medio fabricar por falta de dinero. El lote no se vende
 	mientras se fabrica: al terminar llegan las reseñas y el jugador fija el precio (Actions.launchSale).
-	payload = { designId, qty, price? } (price = precio previsto; se puede cambiar al lanzar) ]]
+	payload = { designId, qty, line?, price? } (line = línea elegida; sin línea, la primera libre. price = precio
+	previsto; se puede cambiar al lanzar). La fabricación no se puede cancelar, pausar ni repetir. ]]
 function Actions.createLot(g: any, ctx: any, payload: any): any
 	local d = findById(g.designs, arg(payload, "designId"))
 	if not d then
@@ -491,6 +492,25 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	if #g.lots >= Catalog.RULES.maxActiveLots then
 		return fail("Ya tenés " .. Catalog.RULES.maxActiveLots .. " lotes activos. Esperá a que se agoten o cerrá la venta de alguno.")
 	end
+	-- Línea: propia y libre (cada línea fabrica un lote por vez, sin cola).
+	local line = arg(payload, "line")
+	if line ~= nil then
+		if not isInt(line, 1, Catalog.FACILITIES.maxLines) then
+			return fail("Línea inválida.")
+		end
+		if not Rules.ownsLine(g, line) then
+			return fail("Todavía no tenés la línea " .. line .. ".")
+		end
+		local busy = Rules.lineLot(g, line)
+		if busy then
+			return fail("La línea " .. line .. " está fabricando «" .. busy.design.name .. "».")
+		end
+	else
+		line = Rules.freeLine(g)
+		if not line then
+			return fail("Todas tus líneas están fabricando. Esperá a que una termine su lote.")
+		end
+	end
 	local snap = Simulation.designSnapshot(g, d)
 	local lot = Simulation.makeLot(g, snap, qty, snap.calc.price)
 	local total = qty * lot.unitCost
@@ -499,30 +519,26 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 	end
 	local price = arg(payload, "price")
 	if price ~= nil then
-		if not Util.isFiniteNumber(price) then
-			return fail("Precio inválido.")
-		end
-		local lo, hi = priceRange(lot)
-		local p = round(price / 10) * 10
-		if p < lo or p > hi then
-			return fail("El precio tiene que estar entre " .. money(lo) .. " y " .. money(hi) .. ".")
+		local p = Rules.validPrice(price)
+		if not p then
+			return fail("Precio inválido: tiene que ser un número entero de dólares mayor que cero.")
 		end
 		lot.price = p
 	end
 	Simulation.spend(g, total, "fabricacion", "Lote de " .. Util.num(qty) .. " × " .. d.name)
 	lot.prepaid = true
 	lot.costSpent = total
+	lot.line = line
 	table.insert(g.lots, lot)
 	d.lotLaunched = true
 	Simulation.registerModel(g, lot)
 	g.counters.lotsLaunched = (g.counters.lotsLaunched or 0) + 1
 	Simulation.addXp(g, ctx, 60)
-	local lines = Rules.lineCount(g)
-	local waiting = #Rules.producingLots(g) >= lines and not table.find(Rules.producingLots(g), lot)
 	return {
 		ok = true,
 		lotId = lot.id,
-		msg = "Lote ordenado: " .. Util.num(qty) .. " × «" .. d.name .. "» · pagaste " .. money(total) .. " (" .. money(lot.unitCost) .. " por unidad)." .. (waiting and " Espera una línea libre." or " Al terminar llegan las reseñas y lo ponés a la venta."),
+		line = line,
+		msg = "Producción iniciada en la línea " .. line .. ": " .. Util.num(qty) .. " × «" .. d.name .. "» · pagaste " .. money(total) .. " (" .. money(lot.unitCost) .. " por unidad). Al terminar llegan las reseñas y lo ponés a la venta.",
 	}
 end
 
@@ -535,14 +551,9 @@ function Actions.launchSale(g: any, ctx: any, payload: any): any
 	if lot.saleState ~= "por lanzar" then
 		return fail(lot.saleState == "produccion" and "El lote todavía se está fabricando." or "Ese lote ya está a la venta.")
 	end
-	local price = arg(payload, "price")
-	if not Util.isFiniteNumber(price) then
-		return fail("Precio inválido.")
-	end
-	local lo, hi = priceRange(lot)
-	local p = round(price / 10) * 10
-	if p < lo or p > hi then
-		return fail("El precio tiene que estar entre " .. money(lo) .. " y " .. money(hi) .. ".")
+	local p = Rules.validPrice(arg(payload, "price"))
+	if not p then
+		return fail("Precio inválido: tiene que ser un número entero de dólares mayor que cero.")
 	end
 	lot.price = p
 	lot.saleState = "en venta"
@@ -557,67 +568,43 @@ function Actions.setLotPrice(g: any, _ctx: any, payload: any): any
 	if not lot then
 		return fail("El lote ya no está a la venta.")
 	end
-	local price = arg(payload, "price")
-	if not Util.isFiniteNumber(price) then
-		return fail("Precio inválido.")
+	if lot.saleState ~= "en venta" and lot.saleState ~= "por lanzar" then
+		return fail("Ese modelo ya no tiene unidades a la venta.")
 	end
-	local lo, hi = priceRange(lot)
-	local p = round(price / 10) * 10
-	if p < lo or p > hi then
-		return fail("El precio tiene que estar entre " .. money(lo) .. " y " .. money(hi) .. ".")
+	local p = Rules.validPrice(arg(payload, "price"))
+	if not p then
+		return fail("Precio inválido: tiene que ser un número entero de dólares mayor que cero.")
 	end
+	-- Afecta las ventas desde ahora: los ingresos ya cobrados no cambian.
 	lot.price = p
 	return { ok = true, msg = "Nuevo precio de " .. lot.design.name .. ": " .. money(p) .. (p < lot.unitCost and " (por debajo del costo: cada venta pierde dinero)." or ".") }
 end
 
--- Pausa o reanuda la producción de un lote (la venta sigue con lo ya fabricado).
-function Actions.toggleLotPause(g: any, _ctx: any, payload: any): any
-	local lot = findLot(g, payload)
-	if not lot or not Rules.lotProducing(lot) then
-		return fail("Ese lote no tiene producción pendiente.")
-	end
-	if lot.prodState == "pausado" then
-		lot.prodState = "cola"
-		return { ok = true, msg = "Producción de " .. lot.design.name .. " reanudada.", quiet = true }
-	end
-	lot.prodState = "pausado"
-	return { ok = true, msg = "Producción de " .. lot.design.name .. " pausada.", quiet = true }
+-- La fabricación no se pausa, no se reordena y no se cancela: cada línea completa su lote. Las acciones viejas
+-- se rechazan (clientes de versiones anteriores).
+local NOT_CANCELABLE = "La fabricación no se puede pausar, reordenar ni cancelar: la línea termina el lote."
+function Actions.toggleLotPause(_g: any, _ctx: any, _payload: any): any
+	return fail(NOT_CANCELABLE)
 end
 
--- Mueve un lote en la cola de producción (las líneas toman los primeros lotes pendientes).
-function Actions.moveLot(g: any, _ctx: any, payload: any): any
-	local lot, i = findById(g.lots, arg(payload, "lotId"))
-	local delta = arg(payload, "delta")
-	if not lot then
-		return fail("El lote ya no existe.")
-	end
-	if delta ~= -1 and delta ~= 1 then
-		return fail("Movimiento inválido.")
-	end
-	local j = (i :: number) + delta
-	if j < 1 or j > #g.lots then
-		return { ok = true, quiet = true }
-	end
-	g.lots[i :: number], g.lots[j] = g.lots[j], g.lots[i :: number]
-	return { ok = true, quiet = true }
+function Actions.moveLot(_g: any, _ctx: any, _payload: any): any
+	return fail(NOT_CANCELABLE)
 end
 
---[[ Cerrar venta: descarta las unidades fabricadas que no se vendieron (sin devolución del costo), cancela
-	la producción pendiente (que no se había cobrado) y deja el modelo como «retirado» en el historial con
-	sus ventas, ingresos, gastos y beneficio. No se puede deshacer. ]]
+--[[ Cerrar venta: descarta las unidades fabricadas que no se vendieron (sin devolución del costo) y deja el
+	modelo como «retirado» en el historial con sus ventas, ingresos, gastos y beneficio. Solo con el lote ya
+	fabricado: la fabricación no se cancela ni se reintegra. No se puede deshacer. ]]
 function Actions.closeSale(g: any, ctx: any, payload: any): any
 	local lot = findLot(g, payload)
 	if not lot then
 		return fail("Ese lote ya no está a la venta.")
 	end
-	local unsold = Rules.lotAvailable(lot)
-	local pending = Rules.lotPending(lot)
-	-- Lotes pagados por adelantado: las unidades que no se llegaron a fabricar se reintegran.
-	local refund = (lot.prepaid and pending > 0) and pending * lot.unitCost or 0
-	if refund > 0 then
-		Simulation.earn(g, refund, "fabricacion", "Reintegro: " .. Util.num(pending) .. " × " .. lot.design.name .. " sin fabricar")
-		lot.costSpent -= refund
+	if Rules.lotProducing(lot) then
+		return fail("«" .. lot.design.name .. "» todavía se está fabricando: la fabricación no se cancela. Podés cerrar la venta cuando el lote termine.")
 	end
+	local unsold = Rules.lotAvailable(lot)
+	local pending = 0
+	local refund = 0
 	lot.discarded += unsold
 	lot.qty = lot.produced
 	if pending > 0 then

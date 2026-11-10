@@ -51,6 +51,10 @@ Catalog.RULES = {
 	maxDesigns = 60,
 	-- Borradores del editor por empresa: solo protege el tamaño del guardado (cada uno ≈ 1 KB).
 	maxDrafts = 20,
+	-- Fabricación avanzada (preparación de materiales, ensamblaje, componentes, control de calidad, maquinaria y
+	-- trabajadores animados): etapa futura. Mientras sea false el lote avanza con un progreso general
+	-- (Rules.lotProgress) y no hay fases que cambien la simulación.
+	advancedManufacturing = false,
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
 	slots = 4, -- empresas por cuenta (ranuras "1".."4")
@@ -78,8 +82,9 @@ Catalog.ECON = {
 	appealScale = 12, -- puntos de atractivo que multiplican las ventas por e (≈ ×2,7)
 	outsideWeight = 45, -- peso del «resto del mercado» (marcas chicas) en el reparto de la demanda
 	eraBaseline = { [1970] = 50, [2030] = 75 }, -- atractivo medio que el mercado espera cada año
-	priceMin = 0.5, -- precio mínimo = costo × 0,5 (vender a pérdida es posible pero se avisa)
-	priceMax = 3, -- precio máximo = referencia × 3
+	priceMin = 0.5, -- (sin uso: el precio es libre; se conserva por compatibilidad)
+	priceMax = 3, -- (sin uso: el precio es libre; se conserva por compatibilidad)
+	priceCap = 1000000000, -- tope técnico del precio de venta (números seguros para guardar y mostrar)
 	reputationStep = 0.08, -- cuánto se acerca la reputación cada mes al nivel que justifican tus ventas
 	-- PI por jugar (bonificaciones). Todas comparten un tope mensual para que no se puedan farmear
 	-- repitiendo acciones baratas (por ejemplo, lotes de una unidad).
@@ -956,6 +961,14 @@ Catalog.NEWS = {
 	{ 2020, "MERCADO", "#F7C95C", "Los eléctricos ya son una parte grande del mercado." },
 	{ 1970, "COMPETENCIA", "#FF8A91", "Kodiak Motors domina las pickups del país." },
 	{ 1975, "COMPETENCIA", "#FF8A91", "Kairo Cars llega con compactos baratos y confiables." },
+}
+
+--[[ Demanda estimada en cinco niveles (Rules.demandInfo): relación entre el peso comercial del auto (precio,
+	atractivo por calidad y prestaciones, reseñas, reputación y alcance, segmento y campaña) y el de los modelos
+	rivales del mismo tipo ese año. 1 = igual que un rival promedio. ]]
+Catalog.DEMAND_LEVELS = {
+	thresholds = { 0.35, 0.75, 1.35, 2.2 },
+	labels = { "Muy baja", "Baja", "Media", "Alta", "Muy alta" },
 }
 
 -- Estadísticas visibles del editor: { clave, etiqueta, unidad, ayuda, dirección (+1 más es mejor), máximo de la barra }

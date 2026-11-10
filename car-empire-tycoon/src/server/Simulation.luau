@@ -222,6 +222,8 @@ function Simulation.archiveLot(g: any, lot: any)
 end
 
 function Simulation.stepProduction(g: any, ctx: any, minutes: number)
+	-- Lotes de partidas anteriores que esperaban en la cola toman una línea en cuanto se libera.
+	Rules.assignLines(g)
 	local active = Rules.producingLots(g)
 	local rate = Rules.lineRate(g) * Rules.realMinutes(minutes)
 	local busy = {}
@@ -268,9 +270,9 @@ function Simulation.stepProduction(g: any, ctx: any, minutes: number)
 			lot.prodState = "produciendo"
 		end
 	end
-	-- Los demás lotes con producción pendiente esperan una línea libre.
+	-- Los demás lotes con producción pendiente (solo de partidas anteriores) esperan una línea libre.
 	for _, lot in g.lots do
-		if not busy[lot.id] and Rules.lotProducing(lot) and lot.prodState ~= "pausado" then
+		if not busy[lot.id] and Rules.lotProducing(lot) then
 			lot.prodState = "cola"
 		end
 	end

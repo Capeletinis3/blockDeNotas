@@ -138,6 +138,7 @@ function Demo.make(kind: string, ctx: any, now: number): any?
 	if avanz then
 		table.insert(g.lots, lot(ds[4], 2500, 900, 640, "produciendo", 1.05))
 	end
+	Rules.assignLines(g) -- cada lote en fabricación ocupa una línea (los que no entran esperan la próxima libre)
 	local hist = lot(ds[1], 250 * scale, 250 * scale, 250 * scale, "completado")
 	hist.saleState = "agotado"
 	hist.endDay = g.time.day - 10

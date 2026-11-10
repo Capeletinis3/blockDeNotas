@@ -247,4 +247,27 @@ function Util.mergeLive(game: any, live: any)
 	end
 end
 
+-- Número escrito por el jugador: admite separador de miles con punto («1.000») o espacios; «2.5» o «2,5» se leen
+-- como decimales (y la cantidad los rechaza). nil si no es un número.
+function Util.parseNumber(text: string): number?
+	local t = string.gsub(string.gsub(text or "", "%s", ""), "%$", "")
+	if t == "" then
+		return nil
+	end
+	local groups = string.split(t, ".")
+	local thousands = #groups > 1 and #groups[1] >= 1 and #groups[1] <= 3
+	for i = 2, #groups do
+		thousands = thousands and #groups[i] == 3
+	end
+	if thousands then
+		t = table.concat(groups)
+	end
+	t = string.gsub(t, ",", ".")
+	local n = tonumber(t)
+	if n == nil or n ~= n or n == math.huge or n == -math.huge then
+		return nil
+	end
+	return n
+end
+
 return Util

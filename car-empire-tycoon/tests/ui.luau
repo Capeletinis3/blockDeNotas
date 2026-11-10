@@ -7,6 +7,7 @@
 ]]
 
 local process = require("@lune/process")
+local serde = require("@lune/serde")
 
 local Build = require("./build")
 Build.prepare({ mock = true })
@@ -196,6 +197,29 @@ local function finishDesign(): boolean
 	end)
 end
 
+-- Ordena un lote por la interfaz: configuración (cantidad) → confirmación obligatoria. Si todas las líneas
+-- están ocupadas, la empresa de prueba recibe otra línea (como si la hubiera comprado).
+local function lotViaUi(designId: string, qty: number): boolean
+	local Rules = require("./.build-ui/shared/Rules")
+	if not Rules.freeLine(App.g) then
+		local sess = Sessions.instance.list[player]
+		sess.game.facilities.lines["2"] = true
+		sess.game.facilities.accountLine3 = true
+		Sessions.instance:push(sess)
+		M.task.wait()
+	end
+	local before = #App.g.lots
+	App.ui.lotDraft = nil
+	App.openDialog("lot", { designId = designId, wide = true })
+	M.task.wait()
+	M.type(named("Cantidad"), tostring(qty))
+	clickN("ContinuarLote")
+	clickN("Confirmar")
+	return waitFor(function()
+		return #App.g.lots > before
+	end)
+end
+
 local function lotOf(designId: string): any
 	for _, l in App.g.lots do
 		if l.designId == designId then
@@ -252,23 +276,59 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	M.task.wait()
 	eq(App.g.money, afterClaim, "la recompensa no se cobra dos veces")
 
-	-- Lanzar lote con cantidad escrita a mano.
+	-- Producción: lista de líneas a la izquierda y detalle a la derecha.
+	local Rules = require("./.build-ui/shared/Rules")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
 	App.go("fabrica")
 	M.task.wait()
-	clickN("LanzarLote")
-	eq(topKind(), "lot", "abre el diálogo de lote")
-	check(named("Cantidad_10000") ~= nil and named("Cantidad_50000") ~= nil, "atajos de 10.000 y 50.000")
+	check(named("Linea_1") ~= nil and named("Linea_2") ~= nil and named("Linea_3") ~= nil, "tres líneas en la lista")
+	eq(named("Linea_1"):GetAttribute("estado"), "libre", "la línea 1 está libre desde la fundación")
+	eq(named("Linea_2"):GetAttribute("estado"), "bloqueada", "la 2 está bloqueada (dinero del juego)")
+	eq(named("Linea_3"):GetAttribute("estado"), "bloqueada", "la 3 está bloqueada (Robux de la cuenta)")
+	clickN("Linea_2")
+	check(named("DesbloquearLinea_2") ~= nil, "la línea 2 muestra cómo desbloquearla")
+	clickN("Linea_3")
+	check(named("DesbloquearLinea_3") ~= nil, "la línea 3 también")
+	clickN("Linea_1")
+	-- Catálogo visual → cantidad libre → confirmación obligatoria.
+	clickN("IniciarProduccion")
+	eq(topKind(), "lot", "abre el catálogo de modelos")
+	local designId = App.g.designs[1].id
+	local vcard = named("Vehiculo_" .. designId)
+	check(vcard ~= nil and vcard:GetAttribute("disponible") == true and vcard:FindFirstChild("Miniatura", true) ~= nil, "el modelo finalizado está disponible, con su vista 3D")
+	clickN("Vehiculo_" .. designId)
+	check(named("Cantidad") ~= nil and named("Cantidad_100") ~= nil and named("CantidadMaxima") ~= nil, "cantidad libre con atajos")
+	eq(named("Cantidad").Text, "", "sin cantidad predeterminada")
+	eq(named("ContinuarLote"):GetAttribute("disabled"), true, "sin cantidad no se continúa")
+	M.type(named("Cantidad"), "2.5")
+	check(named("CantidadInvalida") ~= nil and named("ContinuarLote"):GetAttribute("disabled") == true, "una cantidad no entera se rechaza")
 	M.type(named("Cantidad"), "30")
 	eq(App.ui.lotDraft and App.ui.lotDraft.qty, 30, "la cantidad escrita se conserva")
-	check(find("Ventas estimadas") ~= nil, "muestra la estimación de ventas")
-	check(find("Costo total (se paga al ordenar)") ~= nil and find("Tiempo de producción") ~= nil, "muestra el costo total y la duración")
-	clickN("ConfirmarLote")
-	local designId = App.g.designs[1].id
+	local unit = Rules.lotUnitCost(App.g, DesignCalc.computeDesign(App.g, App.g.designs[1]).unitCost)
+	check(find(Util.money(30 * unit)) ~= nil, "costo total con el costo real por unidad")
+	check(named("Duracion") ~= nil and named("Bonificaciones") ~= nil, "duración estimada y bonificaciones")
+	clickN("ContinuarLote")
+	eq(topKind(), "confirm", "confirmación obligatoria")
+	check(find("no podrá cancelarse") ~= nil and find("Cada modelo solo puede producir un lote") ~= nil, "advierte que no se cancela")
+	check(find("Confirmar producción") ~= nil and find("Volver") ~= nil, "botones Volver y Confirmar producción")
+	clickN("Cancelar")
+	eq(topKind(), "lot", "Volver regresa a la configuración")
+	clickN("ContinuarLote")
+	clickN("Confirmar")
 	check(waitFor(function()
 		return lotOf(designId) ~= nil
 	end), "el lote se crea")
 	eq(lotOf(designId).qty, 30, "con la cantidad elegida")
+	eq(lotOf(designId).line, 1, "en la línea 1")
 	check(not dialogOpen(), "el diálogo se cierra")
+	App.forceRender()
+	M.task.wait()
+	eq(named("Linea_1"):GetAttribute("estado"), "ocupada", "la línea 1 queda ocupada")
+	for _, n in { "ModeloLinea", "Porcentaje", "DiasRestantes", "CostoPagado", "Bonificaciones" } do
+		check(named(n) ~= nil, "el detalle de la línea muestra " .. n)
+	end
+	check(named("IniciarProduccion") == nil, "una línea ocupada no ofrece otro lote")
+	check(named("Pausa") == nil and named("Subir") == nil, "sin pausa, cola ni cancelación")
 	-- Con el panel de Producción abierto la empresa está en pausa: ni el calendario ni la fábrica avanzan.
 	local t0, p0 = App.g.time.minute + App.g.time.day * 10000, lotOf(designId).produced
 	advance(10)
@@ -284,13 +344,37 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	local lr = lotOf(designId)
 	eq(lr.saleState, "por lanzar", "terminado y sin vender todavía")
 	eq(lr.sold, 0, "no se vendió nada antes de fijar el precio")
+	check(App.menuPaused(), "la empresa está en pausa mientras se muestran las reseñas")
 	check(named("Critico_familia") ~= nil and named("Critico_pista") == nil, "los críticos aparecen de a uno")
+	local review0 = Util.deepCopy(lr.review)
 	clickN("SaltarResenas")
+	check(not dialogOpen(), "saltar cierra la presentación")
+	eq(App.ui.route, "ventas", "y lleva a Ventas")
+	eq(App.ui.salesSel, lr.id, "con el modelo elegido")
+	App.openDialog("reviews", { lotId = lr.id })
+	M.task.wait()
 	for _, c in { "familia", "pista", "bolsillo", "tendencias" } do
 		check(named("Critico_" .. c) ~= nil, "reseña de " .. c)
 	end
 	check(named("NotaFinal") ~= nil, "nota final")
-	M.type(named("Precio"), tostring(lr.refPrice))
+	App.closeAllDialogs()
+	eq(serde.encode("json", lotOf(designId).review), serde.encode("json", review0), "las reseñas no se recalculan al volver a verlas")
+	-- Precio de lanzamiento en el panel de Ventas: libre, validado y con la demanda prevista en vivo.
+	App.forceRender()
+	M.task.wait()
+	check(named("Modelo_" .. lr.id) ~= nil, "detalle del modelo")
+	for _, n in { "PrecioModelo", "Vendidas", "Disponibles", "Ingresos", "NotaCriticos", "Demanda", "Margen", "PrecioReferencia" } do
+		check(named(n) ~= nil, "el panel muestra " .. n)
+	end
+	local box = named("Precio")
+	box.Text = "0"
+	check(named("PonerALaVenta"):GetAttribute("disabled") == true, "un precio inválido no se envía")
+	box.Text = tostring(lr.refPrice * 6)
+	local dearLevel = named("DemandaPrevista"):GetAttribute("nivel")
+	box.Text = tostring(math.floor(lr.refPrice * 0.7))
+	local cheapLevel = named("DemandaPrevista"):GetAttribute("nivel")
+	check(cheapLevel > dearLevel, "la demanda prevista cambia con el precio (" .. tostring(dearLevel) .. " → " .. tostring(cheapLevel) .. ")")
+	box.Text = tostring(lr.refPrice)
 	clickN("PonerALaVenta")
 	check(waitFor(function()
 		local x = lotOf(designId)
@@ -310,16 +394,16 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	check(l.sold <= l.produced, "nunca más de lo fabricado")
 	noErrors("Fabricación y venta")
 
-	-- Centro de ventas: tarjeta del modelo con sus datos y acciones.
+	-- Centro de ventas: lista de modelos a la izquierda y detalle a la derecha.
 	App.go("ventas")
+	App.ui.salesSel = l.id
+	App.forceRender()
 	M.task.wait()
-	check(named("Modelo_" .. l.id) ~= nil, "tarjeta del modelo en venta")
-	for _, n in { "Encargadas", "Fabricadas", "Pendientes", "Disponibles", "Vendidas", "Ritmo", "Ingresos", "Gastos", "Resultado", "ModificarPrecio", "CerrarVenta", "Campana", "NuevaCampana" } do
-		check(named(n) ~= nil, "la tarjeta muestra " .. n)
+	check(named("Fila_" .. l.id) ~= nil and named("Modelo_" .. l.id) ~= nil, "fila en la lista y detalle del modelo")
+	for _, n in { "PrecioModelo", "Vendidas", "Disponibles", "Ingresos", "NotaCriticos", "Demanda", "AplicarPrecio", "CerrarVenta", "Campana", "NuevaCampana" } do
+		check(named(n) ~= nil, "el panel muestra " .. n)
 	end
 	check(find("En venta") ~= nil, "estado comercial En venta")
-	clickN("ModificarPrecio")
-	eq(topKind(), "price", "abre el diálogo de precio")
 	M.type(named("Precio"), tostring(l.price + 500))
 	clickN("AplicarPrecio")
 	check(waitFor(function()
@@ -536,11 +620,10 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	end)
 	App.go("fabrica")
 	M.task.wait()
-	clickN("LanzarLote")
-	clickN("ConfirmarLote")
-	check(waitFor(function()
-		return #App.g.lots >= 1
-	end), "Magnate puede lanzar su primer lote")
+	local Rules = require("./.build-ui/shared/Rules")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local unit = Rules.lotUnitCost(App.g, DesignCalc.computeDesign(App.g, App.g.designs[1]).unitCost)
+	check(lotViaUi(App.g.designs[1].id, math.min(100, math.floor(App.g.money / unit))), "Magnate puede lanzar su primer lote")
 	-- Volver a la primera empresa: sus datos siguen intactos.
 	App.request("leaveCompany")
 	waitFor(function()
@@ -884,18 +967,7 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 	waitFor(function()
 		return App.g.money == 2000000
 	end)
-	App.ui.lotDraft = nil
-	App.openDialog("lot", { designId = saved.id })
-	M.task.wait()
-	clickN("ConfirmarLote")
-	check(waitFor(function()
-		for _, l in App.g.lots do
-			if l.designId == saved.id then
-				return true
-			end
-		end
-		return false
-	end), "lote lanzado")
+	check(lotViaUi(saved.id, 50), "lote lanzado")
 	-- Volver a la vista de la sede: con el panel abierto la empresa estaría en pausa.
 	App.go("juego")
 	M.task.wait()
@@ -2286,6 +2358,80 @@ test("Borrador: si el guardado falla no se sale del editor, se avisa, se reinten
 	App.go("juego")
 	M.task.wait()
 	noErrors("Protección del borrador")
+end)
+
+test("Producción y Ventas: modelos usados no disponibles en el catálogo y reseñas que se cierran solas", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = math.max(sess.game.money, 3000000)
+	sess.game.facilities.lines["2"] = true
+	sess.game.facilities.accountLine3 = true
+	Sessions.instance:push(sess)
+	App.go("fabrica")
+	M.task.wait()
+	-- Un modelo que ya usó su único lote figura como no disponible, con la explicación.
+	local used = nil
+	for _, d in App.g.designs do
+		if d.lotLaunched and not d.template then
+			used = d
+		end
+	end
+	check(used ~= nil, "hay un modelo que ya tuvo su lote")
+	local free = Rules.freeLine(App.g)
+	check(free ~= nil, "hay una línea libre")
+	App.ui.lotDraft = nil
+	App.openDialog("lot", { line = free, wide = true })
+	M.task.wait()
+	local card = named("Vehiculo_" .. used.id)
+	check(card ~= nil and card:GetAttribute("disponible") == false, "figura como no disponible")
+	check(find("único lote") ~= nil, "con la explicación")
+	M.click(card)
+	M.task.wait()
+	check(named("Cantidad") == nil, "no se puede elegir para fabricar")
+	App.closeAllDialogs()
+	-- Un modelo nuevo: se fabrica y al terminar las reseñas aparecen de a una y se cierran solas. (Las reseñas
+	-- de lotes anteriores ya se dan por vistas: la prueba mira solo el nuevo.)
+	for _, l in App.g.lots do
+		App.ui.reviewsSeen[l.id] = true
+	end
+	local draft = DesignCalc.newDraft(App.g, "brisa")
+	draft.name = "Reseña Corta"
+	local r = App.request("saveDesign", { draft = draft })
+	check(r.ok, tostring(r.msg))
+	check(lotViaUi(r.designId, 5), "lote de 5")
+	local lot = nil
+	for _, l in App.g.lots do
+		if l.designId == r.designId then
+			lot = l
+		end
+	end
+	App.go("juego")
+	M.task.wait()
+	check(waitFor(function()
+		advance(1)
+		return topKind() == "reviews"
+	end, 400), "llegan las reseñas")
+	check(named("Critico_pista") == nil, "empiezan de a una")
+	M.task.wait(1.2)
+	M.task.wait()
+	check(named("Critico_pista") ~= nil, "un segundo después aparece la siguiente")
+	M.task.wait(4)
+	M.task.wait()
+	check(not dialogOpen(), "al terminar la secuencia la pantalla se cierra sola")
+	eq(App.ui.route, "ventas", "y lleva a Ventas")
+	eq(App.ui.salesSel, lot.id, "con el modelo elegido para fijar el precio")
+	check(named("PonerALaVenta") ~= nil, "listo para poner a la venta")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Producción y Ventas")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

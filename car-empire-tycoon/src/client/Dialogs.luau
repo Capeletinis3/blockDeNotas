@@ -147,9 +147,9 @@ end
 -- Ayuda por sección (helpDialog)
 local HELP = {
 	juego = "La sede es tu espacio 3D: arrastrá para girar la cámara y usá la rueda (o pellizcá en celular) para acercar o alejar. Todo se maneja desde la barra de arriba: Diseño, Catálogo, Ventas (con Producción), Mercado, Investigación, Personal y Compañía (con Instalaciones).",
-	fabrica = "Lanzá un lote eligiendo un diseño y cuántas unidades querés (100, 1.000, 10.000, 50.000 o cualquier número). La fábrica produce exactamente esa cantidad y se detiene: nunca repite sola. El lote se paga completo al ordenarlo y cada modelo tiene un solo lote; al terminar llegan las reseñas y elegís el precio. Cada línea de la sede fabrica un lote a la vez; los demás esperan en cola.",
+	fabrica = "Elegí una línea libre y tocá «Iniciar producción»: aparece el catálogo de tus modelos finalizados (los borradores no se fabrican). Escribí cuántas unidades querés, revisá el costo total, la duración y las bonificaciones, y confirmá. El lote se paga completo al confirmarlo, no se puede cancelar ni pausar y cada modelo produce un solo lote. Cada línea fabrica un lote por vez; la 2 se desbloquea con dinero del juego y la 3 con Robux para toda la cuenta. La fabricación avanza con el calendario (1×, 2× o 3×) y se detiene en pausa.",
 	autos = "El catálogo reúne tus diseños con su año de modelo y generación. Desde acá lanzás lotes, editás, creás una nueva generación de un modelo o lo duplicás. «Historia de modelos» muestra cada generación con sus lotes, ventas y resultado.",
-	ventas = "Lo fabricado se vende solo, sin negociar. El ritmo depende de la demanda del tipo de auto en el año, de su atractivo frente a los rivales, del precio, de tu reputación y del alcance de tu sede. «Modificar precio» cambia el ritmo desde ese momento. «Cerrar venta» deja de vender el modelo: las unidades sin vender se descartan sin reintegro y lo que faltaba fabricar se cancela y se reintegra. Estados: En fabricación, Por lanzar, En venta, Agotado y Retirado.",
+	ventas = "Lo fabricado se vende solo, sin negociar. Elegí un modelo de la lista para ver su precio, costo, precio recomendado, demanda estimada (de muy baja a muy alta), ventas, stock, ingresos y la nota de los críticos. El precio es libre: escribilo y la demanda prevista y el margen se actualizan antes de aplicarlo; afecta solo las ventas futuras. La demanda depende del precio, la calidad, las prestaciones, las reseñas, tu reputación, los rivales y las campañas. «Cerrar venta» (con el lote ya fabricado) deja de vender el modelo y descarta lo que no se vendió, sin reintegro.",
 	mercado = "Muestra la demanda de cada tipo de vehículo este año y cómo se reparte entre tus modelos, las marcas rivales ficticias y el resto del mercado. Es el mismo cálculo que usa la simulación para vender.",
 	investigacion = "Cuatro áreas: Chasis, Motores, Seguridad y Tecnología. Cada investigación cuesta dinero y puntos de investigación (PI), que se pagan al empezar, y dura una cantidad de días de juego. Podés llevar varias a la vez y no se cancelan. Los PI los genera el centro de investigación (la sede) y cada línea que está fabricando. Se puede adelantar hasta 5 años, con recargo por año. Lo investigado queda para siempre; el equipamiento se elige al diseñar.",
 	personal = "El personal es opcional. Contratar tiene un costo único y un salario mensual. Asignado a una estación acelera la fábrica, en ventas o marketing suma alcance comercial (con topes). No hay cansancio ni descansos que atender.",
@@ -330,153 +330,218 @@ Dialogs.daily = function(box: Frame)
 	end
 end
 
--- Lanzar lote (reemplaza la orden de producción): diseño, cantidad libre, precio y estimación ----------------
-local QTY_PRESETS = { 100, 1000, 10000, 50000 }
+-- Iniciar producción: catálogo de modelos finalizados → cantidad → confirmación obligatoria ------------------
+-- params = { line?, designId? }. Sin línea se usa la primera libre. Todo lo vuelve a validar el servidor
+-- (Actions.createLot): modelo, línea, cantidad y dinero; el costo y la duración salen de los mismos cálculos.
+local QTY_PRESETS = { 10, 50, 100, 500, 1000 }
 
-local function parseInt(text: string): number?
-	local digits = string.gsub(text, "[^%d]", "")
-	return tonumber(digits)
+local parseNumber = Util.parseNumber
+
+-- Cantidad escrita: entero positivo dentro del tope técnico, o nil (y el motivo).
+local function validQty(n: any): (number?, string?)
+	if type(n) ~= "number" or n ~= n or n ~= math.floor(n) then
+		return nil, "Escribí una cantidad entera de unidades."
+	end
+	if n < 1 then
+		return nil, "La cantidad tiene que ser al menos 1."
+	end
+	if n > Catalog.RULES.maxLotQty then
+		return nil, "El tope técnico de un lote es " .. Util.num(Catalog.RULES.maxLotQty) .. " unidades."
+	end
+	return n, nil
 end
+Dialogs.validQty = validQty
+
+-- Estado de fabricación de un modelo para el catálogo: nil si se puede fabricar, o el motivo.
+local function lotBlock(g: any, d: any): string?
+	if d.template then
+		return "Plantilla: no se fabrica"
+	end
+	if d.lotLaunched then
+		for _, l in g.lots do
+			if l.designId == d.id and Rules.lotProducing(l) then
+				return "En fabricación (su único lote)"
+			end
+		end
+		return "Ya fabricó su único lote: para producir otra vez, creá un modelo nuevo o una nueva generación"
+	end
+	return nil
+end
+Dialogs.lotBlock = lotBlock
 
 Dialogs.lot = function(box: Frame, params: any)
 	local g = App.g
-	-- Cada modelo se fabrica una sola vez: solo se ofrecen los que todavía no tuvieron su lote.
-	local list = {}
-	local launched = 0
+	local st = App.ui.lotDraft
+	if not st or st.line ~= params.line then
+		st = { step = params.designId and "config" or "catalogo", designId = params.designId, line = params.line, qtyText = "" }
+		App.ui.lotDraft = st
+	end
+	-- Línea: la elegida (si sigue libre) o la primera libre.
+	local line = params.line
+	if line and (not Rules.ownsLine(g, line) or Rules.lineLot(g, line)) then
+		line = nil
+	end
+	line = line or Rules.freeLine(g)
+	if not line then
+		info(box, "Iniciar producción", { Ui.note("b", "Todas tus líneas están fabricando. Cada línea completa su lote antes de empezar otro; mirá el avance en Ventas › Producción.") })
+		return
+	end
+	local design = nil
 	for _, d in g.designs do
-		if not d.template and not d.lotLaunched then
-			table.insert(list, d)
-		elseif d.lotLaunched then
-			launched += 1
+		if d.id == st.designId then
+			design = d
 		end
 	end
-	header(box, "Ordenar lote de producción")
-	local b = body(box)
-	if #list == 0 then
-		Ui.note("b", launched > 0 and "Todos tus modelos ya tuvieron su lote: cada modelo se fabrica una sola vez. Para volver a producir, creá un modelo nuevo (Duplicar en el Catálogo) o una nueva generación."
-			or "Primero guardá un diseño en el editor.").Parent = b
+	if st.step == "config" and (not design or lotBlock(g, design)) then
+		st.step = "catalogo"
+	end
+
+	if st.step == "catalogo" then
+		header(box, "Iniciar producción · línea " .. line)
+		local b = body(box)
+		Ui.text("Elegí un modelo finalizado. Los borradores no se fabrican y cada modelo produce un solo lote.", { size = Ui.S.sm, color = T.mut }).Parent = b
+		local cards = {}
+		local any = false
+		for _, d in g.designs do
+			if not d.template then
+				any = true
+				local why = lotBlock(g, d)
+				local c = DesignCalc.computeDesign(g, d)
+				local base = Catalog.base(d.baseId)
+				local motor = Catalog.part("motor", d.parts.motor)
+				local card = Ui.new("TextButton", {
+					Name = "Vehiculo_" .. d.id, Text = "", AutoButtonColor = false,
+					BackgroundColor3 = Ui.hex("#111A2B"), BackgroundTransparency = why and 0.45 or 0.1,
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Corner = 12, Stroke = { Ui.hex("#22304A"), 1 }, Pad = 10,
+					List = { dir = "V", gap = 6 },
+				}, {
+					Ui.carThumb(d, 240, 120),
+					Ui.text(d.name, { size = 15, weight = W.bold, color = why and T.mut or T.tx }),
+					Ui.text((base and base.name or "") .. " · " .. (motor and (string.gsub(motor.name, " · nivel %d+$", "")) .. " nivel " .. tostring(d.motorLevel or 1) or ""), { size = Ui.S.xs, color = T.mut }),
+					Ui.text(tostring(d.generation or ""), { size = Ui.S.xs, color = T.mut }),
+					Ui.between("Costo estimado por unidad", Util.money(Rules.lotUnitCost(g, c.unitCost))),
+					why and Ui.why(why) or Ui.chip("● Disponible para fabricar", "cg"),
+				})
+				local thumb = card:FindFirstChild("Miniatura") :: any
+				if thumb then
+					thumb.Size = UDim2.new(1, 0, 0, 120)
+				end
+				card:SetAttribute("disponible", why == nil)
+				card.Activated:Connect(function()
+					if why then
+						App.toast("info", d.name .. ": " .. why)
+						return
+					end
+					st.designId = d.id
+					st.step = "config"
+					App.renderDialog()
+				end)
+				table.insert(cards, card)
+			end
+		end
+		if not any then
+			Ui.note("b", "Todavía no finalizaste ningún diseño. Abrí el editor, recorré las cinco etapas y tocá «Finalizar diseño».").Parent = b
+		else
+			Ui.grid(cards, App.isPhone() and 1 or 3, nil, 10).Parent = b
+		end
 		footer(box, { closeBtn() })
 		return
 	end
-	local st = App.ui.lotDraft
-	if not st or (params.designId and st.designId ~= params.designId and not st.touched) then
-		local def = list[#list].id
-		for _, d in list do
-			if d.id == params.designId then
-				def = d.id
-			end
-		end
-		local dd = list[#list]
-		for _, x in list do
-			if x.id == def then
-				dd = x
-			end
-		end
-		local unitNow = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, dd).unitCost)
-		st = { designId = def, qty = math.max(1, math.min(100, unitNow > 0 and math.floor(g.money / unitNow) or 100)) }
-		App.ui.lotDraft = st
-	end
-	local d = list[#list]
-	for _, x in list do
-		if x.id == st.designId then
-			d = x
-		end
-	end
-	if st.designId ~= d.id or st.priceFor ~= d.id then
-		st.price = nil
-	end
-	st.designId = d.id
+
+	-- Configuración del lote.
+	local d = design :: any
 	local c = DesignCalc.computeDesign(g, d)
-	local lo, hi = Rules.priceRange(c.unitCost, c.price)
-	local price = math.clamp(st.price or c.price, lo, hi)
-	st.price, st.priceFor = price, d.id
-	local qty = math.clamp(math.floor(st.qty or 100), 1, Catalog.RULES.maxLotQty)
-	st.qty = qty
-
-	local designOpts = {}
-	for _, x in list do
-		table.insert(designOpts, { x.id, x.name .. " · " .. (x.generation or "") })
-	end
-	Ui.col({ Ui.fl("Modelo (diseño guardado)"), Ui.select(d.id, designOpts, function(v: any)
-		st.designId = v
-		st.touched = true
-		App.renderDialog()
-	end, { fill = true, name = "ModeloLote" }) }, 6).Parent = b
-
-	-- Cantidad: atajos y número libre.
+	local unit = Rules.lotUnitCost(g, c.unitCost) -- el mismo costo que cobra el servidor
+	local qty, qtyWhy = validQty(st.qty)
+	header(box, "Lote de «" .. d.name .. "» · línea " .. line)
+	local b = body(box)
 	local presets = {}
 	for _, q in QTY_PRESETS do
 		table.insert(presets, Ui.opt(Util.num(q), qty == q, function()
-			st.qty = q
-			st.touched = true
+			st.qty, st.qtyText = q, tostring(q)
 			App.renderDialog()
-		end, { height = 36, name = "Cantidad_" .. q }))
+		end, { height = 34, name = "Cantidad_" .. q }))
 	end
-	local qtyBox = Ui.input(tostring(qty), "Cantidad", function(text: string)
-		local n = parseInt(text)
-		st.qty = n and math.clamp(math.floor(n), 1, Catalog.RULES.maxLotQty) or qty
-		st.touched = true
+	local afford = unit > 0 and math.floor(g.money / unit) or 0
+	table.insert(presets, Ui.opt("Máximo que alcanza (" .. Util.num(afford) .. ")", qty == afford and afford > 0, function()
+		st.qty, st.qtyText = afford, tostring(afford)
 		App.renderDialog()
-	end, { name = "Cantidad", numeric = true, width = 140 })
+	end, { height = 34, name = "CantidadMaxima", disabled = afford < 1, why = "No alcanza para una unidad" }))
+	local qtyBox = Ui.input(st.qtyText or "", "Cantidad de unidades", function(text: string)
+		st.qtyText = text
+		st.qty = parseNumber(text)
+		App.renderDialog()
+	end, { name = "Cantidad", width = 200 })
+	Ui.row({
+		Ui.carThumb(d, 200, 112),
+		Ui.grow(Ui.col({
+			Ui.text(d.name, { size = 18, weight = W.bold }),
+			Ui.text(tostring(d.generation or "") .. " · " .. (Catalog.base(d.baseId) and Catalog.base(d.baseId).name or ""), { size = Ui.S.xs, color = T.mut }),
+			Ui.button("Cambiar de modelo", "q", function()
+				st.step = "catalogo"
+				App.renderDialog()
+			end, { small = true, icon = "left", name = "VolverCatalogo" }),
+		}, 4)),
+	}, 14, { v = "T" }).Parent = b
 	Ui.col({
-		Ui.fl("Cantidad de unidades (1 a " .. Util.num(Catalog.RULES.maxLotQty) .. ")"),
-		Ui.row({ Ui.row(presets, 8, { wrap = true, Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }), qtyBox }, 10, { wrap = true }),
+		Ui.fl("Cantidad de unidades (cualquier número entero positivo)"),
+		qtyBox,
+		Ui.row(presets, 8, { wrap = true }),
+		(qty == nil and (st.qtyText or "") ~= "") and Ui.text(qtyWhy or "", { size = Ui.S.xs, color = T.re2, name = "CantidadInvalida" }) or nil,
 	}, 6).Parent = b
-
-	local price = c.price -- el precio final se elige al ponerlo a la venta, después de las reseñas
-	-- Estimación (mismo cálculo que el servidor).
-	local est = Rules.designSalesEstimate(g, c, d, price)
-	local lineRate = g.derived.lineRate
-	local sellRate = math.max(0.01, est.rate)
-	local prodMin = qty / math.max(0.01, lineRate)
-	local sellMin = qty / math.min(sellRate, math.max(0.01, lineRate))
-	-- El mismo costo por unidad que cobra el servidor (con la eficiencia del personal de Producción).
-	local unit = Rules.lotUnitCost(g, c.unitCost)
-	local totalCost = qty * unit
-	local margin = price - unit
-	local afford = unit > 0 and math.floor(g.money / unit) or qty
-	local caps = g.derived.caps
+	local total = (qty or 0) * unit
+	local days = Rules.daysFor(g, qty or 0)
+	local speed = math.max(1, g.time.speed)
+	local realSec = days * Catalog.CALENDAR.realSecondsPerDay / speed
+	local Factory = App.screens.fabrica
 	Ui.grid({
-		(Ui.kv("Costo por unidad", Util.money(unit), { sub = "Calidad " .. Catalog.QUALITY_TIERS[d.quality + 1] .. " · " .. c.hp .. " hp" })),
-		(Ui.kv("Costo total (se paga al ordenar)", Util.money(totalCost), { color = totalCost > g.money and T.re2 or T.or_, sub = "Tenés " .. Util.money(g.money) })),
-		(Ui.kv("Precio de referencia", Util.money(price), { sub = "Lo elegís al ponerlo a la venta · ganancia ≈ " .. Util.money(margin) .. "/u" })),
-		(Ui.kv("Ingresos potenciales (estimado)", Util.money(price * qty), { color = T.gr, sub = "Si se vende todo el lote" })),
-		(Ui.kv("Ganancia potencial (estimada)", Util.money(margin * qty), { color = margin >= 0 and T.gr or T.re2, sub = "Ingresos − costo total" })),
-		(Ui.kv("Ventas estimadas", Util.num(est.rate, 1) .. " por minuto", { color = T.gr, sub = "Cuota del " .. Util.num(est.share * 100, 1) .. " % de " .. Util.num(est.demand, 0) .. " autos/min" })),
-		(Ui.kv("Tiempo de producción (estimado)", "≈ " .. Util.realTime(prodMin * 60), { sub = "A la velocidad actual, en una línea" })),
-		(Ui.kv("Capacidad de fabricación", Util.num(lineRate, 1) .. " autos/min por línea", { sub = caps.lines .. (caps.lines == 1 and " línea" or " líneas") .. " · " .. Util.num(caps.capacity, 1) .. "/min en total" })),
-		(Ui.kv("Venta completa (estimada)", "≈ " .. Util.realTime(sellMin * 60), { sub = est.rate < lineRate and "limitada por la demanda" or "limitada por la fábrica" })),
-	}, App.isPhone() and 2 or 3, nil, 10).Parent = b
-	Ui.text("Los ingresos, la ganancia y los tiempos son estimaciones con la demanda y los rivales de hoy: cambian con el precio, la competencia y los años.", { size = Ui.S.xs, color = T.mut }).Parent = b
-	if sellMin > 45 then
-		Ui.note("y", "Riesgo: a este ritmo el lote tardaría " .. Util.realTime(sellMin * 60) .. " en venderse. Si después lo cerrás, las unidades sin vender se pierden.").Parent = b
+		(Ui.kv("Línea", "Línea " .. line, { sub = Util.num(g.derived.lineRate, 1) .. " autos/min real a 1×" })),
+		(Ui.kv("Costo por unidad", Util.money(unit), { sub = "Con las bonificaciones de Producción" })),
+		(Ui.kv("Costo total", qty and Util.money(total) or "—", { color = total > g.money and T.re2 or T.or_, sub = "Tenés " .. Util.money(g.money) .. " · se paga al confirmar", name = "CostoTotal" })),
+		(Ui.kv("Duración estimada", qty and Factory.daysText(days) or "—", { sub = qty and ("≈ " .. Util.realTime(realSec) .. " reales a " .. speed .. "×") or "Escribí la cantidad", name = "Duracion" })),
+	}, App.isPhone() and 2 or 4, nil, 10).Parent = b
+	Ui.col({ Ui.lbl("Bonificaciones aplicadas"), Factory.bonusList(g) }, 6).Parent = b
+	if qty and total > g.money then
+		Ui.note("r", "No alcanza el dinero: el lote cuesta " .. Util.money(total) .. " y tenés " .. Util.money(g.money) .. ". Podés pagar hasta " .. Util.num(afford) .. " unidades.").Parent = b
 	end
-	if afford < qty then
-		Ui.note("r", "No alcanza el dinero: el lote cuesta " .. Util.money(totalCost) .. " y tenés " .. Util.money(g.money) .. ". Podés pagar hasta " .. Util.num(afford) .. " unidades.").Parent = b
-		Ui.button("Usar el máximo que alcanza (" .. Util.num(afford) .. ")", "default", function()
-			st.qty = math.max(1, afford)
-			st.touched = true
-			App.renderDialog()
-		end, { small = true, name = "CantidadMaxima", disabled = afford < 1 }).Parent = b
-	end
-	Ui.note("b", "Cada modelo tiene UN solo lote: se fabrican " .. Util.num(qty) .. " unidades de «" .. d.name .. "» y la línea se detiene. Al terminar, cuatro críticos evalúan el auto y vos elegís el precio para ponerlo a la venta. Para volver a fabricar hará falta un modelo nuevo o una nueva generación.").Parent = b
-	local create
-	create = Ui.button("Ordenar " .. Util.num(qty) .. " unidades · " .. Util.money(totalCost), "p", function()
-		local r = App.request("createLot", { designId = d.id, qty = qty }, { button = create })
-		if r.ok then
-			App.ui.lotDraft = nil
-			App.closeAllDialogs()
-			if App.ui.route ~= "fabrica" and App.ui.route ~= "editor" and App.ui.route ~= "ventas" then
-				App.go("fabrica")
-			end
-		end
-	end, { name = "ConfirmarLote", disabled = afford < qty, why = "No alcanza el dinero" })
-	footer(box, { Ui.button("Cancelar", "default", App.closeDialog), create })
+	local why = (qty == nil and (qtyWhy or "Escribí la cantidad")) or (total > g.money and "No alcanza el dinero") or nil
+	local continue = Ui.button("Continuar", "p", function()
+		local n = qty :: number
+		App.openDialog("confirm", {
+			title = "Confirmar producción",
+			body = "Revisá el lote antes de empezar.",
+			lines = {
+				"Modelo|" .. d.name,
+				"Cantidad de unidades|" .. Util.num(n),
+				"Costo total|" .. Util.money(n * unit),
+				"Duración estimada|" .. Factory.daysText(Rules.daysFor(g, n)),
+				"Línea|Línea " .. line,
+			},
+			note = { "y", "Una vez iniciada la fabricación, este lote no podrá cancelarse. Cada modelo solo puede producir un lote." },
+			okLabel = "Confirmar producción",
+			cancel = "Volver",
+			onOk = function()
+				local r = App.request("createLot", { designId = d.id, qty = n, line = line }, { key = "lote" })
+				if r.ok then
+					App.ui.lotDraft = nil
+					App.ui.lineSel = r.line or line
+					App.closeAllDialogs()
+					if App.ui.route ~= "fabrica" then
+						App.go("fabrica")
+					else
+						App.forceRender()
+					end
+				end
+			end,
+		})
+	end, { name = "ContinuarLote", icon = "right", iconAfter = true, disabled = why ~= nil, why = why })
+	footer(box, { Ui.button("Cancelar", "default", App.closeDialog, { name = "CancelarLote" }), continue })
 end
 
 --[[ Reseñas de los críticos (al terminar un lote): aparecen de a una, con un segundo entre cada una, y se
-	pueden saltar. Las notas vienen guardadas del servidor (no cambian al reabrir). Si el lote está «por
-	lanzar», abajo se elige el precio y se pone a la venta. ]]
+	pueden saltar. Las notas vienen guardadas del servidor (se calcularon una sola vez). La primera vez, al
+	terminar la secuencia (o al saltarla) el diálogo se cierra solo y lleva a Ventas con ese modelo elegido,
+	donde se fija el precio. Mientras está abierto, la empresa queda en pausa (como cualquier diálogo). ]]
 Dialogs.reviews = function(box: Frame, params: any, dd: any)
 	local g = App.g
 	local l = nil
@@ -506,14 +571,32 @@ Dialogs.reviews = function(box: Frame, params: any, dd: any)
 	end
 	local rv = l.review
 	App.ui.reviewShown = App.ui.reviewShown or {}
-	local shown = App.ui.reviewShown[l.id] or 1
+	App.ui.reviewDone = App.ui.reviewDone or {}
+	local replay = App.ui.reviewDone[l.id] == true -- ya se vio completa: se muestra todo junto
+	local shown = replay and #rv.scores or (App.ui.reviewShown[l.id] or 1)
+	local lotId = l.id
+	local function finish()
+		App.ui.reviewShown[lotId] = #rv.scores
+		App.ui.reviewDone[lotId] = true
+		local top = App.topDialog()
+		if top and top.kind == "reviews" and top.params.lotId == lotId then
+			App.closeDialog()
+		end
+		-- Siguiente paso: el precio, en Ventas (si todavía no está a la venta).
+		App.ui.salesSel = lotId
+		if App.ui.route ~= "ventas" then
+			App.go("ventas")
+		else
+			App.forceRender()
+		end
+	end
 	header(box, "Reseñas de «" .. l.design.name .. "»")
 	local b = body(box)
 	Ui.text("Cuatro críticos especializados probaron el auto (" .. Util.num(l.produced) .. " unidades fabricadas).", { size = Ui.S.sm, color = T.mut }).Parent = b
 	for i, sc in rv.scores do
 		if i <= shown then
 			local color = sc.score >= 7.5 and T.gr or (sc.score >= 5 and T.ye or T.re2)
-			Ui.card({
+			local card = Ui.card({
 				Ui.row({
 					Ui.grow(Ui.col({
 						Ui.text(sc.name, { size = 16, weight = W.bold }),
@@ -522,100 +605,49 @@ Dialogs.reviews = function(box: Frame, params: any, dd: any)
 					Ui.inline(Util.num(sc.score, 1), { size = 28, weight = W.heavy, color = color, name = "Nota" }),
 				}, 10),
 				Ui.text("«" .. sc.text .. "»", { size = Ui.S.sm, color = T.tx2, lineHeight = 1.4 }),
-			}, { gap = 6, bg = T.p2, name = "Critico_" .. sc.critic }).Parent = b
+			}, { gap = 6, bg = T.p2, name = "Critico_" .. sc.critic })
+			card.Parent = b
+			if i == shown and not replay and not Ui.reduceMotion then
+				Ui.fadeIn(card)
+			end
 		end
 	end
 	local done = shown >= #rv.scores
-	if not done then
-		-- El siguiente crítico aparece en un segundo (si el diálogo sigue abierto en este lote).
-		local token = {}
-		dd.revealToken = token
-		task.delay(1, function()
-			local top = App.topDialog()
-			if dd.revealToken == token and top and top.kind == "reviews" and top.params.lotId == l.id then
-				App.ui.reviewShown[l.id] = math.max(App.ui.reviewShown[l.id] or 1, shown + 1)
-				App.renderDialog()
-			end
-		end)
-	else
+	if done then
 		local factor = Rules.reviewFactor(l)
 		Ui.card({
 			Ui.row({
 				Ui.grow(Ui.col({
-					Ui.text("Nota final (promedio)", { size = Ui.S.sm, color = T.mut }),
+					Ui.text("Nota final (promedio de los cuatro)", { size = Ui.S.sm, color = T.mut }),
 					Ui.text("Demanda ×" .. Util.num(factor, 2) .. (factor >= 1 and " por las buenas reseñas" or " por las reseñas"), { size = Ui.S.xs, color = factor >= 1 and T.gr or T.re2 }),
 				}, 2)),
 				Ui.inline(Util.num(rv.avg, 1) .. " / 10", { size = 30, weight = W.heavy, name = "NotaFinal" }),
 			}, 10),
 		}, { gap = 6, name = "NotaFinal" }).Parent = b
 	end
-	local buttons: { Instance? } = {}
-	if not done then
-		table.insert(buttons, Ui.button("Saltar", "default", function()
-			App.ui.reviewShown[l.id] = #rv.scores
-			App.renderDialog()
-		end, { name = "SaltarResenas" }))
-	elseif l.saleState == "por lanzar" then
-		-- Precio de lanzamiento (mismo rango que el servidor) y estimación de ventas.
-		local lo, hi = Rules.priceRange(l.unitCost, l.refPrice)
-		params.price = math.clamp(params.price or l.refPrice, lo, hi)
-		local price = params.price
-		local function setPrice(p: number)
-			params.price = math.clamp(Util.round(p / 10) * 10, lo, hi)
-			App.renderDialog()
-		end
-		local saved = l.price
-		l.price = price
-		local rate = Rules.lotPotentialRate(g, l)
-		l.price = saved
-		Ui.col({
-			Ui.fl("Precio de venta (" .. Util.money(lo) .. " a " .. Util.money(hi) .. ")"),
-			Ui.row({
-				Ui.input(tostring(price), "Precio", function(text: string)
-					local n = tonumber((string.gsub(text, "[^%d]", "")))
-					if n then
-						setPrice(n)
-					else
-						App.renderDialog()
-					end
-				end, { name = "Precio", numeric = true, width = 140 }),
-				Ui.button("−10 %", "default", function()
-					setPrice(price * 0.9)
-				end, { small = true, name = "PrecioMenos" }),
-				Ui.button("Referencia " .. Util.money(l.refPrice), "default", function()
-					setPrice(l.refPrice)
-				end, { small = true, name = "PrecioReferencia" }),
-				Ui.button("+10 %", "default", function()
-					setPrice(price * 1.1)
-				end, { small = true, name = "PrecioMas" }),
-			}, 8, { wrap = true }),
-		}, 6).Parent = b
-		Ui.grid({
-			(Ui.kv("Ventas estimadas", Util.num(rate, 1) .. " por minuto", { color = T.gr, sub = "Con las reseñas, el precio y la reputación" })),
-			(Ui.kv("Ganancia por unidad", Util.money(price - l.unitCost), { color = price >= l.unitCost and T.gr or T.re2, sub = "Costo " .. Util.money(l.unitCost) })),
-			(Ui.kv("Ingresos si se vende todo", Util.money(price * Rules.lotAvailable(l)), { color = T.gr, sub = Util.num(Rules.lotAvailable(l)) .. " unidades" })),
-		}, App.isPhone() and 1 or 3, nil, 10).Parent = b
-		if price < l.unitCost then
-			Ui.note("r", "Por debajo del costo: cada venta pierde " .. Util.money(l.unitCost - price) .. ".").Parent = b
-		elseif price > l.refPrice * 1.3 then
-			Ui.note("y", "Un precio muy alto vende mucho más lento.").Parent = b
-		end
-		local launch
-		launch = Ui.button("Poner a la venta a " .. Util.money(price), "p", function()
-			local r = App.request("launchSale", { lotId = l.id, price = price }, { button = launch })
-			if r.ok then
-				App.closeDialog()
+	if not replay then
+		-- El siguiente crítico aparece en un segundo; al terminar, la nota final queda un momento y se cierra.
+		local token = {}
+		dd.revealToken = token
+		task.delay(done and 1.2 or 1, function()
+			local top = App.topDialog()
+			if dd.revealToken ~= token or not top or top.kind ~= "reviews" or top.params.lotId ~= lotId then
+				return
 			end
-		end, { name = "PonerALaVenta" })
-		table.insert(buttons, Ui.button("Más tarde", "default", App.closeDialog, { name = "MasTarde" }))
-		table.insert(buttons, launch)
+			if done then
+				finish()
+			else
+				App.ui.reviewShown[lotId] = math.max(App.ui.reviewShown[lotId] or 1, shown + 1)
+				App.renderDialog()
+			end
+		end)
+		footer(box, { Ui.button("Saltar", "default", finish, { name = "SaltarResenas" }) })
 	else
-		table.insert(buttons, closeBtn())
+		footer(box, { closeBtn() })
 	end
-	footer(box, buttons)
 end
 
--- Modificar el precio de un lote a la venta (afecta las ventas desde ese momento).
+-- Modificar el precio de un lote (el mismo editor de precio que el panel de Ventas).
 Dialogs.price = function(box: Frame, params: any, dd: any)
 	local g = App.g
 	local l = nil
@@ -638,58 +670,10 @@ Dialogs.price = function(box: Frame, params: any, dd: any)
 	end
 	header(box, "Precio de " .. l.design.name)
 	local b = body(box)
-	local lo, hi = Rules.priceRange(l.unitCost, l.refPrice)
-	params.price = math.clamp(params.price or l.price, lo, hi)
-	local price = params.price
-	local function setPrice(p: number)
-		params.price = math.clamp(Util.round(p / 10) * 10, lo, hi)
-		App.renderDialog()
-	end
-	local box2 = Ui.input(tostring(price), "Precio", function(text: string)
-		local n = tonumber((string.gsub(text, "[^%d]", "")))
-		if n then
-			setPrice(n)
-		else
-			App.renderDialog()
-		end
-	end, { name = "Precio", numeric = true, width = 140 })
-	Ui.col({
-		Ui.fl("Nuevo precio (" .. Util.money(lo) .. " a " .. Util.money(hi) .. ")"),
-		Ui.row({
-			box2,
-			Ui.button("−10 %", "default", function()
-				setPrice(price * 0.9)
-			end, { small = true }),
-			Ui.button("Referencia " .. Util.money(l.refPrice), "default", function()
-				setPrice(l.refPrice)
-			end, { small = true }),
-			Ui.button("+10 %", "default", function()
-				setPrice(price * 1.1)
-			end, { small = true }),
-		}, 8, { wrap = true }),
-	}, 6).Parent = b
-	-- Comparación de ritmos con el precio actual y el nuevo (mismo cálculo que el servidor).
-	local now = Rules.lotPotentialRate(g, l)
-	local saved = l.price
-	l.price = price
-	local after = Rules.lotPotentialRate(g, l)
-	l.price = saved
-	Ui.grid({
-		(Ui.kv("Precio actual", Util.money(saved), { sub = Util.num(now, 1) .. " ventas/min" })),
-		(Ui.kv("Precio nuevo", Util.money(price), { color = T.vi2, sub = Util.num(after, 1) .. " ventas/min" })),
-		(Ui.kv("Ganancia por unidad", Util.money(price - l.unitCost), { color = price >= l.unitCost and T.gr or T.re2, sub = "Costo " .. Util.money(l.unitCost) })),
-	}, 3, nil, 10).Parent = b
-	if price < l.unitCost then
-		Ui.note("r", "Por debajo del costo: cada venta pierde dinero.").Parent = b
-	end
-	local ok
-	ok = Ui.button("Aplicar precio", "p", function()
-		local r = App.request("setLotPrice", { lotId = l.id, price = price }, { button = ok })
-		if r.ok then
-			App.closeDialog()
-		end
-	end, { name = "AplicarPrecio" })
-	footer(box, { Ui.button("Cancelar", "default", App.closeDialog), ok })
+	App.screens.ventas.priceEditor(g, l, function()
+		App.closeDialog()
+	end).Parent = b
+	footer(box, { Ui.button("Cerrar", "default", App.closeDialog) })
 end
 
 -- No se pudo guardar el borrador del editor: el editor no se cierra solo; se puede reintentar sin perder nada.
