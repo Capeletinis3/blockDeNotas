@@ -1020,7 +1020,7 @@ local function ticker(g: any): Frame
 end
 
 local TIPS = {
-	t1 = "Abrí <b>Diseño</b> en la barra (tecla 1) o caminá hasta el escritorio con el monitor violeta y presioná <b>E</b>.",
+	t1 = "Abrí <b>Diseño</b> en la barra de arriba (tecla 1).",
 	t2 = "En <b>Producción</b> (tecla 3) tocá <b>Lanzar lote</b>, elegí el diseño y cuántas unidades fabricar.",
 	t3 = "No hace falta hacer nada: cada auto terminado se vende solo. Mirá el ritmo en <b>Ventas</b> (tecla 4).",
 	t4 = "En <b>Producción</b> (tecla 3), bajá hasta <b>Estaciones</b> y mejorá una.",

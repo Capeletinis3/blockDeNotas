@@ -523,6 +523,7 @@ function Simulation.payroll(g: any, ctx: any)
 	else
 		pr.debtMonths = 0
 	end
+	pr.lastDay = Rules.absDay(g) -- los que entren desde ahora cobran desde el próximo pago (Staff.unpaidSalary)
 	-- Experiencia: cada expEvery meses trabajados mejora las habilidades de su departamento (hasta su potencial).
 	local S = Catalog.STAFF
 	for _, e in g.employees do

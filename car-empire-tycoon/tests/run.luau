@@ -3490,6 +3490,142 @@ test("[R4] Capacitaciones: más de 12 a la vez (una por empleado) y sin capacita
 	check(GameState.validate(g), "sigue válida")
 end)
 
+test("[R1] Despidos: no se puede usar personal gratis contratando después del pago y despidiendo antes del siguiente", function()
+	local Staff = require("./.build/shared/Staff")
+	local g = bigCompany("Sueldos SA")
+	local ctx = makeCtx(1501)
+	Simulation.ensureMarket(g, ctx)
+	-- Empresa nueva: el «pago» inicial es el día 0.
+	eq(g.payroll.lastDay, 0, "empresa nueva con último pago el día 0")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 3)
+	local c = g.candidates[1]
+	check(Actions.hire(g, ctx, { candidateId = c.id, dept = c.spec }).ok, "contrata el día 3")
+	local e = g.employees[1]
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 15)
+	local total, sev, unpaid = Staff.dismissalCost(g, e, Rules.absDay(g))
+	eq(unpaid, Util.round(e.salary * 15 / 30), "15 días sin cobrar: medio sueldo")
+	eq(total, sev + unpaid, "despedir = indemnización + sueldo adeudado")
+	local m0 = g.money
+	check(Actions.fire(g, ctx, { employeeId = e.id }).ok, "despedido")
+	eq(m0 - g.money, total, "pagó ambos")
+	-- Quien ya cobró en el último pago no debe días.
+	c = g.candidates[2]
+	check(Actions.hire(g, ctx, { candidateId = c.id, dept = c.spec }).ok, "otro")
+	local e2 = g.employees[1]
+	Simulation.simulate(g, ctx, Rules.monthMinutes(g.time.day))
+	check(g.payroll.lastDay > e2.hiredDay, "cobró al empezar el mes")
+	local _, _, unpaid2 = Staff.dismissalCost(g, e2, Rules.absDay(g))
+	eq(unpaid2, 0, "sin sueldo adeudado después del pago")
+	check(GameState.validate(g), "válida")
+end)
+
+test("[R1] Robustez: ninguna acción del servidor falla ni corrompe la partida con datos del cliente inválidos", function()
+	local g = bigCompany("Fuzz SA")
+	local ctx = makeCtx(1601)
+	Simulation.ensureMarket(g, ctx)
+	local id = saveNew(g, ctx, "brisa", "Fuzz")
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 50 }).lotId
+	local c = g.candidates[1]
+	Actions.hire(g, ctx, { candidateId = c.id, dept = c.spec })
+	local nan = 0 / 0
+	local values = { nil, true, false, 0, -1, 1e308, -1e308, nan, math.huge, "", "x", "1", {}, { 1, 2 }, { a = { b = {} } } }
+	local keys = { "id", "designId", "lotId", "qty", "price", "level", "station", "kind", "dept", "employeeId", "candidateId", "scope", "skill", "budget", "days", "country", "draft", "speed", "product", "slot", "area", "color", "logo", "name", "confirm", "key", "value", "newGenOf" }
+	local rng = seeded(1602)
+	local calls, failures = 0, 0
+	for name, handler in Actions.handlers do
+		for _ = 1, 40 do
+			local payload: any = {}
+			for _, k in keys do
+				if rng() < 0.35 then
+					payload[k] = values[math.floor(rng() * #values) + 1]
+				end
+			end
+			if rng() < 0.15 then
+				payload = values[math.floor(rng() * #values) + 1]
+			end
+			calls += 1
+			local ok, r = pcall(handler, g, ctx, payload)
+			if not ok or type(r) ~= "table" then
+				failures += 1
+				check(false, name .. " falló con datos inválidos: " .. tostring(r))
+			end
+		end
+	end
+	eq(failures, 0, calls .. " llamadas con datos inválidos, ninguna rompe el servidor")
+	local ok, why = GameState.validate(g)
+	check(ok, "la partida sigue válida: " .. tostring(why))
+	check(g.money == g.money and g.money >= 0 and g.money < math.huge, "el dinero sigue siendo un número válido")
+	check(findLot(g, lotId) ~= nil or findHist(g, lotId) ~= nil, "el lote sigue existiendo")
+end)
+
+test("[R1] Robustez de sesiones: acciones de menú y nombres de acción inválidos no rompen nada", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 1701 }
+	mgr:add(p)
+	local nan = 0 / 0
+	local weird = { 1, true, "x", nan, {}, { slot = 9 }, { slot = "1", name = 5 }, { slot = "1", name = string.rep("a", 5000), color = {}, logo = 3 }, { product = {} }, { key = "sound", value = "no" }, { confirm = 1 } }
+	for _, action in { "createCompany", "selectSlot", "playDemo", "leaveCompany", "saveNow", "renameCompany", "deleteCompany", "setSetting", "wipeAll", "buyProduct", "sync", "retryLoad", "setUiPause", "noExiste", 42, {} } do
+		for _, payload in weird do
+			clock.c += 1 -- fuera del límite de acciones por segundo
+			local ok, r = pcall(function()
+				return mgr:request(p, action, payload)
+			end)
+			check(ok and type(r) == "table", tostring(action) .. " con datos inválidos responde sin error")
+		end
+	end
+	local s = mgr.list[p]
+	check(s.status == "ready", "la sesión sigue lista")
+	check(next(s.profile.slots) == nil, "no se creó ninguna empresa con datos inválidos")
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Válida SA", color = "#7667FF", logo = "pico" }).ok, "y una válida se crea normalmente")
+end)
+
+test("[R1] Migración completa 8 → actual: una partida de la Etapa 3 carga sin perder nada", function()
+	local g = newCompany("Etapa Tres SA")
+	local ctx = makeCtx(1801)
+	g.money = 3000000
+	local id = saveNew(g, ctx, "brisa", "Viejo Sedán")
+	local lotId = Actions.createLot(g, ctx, { designId = id, qty = 20 }).lotId
+	local old = jsonCopy(g)
+	-- Forma del esquema 8: sin personal nuevo, campañas, instalaciones, países ni capacitaciones.
+	old.schema = 8
+	old.company.difficulty = "facil"
+	old.sede = 3
+	old.promo = 2
+	old.facilities, old.market, old.payroll, old.trainings, old.campaign, old.countries = nil, nil, nil, nil, nil, nil
+	old.expansion = 0
+	old.research.done = { "mo1", "pr1", "mk1", "se1" }
+	old.employees = {
+		{ id = "e1", name = "Ana Paz", role = "Mecánico", level = 3, skill = 60, salary = 1800, assign = "motor" },
+		{ id = "e2", name = "Juan Gil", role = "Gerente", level = 2, skill = 50, salary = 1500 },
+	}
+	old.candidates = { { id = "c1", name = "X", role = "Vendedor", level = 1, skill = 40, salary = 900, fee = 3000 } }
+	local money0 = old.money
+	local m, err = GameState.migrate(jsonCopy(old), 5000)
+	check(m ~= nil, "migra: " .. tostring(err))
+	local ok, why = GameState.validate(m)
+	check(ok, "válida: " .. tostring(why))
+	eq(m.schema, GameState.SCHEMA, "esquema actual (" .. GameState.SCHEMA .. ")")
+	eq(m.money, money0, "mismo dinero")
+	eq(#m.designs, 1, "mismo diseño")
+	check(findLot(m, lotId) ~= nil, "mismo lote")
+	eq(#m.employees, 2, "mismos empleados")
+	eq(m.employees[1].dept, "produccion", "el mecánico de la estación sigue en Producción")
+	eq(m.employees[2].spec, "administracion", "el gerente pasa a Administración")
+	eq(m.employees[1].salary, 1800, "con su salario")
+	eq(m.facilities.factory, 3, "fábrica del nivel de la sede")
+	eq(Rules.caps(m).lines, 3, "conserva sus 3 líneas")
+	check(m.campaign ~= nil and m.campaign.kind == "corporativa", "la campaña activa sigue como corporativa")
+	eq(table.concat(m.research.done, ","), "mo1,se1", "investigaciones de las 4 categorías")
+	eq(m.company.difficulty, nil, "sin dificultad")
+	eq(#m.countries, 0, "sin países")
+	-- Se puede jugar enseguida.
+	Simulation.ensureMarket(m, ctx)
+	runReal(m, ctx, 2)
+	check(GameState.validate(m), "válida después de jugar")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

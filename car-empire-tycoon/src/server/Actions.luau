@@ -746,12 +746,15 @@ function Actions.fire(g: any, _ctx: any, payload: any): any
 	if not e then
 		return fail("El empleado ya no está.")
 	end
-	local cost = Staff.severance(e, Rules.absDay(g))
+	local cost, sev, unpaid = Staff.dismissalCost(g, e, Rules.absDay(g))
 	if not Simulation.canAfford(g, cost) then
-		return fail("No alcanza para la indemnización de " .. e.name .. ": " .. money(cost) .. ".")
+		return fail("No alcanza para despedir a " .. e.name .. ": " .. money(cost) .. " (indemnización " .. money(sev) .. (unpaid > 0 and (" + sueldo sin pagar " .. money(unpaid)) or "") .. ").")
 	end
-	if cost > 0 then
-		Simulation.spend(g, cost, "indemnizacion", "Indemnización de " .. e.name)
+	if sev > 0 then
+		Simulation.spend(g, sev, "indemnizacion", "Indemnización de " .. e.name)
+	end
+	if unpaid > 0 then
+		Simulation.spend(g, unpaid, "salarios", "Sueldo de los días trabajados de " .. e.name)
 	end
 	local trainings = g.trainings or {}
 	for i = #trainings, 1, -1 do
@@ -766,7 +769,7 @@ function Actions.fire(g: any, _ctx: any, payload: any): any
 		end
 	end
 	table.remove(g.employees, i :: number)
-	return { ok = true, msg = e.name .. " dejó la empresa. Indemnización: " .. money(cost) .. "." }
+	return { ok = true, msg = e.name .. " dejó la empresa. Indemnización: " .. money(sev) .. (unpaid > 0 and (" y sueldo de los días trabajados: " .. money(unpaid)) or "") .. "." }
 end
 
 -- Cambio de departamento: conserva todas sus habilidades y la adaptación ganada en cada departamento.

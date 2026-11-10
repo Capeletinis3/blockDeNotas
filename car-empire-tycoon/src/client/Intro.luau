@@ -65,7 +65,8 @@ function Intro.play(company: any)
 	if not reduce then
 		SceneCamera.cinematic(Intro.DURATION)
 	end
-	local root = Ui.new("Frame", { Name = "Intro", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 70, Parent = App.introLayer })
+	-- Active: el fondo absorbe los clics (no se toca el HUD de abajo mientras dura).
+	local root = Ui.new("Frame", { Name = "Intro", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.55, Active = true, ZIndex = 70, Parent = App.introLayer })
 	layer = root
 	-- Franjas de cine arriba y abajo.
 	for i, y in { 0, 1 } do

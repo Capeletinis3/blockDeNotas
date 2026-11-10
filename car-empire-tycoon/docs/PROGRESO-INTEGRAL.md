@@ -73,3 +73,15 @@ El proyecto se edita como código (Rojo); el `.rbxl` se arma con `rojo build pla
 - Las mejoras de estaciones siguen siendo instantáneas (las obras con duración son las de instalaciones).
 - Partidas viejas: los bonos de demanda de las investigaciones de marketing desaparecen (las campañas los reemplazan) y la antigüedad de los empleados empieza en la migración.
 - Equilibrio: todos los valores nuevos son provisionales (`Catalog.STAFF`, `TRAINING`, `MARKETING`, `FACILITIES`).
+
+## Revisión sin pruebas manuales (sin Studio)
+
+Hecho con revisión estática y pruebas automáticas (`luau-analyze`, selene, chequeo de referencias entre módulos, acciones cliente ↔ servidor, pruebas con datos inválidos). **No se ejecutó en Roblox Studio.**
+
+- Línea 3: ahora es de la **cuenta** (`profile.owned.line3`); se refleja en todas las empresas, también las nuevas (`GameState.applyAccount`).
+- Expansión internacional: el jugador **elige el país** (`expandGlobal { country }`); esquema 15 conserva las aperturas previas.
+- Capacitaciones: sin tope fijo de 12; el límite es una por empleado (protección del guardado = 50). Despedir al único participante elimina la capacitación vacía.
+- Introducción cinematográfica (`Intro.luau`) al fundar una empresa: pausa esa empresa, termina sola en 9 s o con «Saltar» / Esc / Espacio / Enter.
+- Despidos: además de la indemnización se paga el sueldo de los días trabajados desde el último pago (antes se podía usar personal casi gratis).
+- El diálogo de lote muestra el mismo costo que cobra el servidor (con la eficiencia de Producción).
+- Textos de ayuda que mandaban a caminar con el personaje, actualizados.

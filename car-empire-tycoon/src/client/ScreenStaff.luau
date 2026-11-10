@@ -120,24 +120,24 @@ local function employeeDetail(g: any, e: any): Frame
 	for _, id in Staff.DEPT_ORDER do
 		table.insert(options, { id, Staff.dept(id).name .. (id == e.spec and " ★" or "") })
 	end
-	local sev = Staff.severance(e, today)
+	local total, sev, unpaid = Staff.dismissalCost(g, e, today)
 	table.insert(rows, Ui.selectF("Departamento", e.dept, options, function(v: any)
 		App.request("setDept", { employeeId = e.id, dept = v })
 	end, { height = 34, name = "Departamento_" .. e.id }))
 	table.insert(rows, Ui.button("Capacitar", "default", function()
 		App.openDialog("training", { scope = "individual", employeeId = e.id, dept = e.dept })
 	end, { small = true, fill = true, disabled = e.training ~= nil, why = "Ya está en una capacitación", name = "Capacitar_" .. e.id }))
-	table.insert(rows, Ui.button("Despedir · indemnización " .. Util.money(sev), "q", function()
+	table.insert(rows, Ui.button("Despedir · " .. Util.money(total), "q", function()
 		App.openDialog("confirm", {
 			title = "¿Despedir a " .. e.name .. "?",
-			body = "Se paga la indemnización: " .. Util.money(e.salary) .. " por año trabajado (proporcional) = " .. Util.money(sev) .. ". No se puede deshacer.",
+			body = "Se paga la indemnización: " .. Util.money(e.salary) .. " por año trabajado (proporcional) = " .. Util.money(sev) .. "." .. (unpaid > 0 and (" Además, el sueldo de los días trabajados desde que entró: " .. Util.money(unpaid) .. ".") or "") .. " No se puede deshacer.",
 			okLabel = "Despedir",
 			danger = true,
 			onOk = function()
 				App.request("fire", { employeeId = e.id })
 			end,
 		})
-	end, { small = true, fill = true, disabled = g.money < sev, why = "No alcanza para la indemnización", name = "Despedir_" .. e.id }))
+	end, { small = true, fill = true, disabled = g.money < total, why = "No alcanza para la indemnización", name = "Despedir_" .. e.id }))
 	return Ui.card(rows, { gap = 6, name = "Detalle_" .. e.id })
 end
 

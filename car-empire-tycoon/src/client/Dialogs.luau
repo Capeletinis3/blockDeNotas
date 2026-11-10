@@ -146,7 +146,7 @@ end
 
 -- Ayuda por sección (helpDialog)
 local HELP = {
-	juego = "La sede es tu espacio 3D. Caminá con WASD o flechas (en celular, con la palanca táctil), acercate a un objeto y presioná E (o tocá la indicación). El calendario empieza en enero de 1970 y avanza solo: a 1×, un año dura unos 11 minutos reales. El ciclo es: diseñar un auto → lanzar un lote → se vende solo → mejorar la empresa → investigar → diseñar el siguiente.",
+	juego = "La sede es tu espacio 3D: arrastrá para girar la cámara y usá la rueda (o pellizcá en celular) para acercar o alejar. Todo se maneja desde la barra de arriba: Diseño, Catálogo, Ventas (con Producción), Mercado, Investigación, Personal y Compañía (con Instalaciones).",
 	fabrica = "Lanzá un lote eligiendo un diseño y cuántas unidades querés (100, 1.000, 10.000, 50.000 o cualquier número). La fábrica produce exactamente esa cantidad y se detiene: nunca repite sola. El lote se paga completo al ordenarlo y cada modelo tiene un solo lote; al terminar llegan las reseñas y elegís el precio. Cada línea de la sede fabrica un lote a la vez; los demás esperan en cola.",
 	autos = "El catálogo reúne tus diseños con su año de modelo y generación. Desde acá lanzás lotes, editás, creás una nueva generación de un modelo o lo duplicás. «Historia de modelos» muestra cada generación con sus lotes, ventas y resultado.",
 	ventas = "Lo fabricado se vende solo, sin negociar. El ritmo depende de la demanda del tipo de auto en el año, de su atractivo frente a los rivales, del precio, de tu reputación y del alcance de tu sede. «Modificar precio» cambia el ritmo desde ese momento. «Cerrar venta» deja de vender el modelo: las unidades sin vender se descartan sin reintegro y lo que faltaba fabricar se cancela y se reintegra. Estados: En fabricación, Por lanzar, En venta, Agotado y Retirado.",
@@ -372,7 +372,7 @@ Dialogs.lot = function(box: Frame, params: any)
 				dd = x
 			end
 		end
-		local unitNow = DesignCalc.computeDesign(g, dd).unitCost
+		local unitNow = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, dd).unitCost)
 		st = { designId = def, qty = math.max(1, math.min(100, unitNow > 0 and math.floor(g.money / unitNow) or 100)) }
 		App.ui.lotDraft = st
 	end
@@ -430,12 +430,14 @@ Dialogs.lot = function(box: Frame, params: any)
 	local sellRate = math.max(0.01, est.rate)
 	local prodMin = qty / math.max(0.01, lineRate)
 	local sellMin = qty / math.min(sellRate, math.max(0.01, lineRate))
-	local totalCost = qty * c.unitCost
-	local margin = price - c.unitCost
-	local afford = c.unitCost > 0 and math.floor(g.money / c.unitCost) or qty
+	-- El mismo costo por unidad que cobra el servidor (con la eficiencia del personal de Producción).
+	local unit = Rules.lotUnitCost(g, c.unitCost)
+	local totalCost = qty * unit
+	local margin = price - unit
+	local afford = unit > 0 and math.floor(g.money / unit) or qty
 	local caps = g.derived.caps
 	Ui.grid({
-		(Ui.kv("Costo por unidad", Util.money(c.unitCost), { sub = "Calidad " .. Catalog.QUALITY_TIERS[d.quality + 1] .. " · " .. c.hp .. " hp" })),
+		(Ui.kv("Costo por unidad", Util.money(unit), { sub = "Calidad " .. Catalog.QUALITY_TIERS[d.quality + 1] .. " · " .. c.hp .. " hp" })),
 		(Ui.kv("Costo total (se paga al ordenar)", Util.money(totalCost), { color = totalCost > g.money and T.re2 or T.or_, sub = "Tenés " .. Util.money(g.money) })),
 		(Ui.kv("Precio de referencia", Util.money(price), { sub = "Lo elegís al ponerlo a la venta · ganancia ≈ " .. Util.money(margin) .. "/u" })),
 		(Ui.kv("Ingresos potenciales (estimado)", Util.money(price * qty), { color = T.gr, sub = "Si se vende todo el lote" })),

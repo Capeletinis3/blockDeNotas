@@ -41,7 +41,7 @@ function GameState.newRecords(): any
 	return { others = { models = 0, lots = 0, produced = 0, sold = 0, discarded = 0, revenue = 0, cost = 0 } }
 end
 
-function GameState.newGame(opts: { name: string, color: string, logo: string?, now: number }): any
+function GameState.newGame(opts: { name: string, color: string, logo: string?, now: number, id: string? }): any
 	return {
 		schema = GameState.SCHEMA,
 		createdAt = opts.now,
@@ -74,7 +74,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		employees = {}, -- ver Staff.luau (departamento, habilidades, potencial, antigüedad…)
 		candidates = {}, -- 8 por mes (Simulation.ensureMarket); se reemplazan, no se acumulan
 		market = { month = -1, searches = 0 }, -- mes de los candidatos actuales y búsquedas pagas del mes
-		payroll = { debt = 0, debtMonths = 0 }, -- sueldos atrasados y meses seguidos con deuda
+		payroll = { debt = 0, debtMonths = 0, lastDay = 0 }, -- sueldos atrasados, meses con deuda y día del último pago
 		-- capacitaciones en curso { id, level, skill, scope, members = { empleados }, results = { [id] = valor final }, progress, days, cost }
 		trainings = {},
 		stations = freshStations(),
@@ -418,7 +418,7 @@ function GameState.validate(g: any): (boolean, string?)
 	if type(g.market) ~= "table" or not isInt(g.market.month, -1) or not isInt(g.market.searches, 0) then
 		return fail("El mercado laboral está dañado.")
 	end
-	if type(g.payroll) ~= "table" or not nonNeg(g.payroll.debt) or not isInt(g.payroll.debtMonths, 0) then
+	if type(g.payroll) ~= "table" or not nonNeg(g.payroll.debt) or not isInt(g.payroll.debtMonths, 0) or (g.payroll.lastDay ~= nil and not isFinite(g.payroll.lastDay)) then
 		return fail("La deuda salarial está dañada.")
 	end
 	if not isList(g.trainings) or #g.trainings > Catalog.TRAINING.maxActive then

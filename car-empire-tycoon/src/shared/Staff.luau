@@ -164,6 +164,24 @@ function Staff.severance(e: any, today: number): number
 	return Util.round(e.salary * days / 365)
 end
 
+--[[ Sueldo de los días trabajados que todavía no se pagaron. Los sueldos se pagan al empezar cada mes (por el mes
+	que empieza): quien entró después del último pago trabajó esos días sin cobrar. Sin esto, contratar después del
+	pago y despedir antes del siguiente dejaría usar personal casi gratis. g.payroll.lastDay = día del último pago
+	(nil en partidas anteriores a esta regla: no se cobra nada extra). ]]
+function Staff.unpaidSalary(g: any, e: any, today: number): number
+	local last = g.payroll and g.payroll.lastDay
+	if type(last) ~= "number" or (e.hiredDay or 0) <= last then
+		return 0
+	end
+	return Util.round(e.salary * math.max(0, today - e.hiredDay) / 30)
+end
+
+-- Lo que cuesta despedir: indemnización (salario × años, proporcional) + sueldo de días sin pagar.
+function Staff.dismissalCost(g: any, e: any, today: number): (number, number, number)
+	local sev, unpaid = Staff.severance(e, today), Staff.unpaidSalary(g, e, today)
+	return sev + unpaid, sev, unpaid
+end
+
 -- Texto de un beneficio («+12 %» o «+4 pts»).
 function Staff.format(skillId: string, v: number): string
 	local sk = S.skills[skillId]
