@@ -1500,9 +1500,9 @@ test("Showroom 3D del menú: escenario persistente, transición entre empresas, 
 	Showroom.update(1)
 	eq(st.clock, clock, "y no se actualiza")
 	-- Conexiones: una por evento, sin duplicarse; se liberan todas.
-	eq(Showroom.connectionCount(), 4, "cuatro conexiones")
+	eq(Showroom.connectionCount(), 5, "cinco conexiones (cuadro, entrada ×3 y pérdida de foco)")
 	Showroom.start()
-	eq(Showroom.connectionCount(), 4, "iniciar dos veces no duplica")
+	eq(Showroom.connectionCount(), 5, "iniciar dos veces no duplica")
 	Showroom.destroy()
 	eq(Showroom.connectionCount(), 0, "destroy libera las conexiones")
 	check(st.stage == nil and st.current == nil, "y el escenario y los autos")
@@ -1510,6 +1510,196 @@ test("Showroom 3D del menú: escenario persistente, transición entre empresas, 
 	App.go("juego")
 	M.task.wait()
 	noErrors("Showroom")
+end)
+
+test("Showroom: una sola cámara activa, luz del lugar restaurada, prioridad de la interfaz, plataforma y transiciones", function()
+	local Showroom = App.screens.showroom
+	local SceneCamera = require("./.build-ui/client/SceneCamera")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local st = Showroom._state
+	local C = Showroom.CONFIG
+	local UIS = M.services.UserInputService
+	local cam = M.services.Workspace.CurrentCamera
+	local Lighting = M.services.Lighting
+	App.closeAllDialogs()
+	-- Iluminación del lugar conocida (para comprobar que se restaura exacta).
+	Lighting.Ambient = M.Color3.fromRGB(120, 120, 130)
+	Lighting.OutdoorAmbient = M.Color3.fromRGB(128, 128, 128)
+	Lighting.Brightness = 2
+	Lighting.EnvironmentDiffuseScale = 1
+	Lighting.EnvironmentSpecularScale = 1
+	Lighting.FogEnd = 500
+	local atm = M.Instance.new("Atmosphere")
+	atm.Density = 0.3
+	atm.Haze = 1
+	atm.Glare = 0.2
+	atm.Parent = Lighting
+	-- 1. Con una empresa abierta, la cámara es de la gestión.
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.go("juego")
+	M.task.wait()
+	eq(App.cameraOwner, "scene", "en el juego la cámara es de la gestión")
+	check(not Showroom.isVisible(), "el showroom no se ve")
+	SceneCamera.update(1 / 60)
+	local center = player:GetAttribute("PlotCenter")
+	local before = cam.CFrame.Position
+	Showroom.update(1 / 60)
+	check(cam.CFrame.Position == before, "el showroom no toca la cámara durante el juego")
+	-- 2. Volver al menú con la empresa todavía cargada (el instante de «Guardar y volver al menú»).
+	App.ui.enteringGame = false
+	App.ui.route = "menu"
+	App.forceRender()
+	M.task.wait()
+	check(App.g ~= nil, "la empresa sigue cargada en este instante")
+	eq(App.cameraOwner, "showroom", "pero la cámara ya es del showroom")
+	check(Showroom.isVisible(), "el showroom recupera el control")
+	Showroom.update(1 / 30)
+	local p0 = cam.CFrame.Position
+	SceneCamera.update(1 / 60)
+	check(cam.CFrame.Position == p0, "la cámara de gestión no la mueve mientras se ve el showroom")
+	check((p0 - st.target).Magnitude < 200 and (p0 - center).Magnitude > 200, "la cámara mira al showroom, no al garaje")
+	-- Iluminación durante el showroom: sol, cielo y niebla apagados; color y luces propias intactas.
+	eq(Lighting.Brightness, 0, "sin sol")
+	eq(Lighting.EnvironmentDiffuseScale, 0, "sin luz difusa del cielo")
+	check(Lighting.FogEnd >= 100000 and atm.Density == 0, "sin niebla ni atmósfera")
+	local spots = 0
+	for _, d in st.stage:GetDescendants() do
+		if d.ClassName == "SpotLight" then
+			spots += 1
+		end
+	end
+	eq(spots, 3, "luz principal, relleno y contorno siguen")
+	-- La sala bloquea el sol: techo, paredes, junturas y muro exterior proyectan sombra.
+	local blocking = 0
+	for _, d in st.stage:GetChildren() do
+		if d.Name == "Techo" or d.Name == "Panel" or d.Name == "Juntura" or d.Name == "Muro" or d.Name == "Piso" then
+			check(d.CastShadow ~= false, d.Name .. " proyecta sombra")
+			blocking += 1
+		end
+	end
+	check(blocking >= 1 + 1 + 40 + 40 + 4, "sala cerrada completa (" .. blocking .. " piezas)")
+	-- 3. Volver al juego: la luz del lugar vuelve exacta y la cámara es de la gestión otra vez.
+	App.go("juego")
+	M.task.wait()
+	eq(App.cameraOwner, "scene", "al continuar la partida la cámara vuelve a la gestión")
+	check(Lighting.Ambient == M.Color3.fromRGB(120, 120, 130) or (Lighting.Ambient.R > 0.46 and Lighting.Ambient.R < 0.48), "ambiente restaurado")
+	eq(Lighting.Brightness, 2, "sol restaurado")
+	eq(Lighting.EnvironmentDiffuseScale, 1, "cielo restaurado")
+	eq(Lighting.EnvironmentSpecularScale, 1, "reflejos restaurados")
+	eq(Lighting.FogEnd, 500, "niebla restaurada")
+	check(atm.Density == 0.3 and atm.Haze == 1 and atm.Glare == 0.2, "atmósfera restaurada")
+	SceneCamera.update(1 / 60)
+	check((cam.CFrame.Position - center).Magnitude < 400, "la cámara vuelve al garaje")
+	-- 4. Menú de nuevo para las pruebas de entrada y plataforma.
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	App.ui.route = "menu"
+	App.forceRender()
+	M.task.wait()
+	check(Showroom.isVisible() and App.cameraOwner == "showroom", "menú: showroom")
+	local function input(kind: string, pos: any): any
+		return { UserInputType = M.Enum.UserInputType[kind], Position = pos }
+	end
+	local card = named("Ranura_1") or named("Elegir_2")
+	local scroller = named("MenuWrap")
+	local original = Showroom.hitTest
+	-- Clic sobre una tarjeta (un Frame sin Active: `processed` llega en false) no rota.
+	Showroom.hitTest = function()
+		return { card }
+	end
+	UIS.InputBegan:Fire(input("MouseButton1", M.Vector3.new(200, 200, 0)), false)
+	check(card ~= nil and not st.dragging, "arrastrar sobre una tarjeta no rota la cámara")
+	-- Rueda sobre la lista desplazable: no hay zoom.
+	Showroom.hitTest = function()
+		return { scroller }
+	end
+	local d0 = st.tDist
+	UIS.InputChanged:Fire(input("MouseWheel", M.Vector3.new(200, 200, 1)), false)
+	eq(st.tDist, d0, "la rueda sobre la lista no hace zoom")
+	-- Área libre: arrastre y zoom; perder el foco cancela el arrastre.
+	Showroom.hitTest = function()
+		return {}
+	end
+	UIS.InputBegan:Fire(input("MouseButton1", M.Vector3.new(1200, 400, 0)), false)
+	check(st.dragging, "arrastre sobre el área libre")
+	UIS.WindowFocusReleased:Fire()
+	check(not st.dragging, "al perder el foco se cancela el arrastre")
+	UIS.InputChanged:Fire(input("MouseWheel", M.Vector3.new(1200, 400, 1)), false)
+	check(st.tDist < d0 and st.tDist >= st.distMin, "zoom sobre el área libre, dentro del límite")
+	Showroom.hitTest = original
+	-- 5. Plataforma y anillo con otro auto (el modelo provisional por piezas).
+	local fake = { time = { day = 300, minute = 0 }, research = { done = {}, projects = {} }, company = { name = "x" }, devPaid = {}, facilities = { factory = 1, research = 1, lines = {}, builds = {} } }
+	local spec = DesignCalc.newDraft(fake, "pixel")
+	spec.vehicleModel = "provisional"
+	Showroom.show(spec, "#42E58D", "prueba")
+	for _ = 1, 45 do
+		Showroom.update(1 / 30)
+	end
+	local plat, ring = st.stage:FindFirstChild("Plataforma"), st.stage:FindFirstChild("Anillo")
+	local floorTop = C.origin.Y
+	local platTop = plat.CFrame.Position.Y + plat.Size.X / 2
+	check(math.abs(plat.CFrame.Position.Y - plat.Size.X / 2 - floorTop) < 1e-6, "la plataforma apoya en el piso")
+	check(ring.CFrame.Position.Y - ring.Size.X / 2 > floorTop, "el anillo queda sobre el piso (no enterrado)")
+	check(ring.Size.Y > plat.Size.Y + 1, "el anillo sobresale de la plataforma")
+	check(math.abs(ring.CFrame.Position.X - plat.CFrame.Position.X) < 1e-6 and math.abs(ring.CFrame.Position.Z - plat.CFrame.Position.Z) < 1e-6, "plataforma y anillo alineados")
+	local lowest = math.huge
+	for p in st.current.parts do
+		lowest = math.min(lowest, p.CFrame.Position.Y - p.Size.Y / 2)
+	end
+	check(math.abs(lowest - platTop) < 0.4, "el auto provisional apoya sobre la plataforma (" .. string.format("%.2f", lowest - platTop) .. ")")
+	-- 6. Ocultar a mitad de una transición no deja autos invisibles ni animaciones colgadas.
+	App.ui.menuSel = "1"
+	App.forceRender()
+	Showroom.update(0.2)
+	check(st.outgoing ~= nil, "transición a medias")
+	App.ui.route = "nueva" -- sale del menú principal (sin empresa abierta: pantalla de creación)
+	App.forceRender()
+	M.task.wait()
+	check(not Showroom.isVisible() and App.cameraOwner == nil, "fuera del menú nadie controla la cámara")
+	check(st.outgoing == nil, "al ocultarse se libera el auto que salía")
+	local models = 0
+	for _, c in st.stage:GetChildren() do
+		if c.ClassName == "Model" then
+			models += 1
+		end
+	end
+	check(models <= 1, "como mucho un auto guardado")
+	App.ui.route = "menu"
+	App.forceRender()
+	M.task.wait()
+	for _ = 1, 45 do
+		Showroom.update(1 / 30)
+	end
+	check(st.phase == nil and st.current ~= nil and string.find(st.current.sig, "^1|") ~= nil, "al volver se ve el auto de la última empresa elegida")
+	-- 7. «Reducir movimiento»: sin órbita automática ni transiciones; la interfaz sigue igual.
+	local prof = App.payload.profile.settings or {}
+	App.payload.profile.settings = prof
+	prof.reduceMotion = true
+	App.forceRender()
+	M.task.wait()
+	check(st.reduce, "modo reducido activo")
+	local yaw0 = st.tYaw
+	for _ = 1, 90 do
+		Showroom.update(1 / 30)
+	end
+	eq(st.tYaw, yaw0, "sin órbita automática")
+	App.ui.menuSel = "2"
+	App.forceRender()
+	check(st.phase == nil and string.find(st.current.sig, "^2|") ~= nil, "cambio de empresa sin animación")
+	local accent = st.accent
+	check(math.abs(accent.R - M.Color3.fromHex(App.profile.slots["2"].color).R) < 0.01, "color sin transición")
+	check(named("Elegir_1") ~= nil, "las tarjetas siguen funcionando")
+	prof.reduceMotion = false
+	App.forceRender()
+	atm:Destroy()
+	noErrors("Correcciones del showroom")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

@@ -23,6 +23,7 @@
 
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -60,6 +61,7 @@ local PANEL = Color3.fromHex("#16181E")
 local PANEL_GAP = Color3.fromHex("#0A0B0E")
 local CEILING = Color3.fromHex("#0B0C0F")
 local PLATFORM = Color3.fromHex("#26282E")
+local RING_H, RING_Y = 0.08, 0.05 -- anillo de luz: de 0,01 a 0,09 sobre el piso (la plataforma tapa su centro)
 
 type CarState = { model: Model, parts: { [BasePart]: number }, sig: string }
 
@@ -93,7 +95,7 @@ local state = {
 	clock = 0,
 	phone = false,
 	conns = {} :: { RBXScriptConnection },
-	savedLighting = nil :: { [string]: any }?,
+	savedLighting = nil :: { any }?,
 	savedCamera = nil :: { fov: number, type: any }?,
 }
 Showroom._state = state -- para las pruebas
@@ -152,10 +154,11 @@ local function buildStage()
 	local R, H = C.room, C.height
 	-- Piso grafito semibrillante (reflectancia baja: sin reflejos costosos).
 	part("Piso", Vector3.new(R * 2, 1, R * 2), CFrame.new(0, -0.5, 0), GRAPHITE, { Reflectance = 0.06 })
-	part("Techo", Vector3.new(R * 2, 1, R * 2), CFrame.new(0, H + 0.5, 0), CEILING, { CastShadow = false })
+	-- Techo y paredes proyectan sombra: así bloquean el sol del lugar (ShadowMap/Future).
+	part("Techo", Vector3.new(R * 2 + 2, 1, R * 2 + 2), CFrame.new(0, H + 0.5, 0), CEILING)
 	-- Plataforma discreta y apenas elevada, con un anillo de luz tenue del color corporativo.
 	state.platform = part("Plataforma", Vector3.new(0.3, 9, 9), CFrame.new(0, 0.15, 0) * CFrame.Angles(0, 0, math.rad(90)), PLATFORM, { Shape = Enum.PartType.Cylinder, Reflectance = 0.04 })
-	state.ring = part("Anillo", Vector3.new(0.04, 9.6, 9.6), CFrame.new(0, 0.02, 0) * CFrame.Angles(0, 0, math.rad(90)), state.accent, { Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, Transparency = 0.55, CastShadow = false })
+	state.ring = part("Anillo", Vector3.new(RING_H, 9.6, 9.6), CFrame.new(0, RING_Y, 0) * CFrame.Angles(0, 0, math.rad(90)), state.accent, { Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, Transparency = 0.55, CastShadow = false })
 	table.insert(state.accentParts, state.ring :: BasePart)
 	-- Paneles arquitectónicos en las cuatro paredes, con una juntura oscura y dos líneas de luz finas.
 	for side = 0, 3 do
@@ -164,9 +167,11 @@ local function buildStage()
 		local w = R * 2 / n
 		for i = 1, n do
 			local x = -R + w * (i - 0.5)
-			part("Panel", Vector3.new(w - 0.25, H, 0.6), rot * CFrame.new(x, H / 2, -R + 0.3), PANEL, { CastShadow = false })
-			part("Juntura", Vector3.new(0.25, H, 0.4), rot * CFrame.new(x + w / 2, H / 2, -R + 0.2), PANEL_GAP, { CastShadow = false })
+			part("Panel", Vector3.new(w - 0.25, H, 0.6), rot * CFrame.new(x, H / 2, -R + 0.3), PANEL)
+			part("Juntura", Vector3.new(0.25, H, 0.4), rot * CFrame.new(x + w / 2, H / 2, -R + 0.2), PANEL_GAP)
 		end
+		-- Muro exterior continuo (detrás de los paneles): cierra esquinas y junturas para que no entre luz.
+		part("Muro", Vector3.new(R * 2 + 2, H + 1, 1), rot * CFrame.new(0, H / 2, -R - 0.5), PANEL_GAP)
 		for _, y in { 1.2, H - 6 } do
 			local strip = part("LineaLuz", Vector3.new(R * 2 - 1, 0.12, 0.12), rot * CFrame.new(0, y, -R + 0.7), state.accent, { Material = Enum.Material.Neon, Transparency = 0.5, CastShadow = false })
 			table.insert(state.accentParts, strip)
@@ -310,7 +315,11 @@ local function placeCar(spec: any, color: string?, sig: string): CarState?
 		state.platform.CFrame = world(CFrame.new(0, top / 2, 0) * CFrame.Angles(0, 0, math.rad(90)))
 	end
 	if state.ring then
-		state.ring.Size = Vector3.new(0.05, d + radius * 0.12, d + radius * 0.12)
+		-- Apenas más ancho que la plataforma (al menos 0,6 studs a cada lado) y un poco sobre el piso: se ve
+		-- como una línea de luz alrededor de la base, sin quedar enterrado ni parpadear con el suelo.
+		local ringD = d + math.max(1.2, radius * 0.12)
+		state.ring.Size = Vector3.new(RING_H, ringD, ringD)
+		state.ring.CFrame = world(CFrame.new(0, RING_Y, 0) * CFrame.Angles(0, 0, math.rad(90)))
 	end
 	-- Sobre la plataforma, centrado y con el frente hacia −Z (la orientación que deja CarModel).
 	model:PivotTo(CFrame.new(C.origin + Vector3.new(0, top, 0)) * model:GetPivot().Rotation)
@@ -352,6 +361,10 @@ function Showroom.show(spec: any?, color: string?, key: string?)
 		state.accentFrom = state.accent
 		state.accentTo = c
 		state.accentT = 0
+		if state.reduce then
+			applyAccent(c) -- «Reducir movimiento»: el color cambia sin transición
+			state.accentT = 1
+		end
 	end
 	local sig = tostring(key) .. "|" .. Showroom.signature(spec)
 	local showing = state.pending and state.pending.sig or (state.current and state.current.sig)
@@ -474,25 +487,58 @@ function Showroom.place()
 	cam.CFrame = cf
 end
 
--- Ambiente global oscuro mientras se ve el showroom (solo en este cliente); al ocultarlo se restauran los
--- valores exactos que tenía el lugar, así el garaje y el resto del juego no cambian.
-local LIGHTING_SHOWROOM = { Ambient = Color3.fromRGB(14, 15, 18), OutdoorAmbient = Color3.fromRGB(18, 19, 23) }
-local function overrideLighting(on: boolean)
-	pcall(function()
-		if on and not state.savedLighting then
-			local saved = {}
-			for k, v in LIGHTING_SHOWROOM do
-				saved[k] = (Lighting :: any)[k]
-				;(Lighting :: any)[k] = v
+--[[ Iluminación global mientras se ve el showroom (solo en este cliente). La sala es cerrada y su geometría
+	proyecta sombra, así que con ShadowMap o Future el sol no entra; como refuerzo, y para Voxel/Compatibility
+	(donde la oclusión es aproximada), se apagan temporalmente el sol, la luz del cielo y la niebla. Cada
+	propiedad se guarda y se cambia por separado: al ocultar el showroom se restauran los valores exactos que
+	tenía el lugar (y una propiedad que no exista en el motor simplemente se saltea). ]]
+local LIGHTING_SHOWROOM: { [string]: any } = {
+	Ambient = Color3.fromRGB(14, 15, 18),
+	OutdoorAmbient = Color3.fromRGB(18, 19, 23),
+	Brightness = 0, -- intensidad del sol y la luna
+	EnvironmentDiffuseScale = 0, -- luz difusa del cielo
+	EnvironmentSpecularScale = 0.25, -- reflejos del cielo (un poco, para que la pintura no se vea plana)
+	FogEnd = 100000, -- sin niebla del lugar dentro de la sala
+}
+local ATMOSPHERE_SHOWROOM: { [string]: any } = { Density = 0, Haze = 0, Glare = 0 }
+
+local function swap(target: Instance, values: { [string]: any }, saved: { any })
+	for k, v in values do
+		local okRead, before = pcall(function()
+			return (target :: any)[k]
+		end)
+		if okRead and before ~= nil then
+			local okWrite = pcall(function()
+				(target :: any)[k] = v
+			end)
+			if okWrite then
+				table.insert(saved, { target, k, before })
 			end
-			state.savedLighting = saved
-		elseif not on and state.savedLighting then
-			for k, v in state.savedLighting do
-				(Lighting :: any)[k] = v
-			end
-			state.savedLighting = nil
 		end
-	end)
+	end
+end
+
+local function overrideLighting(on: boolean)
+	if on and not state.savedLighting then
+		local saved = {}
+		swap(Lighting, LIGHTING_SHOWROOM, saved)
+		for _, c in Lighting:GetChildren() do
+			if c:IsA("Atmosphere") then
+				swap(c, ATMOSPHERE_SHOWROOM, saved)
+			end
+		end
+		state.savedLighting = saved
+	elseif not on and state.savedLighting then
+		-- En orden inverso, por si una misma propiedad se guardó dos veces.
+		local saved = state.savedLighting
+		for i = #saved, 1, -1 do
+			local e = saved[i]
+			pcall(function()
+				(e[1] :: any)[e[2]] = e[3]
+			end)
+		end
+		state.savedLighting = nil
+	end
 end
 
 -- Muestra u oculta el showroom. Oculto, el escenario sale del Workspace y no se hace ningún trabajo.
@@ -522,6 +568,18 @@ function Showroom.setVisible(v: boolean, opts: { reduce: boolean?, phone: boolea
 		end
 		Showroom.place()
 	else
+		-- Una transición a medias no queda colgada: el auto que salía se libera ya (no queda invisible en
+		-- memoria) y el último pedido se arma al volver a mostrarse.
+		destroyCar(state.outgoing)
+		state.outgoing = nil
+		if state.phase == "out" then
+			state.phase = "swap"
+		elseif state.phase == "in" then
+			if state.current then
+				setFade(state.current, 0)
+			end
+			state.phase = nil
+		end
 		if state.stage then
 			state.stage.Parent = nil
 		end
@@ -540,12 +598,74 @@ function Showroom.isVisible(): boolean
 	return state.visible
 end
 
--- Entrada del mouse: la interfaz tiene prioridad (si la usó un botón o una tarjeta, `processed` es true).
+--[[ Entrada del mouse. La interfaz tiene prioridad sobre la cámara:
+	1. Si Roblox ya usó la entrada (`processed`: botones, cuadros de texto), la cámara no la toma.
+	2. Además se mira qué hay bajo el cursor (PlayerGui:GetGuiObjectsAtPosition, con las mismas coordenadas de
+	   pantalla que InputObject.Position): las tarjetas son Frames sin `Active` y no marcan `processed`, así
+	   que un clic sobre una tarjeta (fuera de sus botones) no debe rotar la cámara. Para la rueda también
+	   bloquea cualquier marco desplazable (no se desplaza la lista y se hace zoom a la vez).
+	Solo se consulta al empezar un arrastre o con la rueda (no en cada cuadro). ]]
+local PASS_THROUGH = { Velo = true, Contenido = true, Raiz = true, Menus = true, Dialogos = true, Desplegables = true, Avisos = true, Introduccion = true }
+
+-- Objetos de interfaz bajo un punto de la pantalla (reemplazable en las pruebas).
+function Showroom.hitTest(x: number, y: number): { any }
+	local player = Players.LocalPlayer
+	local pg = player and player:FindFirstChildOfClass("PlayerGui")
+	if not pg then
+		return {}
+	end
+	local ok, list = pcall(function()
+		return (pg :: any):GetGuiObjectsAtPosition(x, y)
+	end)
+	return ok and list or {}
+end
+
+local function shown(o: any): boolean
+	local p = o
+	while p and p:IsA("GuiObject") do
+		if not p.Visible then
+			return false
+		end
+		p = p.Parent
+	end
+	if p and p:IsA("LayerCollector") and (p :: any).Enabled == false then
+		return false
+	end
+	return true
+end
+
+-- ¿Hay un elemento de la interfaz bajo el cursor que deba tener prioridad?
+function Showroom.blockedByUi(pos: Vector3, wheel: boolean): boolean
+	for _, o in Showroom.hitTest(pos.X, pos.Y) do
+		if not PASS_THROUGH[o.Name] and shown(o) then
+			if o:IsA("GuiButton") or o:IsA("TextBox") then
+				return true
+			end
+			if wheel and o:IsA("ScrollingFrame") then
+				return true
+			end
+			if (o.BackgroundTransparency or 1) < 0.9 then
+				return true -- tarjetas, paneles y cualquier cosa con fondo visible
+			end
+			if (o:IsA("TextLabel") and o.Text ~= "" and (o.TextTransparency or 0) < 1) or (o:IsA("ImageLabel") and (o.ImageTransparency or 0) < 1) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function cancelDrag()
+	state.dragging = false
+	state.lastPos = nil
+end
+Showroom.cancelDrag = cancelDrag
+
 local function onBegan(input: InputObject, processed: boolean)
 	if not state.visible or processed then
 		return
 	end
-	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and not Showroom.blockedByUi(input.Position, false) then
 		state.dragging = true
 		state.lastPos = input.Position
 		state.lastInput = state.clock
@@ -561,15 +681,14 @@ local function onChanged(input: InputObject, processed: boolean)
 		state.lastPos = input.Position
 		-- Movimientos grandes de un cuadro (por ejemplo, al volver el foco a la ventana) se recortan.
 		Showroom.rotate(math.clamp(d.X, -60, 60), math.clamp(d.Y, -60, 60))
-	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not processed then
+	elseif input.UserInputType == Enum.UserInputType.MouseWheel and not processed and not Showroom.blockedByUi(input.Position, true) then
 		Showroom.zoom(input.Position.Z > 0 and 1 or -1)
 	end
 end
 
 local function onEnded(input: InputObject)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
-		state.dragging = false
-		state.lastPos = nil
+		cancelDrag()
 	end
 end
 
@@ -582,6 +701,8 @@ function Showroom.start()
 	table.insert(state.conns, UserInputService.InputBegan:Connect(onBegan))
 	table.insert(state.conns, UserInputService.InputChanged:Connect(onChanged))
 	table.insert(state.conns, UserInputService.InputEnded:Connect(onEnded))
+	-- Al perder el foco de la ventana el botón se puede soltar afuera sin InputEnded: se cancela el arrastre.
+	table.insert(state.conns, UserInputService.WindowFocusReleased:Connect(cancelDrag))
 end
 
 -- Libera todo (conexiones, autos y escenario). No se usa en el juego normal; queda para limpieza y pruebas.

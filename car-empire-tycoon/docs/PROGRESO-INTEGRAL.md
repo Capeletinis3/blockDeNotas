@@ -96,3 +96,13 @@ Respaldo: tag `respaldo-pre-showroom`. Archivos: `src/client/Showroom.luau` (ree
 - Cambio de empresa ≈ 0,9 s (sale 0,4, entra 0,5, color 0,8); un cambio nuevo cancela el anterior; nunca hay más de 2 autos.
 - Parámetros en `Showroom.CONFIG`. Para celular quedan `Showroom.rotate` y `Showroom.zoom` (sin controles táctiles todavía).
 - Recomendación para Studio: con `Lighting.Technology = Future` las luces puntuales se ven mejor (es una opción del lugar; no se cambió).
+
+## Correcciones puntuales del showroom (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-correcciones-showroom` y copia del `.rbxl` anterior.
+- **Cámara:** `App.cameraOwner` define un único dueño: `"showroom"` en el menú principal, `"scene"` con empresa abierta fuera del menú, nadie en la creación. `SceneCamera.update` no escribe la cámara si no es su dueña (antes la movía en el menú mientras la empresa seguía cargada). La intro sigue igual; una sola conexión a RenderStepped.
+- **Luz:** techo, paredes y junturas proyectan sombra y se agregó un muro exterior por lado, así el sol no entra. Mientras se ve: sol (`Brightness`), luz del cielo, niebla y `Atmosphere` apagados; cada propiedad se guarda y restaura por separado, aunque falle otra.
+- **Mouse:** además de `processed`, se consulta `GetGuiObjectsAtPosition`. No rota sobre tarjetas, paneles, textos ni botones, y la rueda no hace zoom sobre listas desplazables. Al perder el foco de la ventana se cancela el arrastre.
+- **Plataforma y anillo:** el anillo queda apoyado sobre el piso (antes casi enterrado), centrado con la plataforma y con un diámetro según el auto.
+- **Transiciones:** al ocultarse a mitad de un cambio se libera el auto que salía y, al volver, se muestra el de la última empresa. «Reducir movimiento» también aplica el color al instante.
+- Pruebas: `tests/ui.luau` (1.158) cubre cámara, luz, sombras, entrada, anillo, transición y modo reducido.

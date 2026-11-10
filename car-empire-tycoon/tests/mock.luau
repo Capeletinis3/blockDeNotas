@@ -559,7 +559,7 @@ local EVENTS = {
 	PromptTriggered = true, OnClientEvent = true, OnServerEvent = true, ChildAdded = true, ChildRemoved = true, Changed = true,
 	Destroying = true, CharacterAdded = true, CharacterRemoving = true, PlayerAdded = true, PlayerRemoving = true, Heartbeat = true,
 	RenderStepped = true, Stepped = true, TextBoxFocusReleased = true, Completed = true, MouseWheelForward = true,
-	MouseWheelBackward = true, DescendantAdded = true, AncestryChanged = true, Event = true, TouchTap = true, TouchPinch = true,
+	MouseWheelBackward = true, DescendantAdded = true, AncestryChanged = true, Event = true, TouchTap = true, TouchPinch = true, WindowFocusReleased = true,
 }
 
 local Instance = {}

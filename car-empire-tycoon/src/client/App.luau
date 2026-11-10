@@ -617,8 +617,11 @@ function App.render()
 	pendingRebuild = false
 	local p = App.payload
 	local status = App.screens.status
-	if App.screens.showroom and (not p or p.status ~= "ready") then
-		App.screens.showroom.setVisible(false)
+	if not p or p.status ~= "ready" then
+		App.cameraOwner = nil
+		if App.screens.showroom then
+			App.screens.showroom.setVisible(false)
+		end
 	end
 	if not p or p.status == "loading" then
 		setControls(false)
@@ -650,10 +653,13 @@ function App.render()
 		end
 	end
 	setControls(not FULLSCREEN[route])
-	-- Showroom 3D: solo trabaja mientras se ve el menú principal (Showroom.setVisible).
+	-- Dueño único de Workspace.CurrentCamera según la pantalla: el showroom en el menú principal, la cámara de
+	-- gestión (SceneCamera) con una empresa abierta fuera del menú, y nadie en la pantalla de creación. Así
+	-- nunca hay dos sistemas moviendo la cámara (por ejemplo, al volver al menú con la empresa todavía cargada).
+	App.cameraOwner = (route == "menu" and "showroom") or ((App.g ~= nil and route ~= "nueva") and "scene") or nil
 	local showroom = App.screens.showroom
 	if showroom then
-		showroom.setVisible(route == "menu", { reduce = App.settings.reduceMotion == true, phone = App.isPhone() })
+		showroom.setVisible(App.cameraOwner == "showroom", { reduce = App.settings.reduceMotion == true, phone = App.isPhone() })
 	end
 	local ok, err = pcall(function()
 		if route == "menu" then

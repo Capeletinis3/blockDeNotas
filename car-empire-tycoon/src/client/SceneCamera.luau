@@ -1,7 +1,9 @@
 --!strict
 --[[ Cámara del escenario: no hay personaje caminando (la gestión se hace desde los menús). Mientras hay una
 	empresa abierta, la cámara orbita sobre su garaje (Player:GetAttribute("PlotCenter"), lo fija el servidor):
-	arrastrar con el mouse o el dedo rota, la rueda o el gesto de pellizcar acercan y alejan. ]]
+	arrastrar con el mouse o el dedo rota, la rueda o el gesto de pellizcar acercan y alejan.
+	Solo mueve Workspace.CurrentCamera cuando App.cameraOwner == "scene" (lo decide App.render según la
+	pantalla); en el menú principal la cámara es del showroom. ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -38,11 +40,45 @@ function SceneCamera.cinematic(seconds: number?)
 end
 
 local function active(): boolean
-	return App.g ~= nil and App.ui.route == "juego" and #App.ui.dialogs == 0
+	return SceneCamera.owns() and App.ui.route == "juego" and #App.ui.dialogs == 0
 end
 
+-- ¿Esta cámara es la dueña de Workspace.CurrentCamera ahora?
+function SceneCamera.owns(): boolean
+	return App.cameraOwner == "scene" and App.g ~= nil
+end
+
+-- Un paso: avanza el recorrido de la introducción y ubica la cámara (RenderStepped; las pruebas lo llaman).
+function SceneCamera.update(dt: number)
+	if not SceneCamera.owns() then
+		return
+	end
+	if cine then
+		cine.t += dt or 0
+		local k = math.clamp(cine.t / cine.dur, 0, 1)
+		view.yaw = (view.yaw + (dt or 0) * 18) % 360
+		view.dist = view.maxDist + (70 - view.maxDist) * (1 - (1 - k) * (1 - k))
+		if k >= 1 then
+			cine = nil
+		end
+	end
+	local cam = workspace.CurrentCamera
+	local center = Players.LocalPlayer:GetAttribute("PlotCenter")
+	if not cam or typeof(center) ~= "Vector3" then
+		return
+	end
+	cam.CameraType = Enum.CameraType.Scriptable
+	local yaw, pitch = math.rad(view.yaw), math.rad(view.pitch)
+	local offset = Vector3.new(math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)) * view.dist
+	cam.CFrame = CFrame.lookAt(center + offset, center)
+end
+
+local started = false
 function SceneCamera.start()
-	local player = Players.LocalPlayer
+	if started then
+		return -- una sola vez: sin conexiones duplicadas
+	end
+	started = true
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
 		if processed or not active() then
 			return
@@ -77,26 +113,7 @@ function SceneCamera.start()
 			SceneCamera.zoom(1 / math.clamp(scale, 0.9, 1.1))
 		end
 	end)
-	RunService.RenderStepped:Connect(function(dt: number)
-		if cine then
-			cine.t += dt or 0
-			local k = math.clamp(cine.t / cine.dur, 0, 1)
-			view.yaw = (view.yaw + (dt or 0) * 18) % 360
-			view.dist = view.maxDist + (70 - view.maxDist) * (1 - (1 - k) * (1 - k))
-			if k >= 1 then
-				cine = nil
-			end
-		end
-		local cam = workspace.CurrentCamera
-		local center = player:GetAttribute("PlotCenter")
-		if not cam or typeof(center) ~= "Vector3" or App.g == nil then
-			return
-		end
-		cam.CameraType = Enum.CameraType.Scriptable
-		local yaw, pitch = math.rad(view.yaw), math.rad(view.pitch)
-		local offset = Vector3.new(math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)) * view.dist
-		cam.CFrame = CFrame.lookAt(center + offset, center)
-	end)
+	RunService.RenderStepped:Connect(SceneCamera.update)
 end
 
 return SceneCamera
