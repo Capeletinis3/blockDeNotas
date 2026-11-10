@@ -85,3 +85,14 @@ Hecho con revisión estática y pruebas automáticas (`luau-analyze`, selene, ch
 - Despidos: además de la indemnización se paga el sueldo de los días trabajados desde el último pago (antes se podía usar personal casi gratis).
 - El diálogo de lote muestra el mismo costo que cobra el servidor (con la eficiencia de Producción).
 - Textos de ayuda que mandaban a caminar con el personaje, actualizados.
+
+## Showroom 3D definitivo (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-showroom`. Archivos: `src/client/Showroom.luau` (reescrito), `ScreenMenu.luau`, `App.luau`, `Main.client.luau`, `tests/ui.luau`.
+- El escenario pasó de un ViewportFrame (una sola luz direccional, reconstruido en cada redibujo) al Workspace **local** del cliente, en `CONFIG.origin`, persistente entre redibujos. Solo está en el Workspace mientras se ve el menú.
+- Sala cerrada (piso grafito semibrillante, paneles oscuros, techo), plataforma baja y líneas de luz del color corporativo. Luces: principal, relleno y contorno blancas (ubicadas según el tamaño del auto) y acentos de color con alcance que no llega a la pintura.
+- Mientras se ve, el ambiente global se oscurece solo en ese cliente; al salir se restauran la iluminación y la cámara (FOV y tipo).
+- Cámara: tres cuartos frontal y baja, órbita lenta, arrastre con el botón izquierdo en el área libre, rueda para zoom, límites según el tamaño real del modelo, vuelta suave a la órbita, auto corrido a la derecha.
+- Cambio de empresa ≈ 0,9 s (sale 0,4, entra 0,5, color 0,8); un cambio nuevo cancela el anterior; nunca hay más de 2 autos.
+- Parámetros en `Showroom.CONFIG`. Para celular quedan `Showroom.rotate` y `Showroom.zoom` (sin controles táctiles todavía).
+- Recomendación para Studio: con `Lighting.Technology = Future` las luces puntuales se ven mejor (es una opción del lugar; no se cambió).

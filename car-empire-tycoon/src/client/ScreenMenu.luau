@@ -261,11 +261,17 @@ function Screen.build(parent: Instance)
 	local sel = selectedSlot()
 	local selected = slots[sel]
 
-	-- Fondo: showroom 3D con el auto y el color de la empresa elegida.
-	Showroom.mount(parent, selected and not selected.damaged and selected.showcase or nil, selected and not selected.damaged and selected.color or nil, App.settings and App.settings.reduceMotion)
+	-- Fondo: showroom 3D (escenario local persistente; acá solo se le dice qué auto y qué color mostrar).
+	-- Prioridad del auto: el exhibido por el jugador, si no el más reciente, si no el provisional (lo resuelve
+	-- GameState.summary en el servidor y Showroom con el sedán de 1970).
+	local valid = selected and not selected.damaged
+	Showroom.show(valid and selected.showcase or nil, valid and selected.color or nil, sel)
+	-- En PC el marco desplazable cubre solo la columna de tarjetas: el resto de la pantalla queda libre para
+	-- rotar la cámara del showroom (los botones y tarjetas siguen teniendo prioridad).
+	local colW = math.min(540, vw * 0.42)
 	local wrap = Ui.new("ScrollingFrame", {
 		Name = "MenuWrap",
-		Size = UDim2.fromScale(1, 1),
+		Size = phone and UDim2.fromScale(1, 1) or UDim2.new(0, colW + 96, 1, 0),
 		BackgroundColor3 = Ui.hex("#06070B"),
 		BackgroundTransparency = 1,
 		ScrollBarThickness = 4,
@@ -274,7 +280,7 @@ function Screen.build(parent: Instance)
 	})
 	App.keepScroll(wrap, "menu")
 	-- Velo lateral para que las tarjetas se lean sobre la escena.
-	local veil = Ui.new("Frame", { Name = "Velo", Size = UDim2.new(0, phone and vw or math.min(620, vw * 0.48), 1, 0), BackgroundColor3 = Ui.hex("#06070B"), BackgroundTransparency = 0, ZIndex = 1, Parent = parent })
+	local veil = Ui.new("Frame", { Name = "Velo", Size = UDim2.new(0, phone and vw or (colW + 160), 1, 0), BackgroundColor3 = Ui.hex("#06070B"), BackgroundTransparency = 0, ZIndex = 1, Parent = parent })
 	local vg = Instance.new("UIGradient")
 	vg.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.15), NumberSequenceKeypoint.new(0.7, 0.45), NumberSequenceKeypoint.new(1, 1) })
 	vg.Parent = veil
@@ -338,7 +344,7 @@ function Screen.build(parent: Instance)
 		left.Parent = wrap
 	else
 		left.Position = UDim2.fromOffset(48, 40)
-		left.Size = UDim2.fromOffset(math.min(540, vw * 0.42), math.max(0, vh - 80))
+		left.Size = UDim2.fromOffset(colW, math.max(0, vh - 80))
 		left.Parent = wrap
 		Ui.new("Frame", { Name = "Margen", Size = UDim2.fromOffset(1, 60), Position = UDim2.fromOffset(0, vh - 20), BackgroundTransparency = 1, Parent = wrap })
 	end

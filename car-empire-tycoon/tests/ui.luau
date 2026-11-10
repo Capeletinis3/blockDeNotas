@@ -1311,6 +1311,193 @@ test("Escenario sin personaje: la cámara orbita sobre el garaje con zoom y rota
 	noErrors("Cámara del escenario")
 end)
 
+test("Showroom 3D del menú: escenario persistente, transición entre empresas, cámara con arrastre y zoom, y limpieza", function()
+	local Showroom = App.screens.showroom
+	local st = Showroom._state
+	local C = Showroom.CONFIG
+	local UIS = M.services.UserInputService
+	-- Dos empresas con colores distintos.
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slots = App.profile.slots
+	if not slots["2"] then
+		App.request("createCompany", { slot = "2", name = "Showroom Dos", color = "#FF8A3D", logo = "rayo" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	App.go("menu")
+	M.task.wait()
+	slots = App.profile.slots
+	check(slots["1"] ~= nil and slots["2"] ~= nil, "dos empresas en el menú")
+	local function stage(): any
+		return st.stage
+	end
+	local function cars(): number
+		local n = 0
+		for _, c in stage():GetChildren() do
+			if c.ClassName == "Model" then
+				n += 1
+			end
+		end
+		return n
+	end
+	local maxCars = 0
+	local function step(seconds: number)
+		for _ = 1, math.ceil(seconds * 30) do
+			Showroom.update(1 / 30)
+			maxCars = math.max(maxCars, cars())
+		end
+	end
+	local function near(a: any, hex: string): boolean
+		local b = M.Color3.fromHex(hex)
+		return math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) < 0.02
+	end
+	check(Showroom.isVisible(), "el showroom se ve en el menú")
+	local ambient0 = st.savedLighting and st.savedLighting.Ambient
+	check(st.savedLighting ~= nil, "ambiente global oscurecido mientras se ve el showroom")
+	check(stage() ~= nil and stage().Parent == M.services.Workspace, "escenario en el Workspace del cliente")
+	check(stage():FindFirstChild("Piso") and stage():FindFirstChild("Plataforma") and stage():FindFirstChild("Techo"), "piso, plataforma y sala cerrada")
+	local spots = 0
+	for _, d in stage():GetDescendants() do
+		if d.ClassName == "SpotLight" then
+			spots += 1
+		end
+	end
+	eq(spots, 3, "luz principal, de relleno y de contorno")
+	-- Empresa 1.
+	App.ui.menuSel = "1"
+	App.forceRender()
+	step(1.3)
+	eq(cars(), 1, "un solo auto en la plataforma")
+	check(near(st.accent, slots["1"].color), "luces de acento con el color de la empresa 1")
+	local m1 = st.current and st.current.model
+	check(m1 ~= nil, "auto de la empresa 1")
+	local p = m1 and (m1:FindFirstChildWhichIsA("BasePart", true) :: any)
+	check(p ~= nil and p.Anchored == true and p.CanCollide == false, "el auto queda quieto (anclado y sin colisiones)")
+	-- Luces según el tamaño real del auto: fuera de la carrocería; las de acento no llegan al auto.
+	for _, name in { "LuzPrincipal", "LuzRelleno", "LuzContorno" } do
+		local h = stage():FindFirstChild(name)
+		check(h ~= nil and (h.CFrame.Position - st.target).Magnitude > st.radius * 1.5, name .. " fuera del auto")
+	end
+	for _, h in stage():GetChildren() do
+		if h.Name == "Acento" then
+			local l = h:FindFirstChildWhichIsA("PointLight")
+			check(l ~= nil and (h.CFrame.Position - st.target).Magnitude - st.radius > l.Range, "la luz de acento no alcanza la pintura del auto")
+		end
+	end
+	-- Redibujar la misma empresa no rearma nada.
+	App.forceRender()
+	step(0.5)
+	check(st.current and st.current.model == m1, "mismo auto al redibujar")
+	-- Cambio de empresa: transición de 0,8–1,2 s.
+	maxCars = 0
+	App.ui.menuSel = "2"
+	App.forceRender()
+	step(0.3)
+	check(st.phase ~= nil, "transición en curso")
+	step(1.0)
+	eq(st.phase, nil, "transición terminada en menos de 1,3 s")
+	eq(cars(), 1, "un solo auto al final")
+	check(maxCars <= 2, "nunca más de dos autos durante la transición (" .. maxCars .. ")")
+	check(near(st.accent, slots["2"].color), "el color de acento cambió al de la empresa 2")
+	check(st.current and st.current.model ~= m1, "auto de la empresa 2")
+	-- Cambios rápidos: se cancela la transición anterior sin acumular autos.
+	maxCars = 0
+	for i = 1, 8 do
+		App.ui.menuSel = i % 2 == 0 and "1" or "2"
+		App.forceRender()
+		step(0.1)
+	end
+	step(1.5)
+	check(maxCars <= 2, "cambios rápidos: como máximo dos autos (" .. maxCars .. ")")
+	eq(cars(), 1, "queda uno")
+	check(near(st.accent, slots["1"].color), "y es el de la última empresa elegida")
+	-- La interfaz tiene prioridad: un clic que usó una tarjeta no mueve la cámara.
+	local function input(kind: string, pos: any): any
+		return { UserInputType = M.Enum.UserInputType[kind], Position = pos }
+	end
+	UIS.InputBegan:Fire(input("MouseButton1", M.Vector3.new(100, 100, 0)), true)
+	check(not st.dragging, "clic sobre la interfaz: sin arrastre")
+	-- Arrastre sobre el área libre.
+	local yaw0 = st.tYaw
+	UIS.InputBegan:Fire(input("MouseButton1", M.Vector3.new(900, 400, 0)), false)
+	check(st.dragging, "arrastre sobre el área libre")
+	for i = 1, 30 do
+		UIS.InputChanged:Fire(input("MouseMovement", M.Vector3.new(900 + i * 40, 400 + i * 40, 0)), false)
+		step(1 / 30)
+	end
+	check(st.tYaw ~= yaw0, "rota alrededor del auto")
+	check(st.tPitch <= C.pitchMax + 1e-6 and st.tPitch >= C.pitchMin - 1e-6, "límites verticales")
+	UIS.InputEnded:Fire(input("MouseButton1", M.Vector3.new(0, 0, 0)), false)
+	check(not st.dragging, "suelta")
+	-- Zoom con la rueda, con límites según el tamaño del auto.
+	for _ = 1, 40 do
+		UIS.InputChanged:Fire(input("MouseWheel", M.Vector3.new(0, 0, 1)), false)
+	end
+	step(1)
+	check(st.tDist >= st.distMin - 1e-6, "no se acerca más que la distancia mínima")
+	check(st.distMin >= st.radius * 1.29, "la distancia mínima deja la cámara fuera de la carrocería")
+	local cam = M.services.Workspace.CurrentCamera
+	check((cam.CFrame.Position - st.target).Magnitude >= st.distMin * 0.9, "la cámara no atraviesa el auto")
+	check(cam.CFrame.Position.Y >= C.origin.Y + 0.5 - 1e-6, "ni el piso")
+	for _ = 1, 60 do
+		UIS.InputChanged:Fire(input("MouseWheel", M.Vector3.new(0, 0, -1)), false)
+	end
+	check(st.tDist <= st.distMax + 1e-6 and st.distMax <= C.room - 6 + 1e-6, "ni se aleja más que la máxima (dentro de la sala)")
+	-- Sin interacción vuelve de a poco a la órbita cinematográfica.
+	step(C.idleDelay + C.returnTime + 6)
+	eq(st.blend, 1, "órbita recuperada")
+	check(math.abs(st.pitch - C.pitchDefault) < 1, "altura predeterminada")
+	check(math.abs(st.dist - st.distDefault) < 0.5, "encuadre predeterminado (" .. Util.num(st.dist, 2) .. " / " .. Util.num(st.distDefault, 2) .. " · " .. Util.num(st.distMin, 2) .. "–" .. Util.num(st.distMax, 2) .. ")")
+	local yawA = st.yaw
+	step(1)
+	check(st.yaw > yawA, "órbita lenta en marcha")
+	-- Sin información flotante sobre el auto.
+	local floating = 0
+	for _, d in stage():GetDescendants() do
+		if d.ClassName == "BillboardGui" or d.ClassName == "SurfaceGui" or d.ClassName == "TextLabel" then
+			floating += 1
+		end
+	end
+	eq(floating, 0, "sin carteles ni textos en el escenario")
+	-- Fuera del menú no trabaja.
+	App.request("selectSlot", { slot = "1" })
+	check(waitFor(function()
+		return App.g ~= nil
+	end), "entra a una empresa")
+	M.task.wait()
+	check(not Showroom.isVisible() and stage().Parent == nil, "fuera del menú el escenario sale del Workspace")
+	check(M.services.Lighting.Ambient == ambient0, "y la iluminación global vuelve a la del lugar")
+	check(M.services.Workspace.CurrentCamera.FieldOfView ~= C.fov, "y la cámara recupera su campo de visión")
+	local clock = st.clock
+	Showroom.update(1)
+	eq(st.clock, clock, "y no se actualiza")
+	-- Conexiones: una por evento, sin duplicarse; se liberan todas.
+	eq(Showroom.connectionCount(), 4, "cuatro conexiones")
+	Showroom.start()
+	eq(Showroom.connectionCount(), 4, "iniciar dos veces no duplica")
+	Showroom.destroy()
+	eq(Showroom.connectionCount(), 0, "destroy libera las conexiones")
+	check(st.stage == nil and st.current == nil, "y el escenario y los autos")
+	Showroom.start()
+	App.go("juego")
+	M.task.wait()
+	noErrors("Showroom")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()

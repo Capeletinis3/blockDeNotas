@@ -617,6 +617,9 @@ function App.render()
 	pendingRebuild = false
 	local p = App.payload
 	local status = App.screens.status
+	if App.screens.showroom and (not p or p.status ~= "ready") then
+		App.screens.showroom.setVisible(false)
+	end
 	if not p or p.status == "loading" then
 		setControls(false)
 		status.loading(App.content)
@@ -647,6 +650,11 @@ function App.render()
 		end
 	end
 	setControls(not FULLSCREEN[route])
+	-- Showroom 3D: solo trabaja mientras se ve el menú principal (Showroom.setVisible).
+	local showroom = App.screens.showroom
+	if showroom then
+		showroom.setVisible(route == "menu", { reduce = App.settings.reduceMotion == true, phone = App.isPhone() })
+	end
 	local ok, err = pcall(function()
 		if route == "menu" then
 			App.screens.menu.build(App.content)
