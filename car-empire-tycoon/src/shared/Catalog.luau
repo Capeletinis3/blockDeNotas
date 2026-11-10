@@ -259,9 +259,11 @@ Catalog.BASES = {
 	- asset: nombre del Model en ServerStorage.VehicleModels (el servidor publica una copia para el cliente en
 	  ReplicatedStorage.CarEmpireAssets.VehicleModels). Si no existe, se usa el modelo provisional.
 	- paintSuffix: las piezas cuyo nombre termina así toman el color principal del diseño.
+	- front: hacia dónde mira el frente en el modelo original ("-Z" por defecto, "+Z" si viene al revés). La
+	  plantilla lo gira para que en el juego el frente mire siempre hacia −Z (el original no se toca).
 	Es puramente visual: no cambia costos, estadísticas ni ventas. Para sumar otro auto, agregar una entrada. ]]
 Catalog.VEHICLE_MODELS = {
-	{ id = "pioneer70", name = "Pioneer 70", type = "sedan", year = 1970, default = { 1970, 1979 }, asset = "Pioneer70_World", paintSuffix = "_Paint",
+	{ id = "pioneer70", name = "Pioneer 70", type = "sedan", year = 1970, default = { 1970, 1979 }, asset = "Pioneer70_World", paintSuffix = "_Paint", front = "+Z", -- paragolpes y faros delanteros hacia +Z
 		desc = "Sedán compacto familiar de cuatro puertas (1972)" },
 }
 Catalog.PROVISIONAL_MODEL = "provisional"

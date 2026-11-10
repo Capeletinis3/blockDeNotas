@@ -35,8 +35,8 @@ local Showroom = {}
 -- Parámetros (centralizados para ajustarlos después de verlo en Studio).
 Showroom.CONFIG = {
 	origin = Vector3.new(0, 1200, -3000), -- lejos del garaje y de las parcelas
-	room = 80, -- medio lado de la sala (studs; el Pioneer 70 mide ≈ 15 de largo)
-	height = 40,
+	room = 56, -- medio lado de la sala (studs; el Pioneer 70 mide ≈ 17 de largo)
+	height = 32,
 	fov = 38,
 	yawDefault = 145, -- tres cuartos frontal (misma convención que la cámara «ángulo» del editor)
 	pitchDefault = 8, -- algo baja
@@ -56,7 +56,7 @@ Showroom.CONFIG = {
 local C = Showroom.CONFIG
 
 local GRAPHITE = Color3.fromHex("#1C1E23")
-local PANEL = Color3.fromHex("#121318")
+local PANEL = Color3.fromHex("#16181E")
 local PANEL_GAP = Color3.fromHex("#0A0B0E")
 local CEILING = Color3.fromHex("#0B0C0F")
 local PLATFORM = Color3.fromHex("#26282E")
@@ -297,7 +297,10 @@ local function placeCar(spec: any, color: string?, sig: string): CarState?
 			d:Destroy()
 		end
 	end
-	local cf, size = model:GetBoundingBox()
+	-- Medidas reales del modelo: CarModel las deja como atributos (largo, ancho, alto) y pone el pivote en el
+	-- centro de la planta, a ras del suelo (ruedas). Si faltaran, se usa la caja del modelo.
+	local L, Wd, Ht = model:GetAttribute("length"), model:GetAttribute("width"), model:GetAttribute("height")
+	local size = (type(L) == "number" and type(Wd) == "number" and type(Ht) == "number") and Vector3.new(Wd, Ht, L) or model:GetExtentsSize()
 	local radius = size.Magnitude / 2
 	-- Plataforma discreta, apenas elevada y a la medida del auto (todo proporcional a su tamaño real).
 	local top = math.max(0.3, radius * 0.05)
@@ -309,7 +312,8 @@ local function placeCar(spec: any, color: string?, sig: string): CarState?
 	if state.ring then
 		state.ring.Size = Vector3.new(0.05, d + radius * 0.12, d + radius * 0.12)
 	end
-	model:PivotTo(model:GetPivot() + (C.origin + Vector3.new(0, top + size.Y / 2, 0) - cf.Position))
+	-- Sobre la plataforma, centrado y con el frente hacia −Z (la orientación que deja CarModel).
+	model:PivotTo(CFrame.new(C.origin + Vector3.new(0, top, 0)) * model:GetPivot().Rotation)
 	model.Parent = state.stage
 	-- Encuadre según las dimensiones reales del modelo.
 	local fit = radius / math.sin(math.rad(C.fov) / 2)

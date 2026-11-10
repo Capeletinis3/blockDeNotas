@@ -274,7 +274,7 @@ function Screen.build(parent: Instance)
 		Size = phone and UDim2.fromScale(1, 1) or UDim2.new(0, colW + 96, 1, 0),
 		BackgroundColor3 = Ui.hex("#06070B"),
 		BackgroundTransparency = 1,
-		ScrollBarThickness = 4,
+		ScrollBarThickness = phone and 4 or 0, -- en PC la barra quedaría en medio de la escena
 		ZIndex = 2,
 		Parent = parent,
 	})

@@ -159,6 +159,13 @@ end
 
 -- Plantilla preparada de un modelo 3D (o nil si no está cargado). Se rehace solo si cambia el original.
 function CarModel.template(asset: string): any
+	-- Hacia dónde mira el frente en el original (Catalog.VEHICLE_MODELS[...].front).
+	local front = nil
+	for _, e in Catalog.VEHICLE_MODELS do
+		if e.asset == asset then
+			front = e.front
+		end
+	end
 	local resolver = CarModel.vehicleResolver
 	if not resolver then
 		return nil
@@ -203,6 +210,10 @@ function CarModel.template(asset: string): any
 	-- y las piezas importadas de Blender traen un PivotOffset girado 90°: por eso se fija el PivotOffset de
 	-- la pieza principal (de la plantilla, no del original) para que el pivote quede donde corresponde.
 	local pivot = CFrame.new((lo.X + hi.X) / 2, lo.Y, (lo.Z + hi.Z) / 2)
+	if front == "+Z" then
+		-- El modelo original tiene el frente hacia +Z: girarlo 180° deja el frente hacia −Z como el resto.
+		pivot *= CFrame.Angles(0, math.pi, 0)
+	end
 	m.PrimaryPart = primary
 	primary.PivotOffset = primary.CFrame:ToObjectSpace(pivot)
 	m.WorldPivot = pivot

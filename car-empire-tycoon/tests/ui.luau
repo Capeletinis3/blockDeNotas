@@ -1387,6 +1387,20 @@ test("Showroom 3D del menú: escenario persistente, transición entre empresas, 
 	check(m1 ~= nil, "auto de la empresa 1")
 	local p = m1 and (m1:FindFirstChildWhichIsA("BasePart", true) :: any)
 	check(p ~= nil and p.Anchored == true and p.CanCollide == false, "el auto queda quieto (anclado y sin colisiones)")
+	-- El Pioneer 70 viene con el frente hacia +Z: la plantilla lo gira y la vista inicial muestra el frente.
+	local fb, rb = m1 and m1:FindFirstChild("FrontBumper_Chrome", true), m1 and m1:FindFirstChild("RearBumper_Chrome", true)
+	if fb and rb then
+		check(fb.CFrame.Position.Z < rb.CFrame.Position.Z, "frente del auto hacia −Z (como el resto de los modelos)")
+		local camPos = M.services.Workspace.CurrentCamera.CFrame.Position
+		check((fb.CFrame.Position - camPos).Magnitude < (rb.CFrame.Position - camPos).Magnitude, "la vista inicial de tres cuartos muestra el frente")
+		local tire = m1:FindFirstChild("Wheel_FL_Tire", true)
+		local plat = stage():FindFirstChild("Plataforma")
+		check(tire and plat and math.abs((tire.CFrame.Position.Y - tire.Size.Y / 2) - (plat.CFrame.Position.Y + plat.Size.X / 2)) < 0.15, "las ruedas apoyan sobre la plataforma")
+	else
+		check(false, "el auto exhibido es el Pioneer 70")
+	end
+	local wrap = named("MenuWrap")
+	check(wrap ~= nil and wrap.ScrollBarThickness == 0, "en PC no hay barra de desplazamiento en medio de la escena")
 	-- Luces según el tamaño real del auto: fuera de la carrocería; las de acento no llegan al auto.
 	for _, name in { "LuzPrincipal", "LuzRelleno", "LuzContorno" } do
 		local h = stage():FindFirstChild(name)
