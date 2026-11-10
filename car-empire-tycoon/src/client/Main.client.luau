@@ -123,10 +123,8 @@ UserInputService.InputBegan:Connect(function(input: InputObject, processed: bool
 	end
 	if route == "menu" then
 		if key == Enum.KeyCode.Return and not App.screens.menu.isRenaming() then
-			local slot = App.screens.menu.firstSlot()
-			if slot then
-				App.screens.menu.play(slot)
-			end
+			-- Enter continúa la empresa elegida (la tarjeta expandida), no la primera de la lista.
+			App.screens.menu.enterKey()
 		end
 		return
 	end

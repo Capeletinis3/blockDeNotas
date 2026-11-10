@@ -1448,10 +1448,22 @@ local function showcase(g: any): any
 	return pick and Util.deepCopy(pick) or nil
 end
 
+-- Nombre del último vehículo creado (sin plantillas), para la tarjeta del menú; nil si todavía no hay.
+local function lastModel(g: any): string?
+	local best, bestDay = nil, -math.huge
+	for _, d in g.designs do
+		if not d.template and (d.createdDay or 0) >= bestDay then
+			best, bestDay = d, d.createdDay or 0
+		end
+	end
+	return best and best.name or nil
+end
+
 -- Resumen de una ranura para el menú de inicio.
 function GameState.summary(g: any): any
 	return {
 		showcase = showcase(g),
+		lastModel = lastModel(g),
 		name = g.company.name,
 		color = g.company.color,
 		logo = g.company.logo,

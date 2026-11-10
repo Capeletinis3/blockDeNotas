@@ -476,6 +476,8 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	check(waitFor(function()
 		return App.g == nil and App.ui.route == "menu"
 	end), "vuelve al menú de empresas")
+	-- La tarjeta del espacio 2 se elige primero; la acción principal pasa a ser «Crear empresa».
+	clickN("Elegir_2")
 	clickN("Crear_2")
 	eq(App.ui.newCompany.slot ~= "1", true, "elige una ranura libre")
 	for _, d in root:GetDescendants() do
@@ -1700,6 +1702,208 @@ test("Showroom: una sola cámara activa, luz del lugar restaurada, prioridad de 
 	App.forceRender()
 	atm:Destroy()
 	noErrors("Correcciones del showroom")
+end)
+
+test("Menú: cuatro tarjetas de empresas, la elegida expandida, acciones según el espacio y una sola animación", function()
+	local Menu = App.screens.menu
+	local Showroom = App.screens.showroom
+	local st = Showroom._state
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Util = require("./.build-ui/shared/Util")
+	-- Empresa pedida al showroom (la que muestra o la que está por mostrar) y su color de acento.
+	local function shownKey(): string?
+		local sig = st.pending and st.pending.sig or (st.current and st.current.sig)
+		return sig and string.match(sig, "^([^|]*)|") or nil
+	end
+	local function accentIs(hex: string): boolean
+		local a, b = st.accentTo or st.accent, M.Color3.fromHex(hex)
+		return a ~= nil and math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) < 0.02
+	end
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	App.ui.enteringGame = false
+	App.ui.menuSel = "1"
+	App.ui.route = "menu"
+	App.forceRender()
+	M.task.wait()
+	local slots = App.profile.slots
+	-- 1–3. Cuatro espacios: dos gratuitos y dos que se desbloquean por separado.
+	eq(Catalog.RULES.slots, 4, "cuatro espacios")
+	eq(Catalog.RULES.slotsFree, 2, "dos gratuitos")
+	for i = 1, 4 do
+		check(named("Espacio_" .. i) ~= nil, "existe el espacio " .. i)
+	end
+	check(slots["1"] ~= nil and slots["2"] ~= nil, "los espacios 1 y 2 tienen empresa")
+	eq(Menu.slotState("3"), "locked", "el 3 está bloqueado")
+	eq(Menu.slotState("4"), "locked", "el 4 está bloqueado")
+	check(named("Bloqueada_3") ~= nil and named("Bloqueada_4") ~= nil, "con candado")
+	check(find("Espacio adicional · bloqueado") ~= nil, "texto «Espacio adicional» y estado bloqueado")
+	-- 4–8. Empresa elegida: datos, tamaño y acciones.
+	local compactH, expandedH = Menu.heights()
+	local function height(i: number): number
+		return named("Espacio_" .. i).Size.Y.Offset
+	end
+	local s1 = slots["1"]
+	local card = named("Ranura_1")
+	check(card ~= nil, "la tarjeta 1 está expandida")
+	check(M.find(card, s1.name) ~= nil, "muestra el nombre")
+	check(M.find(card, "Año " .. tostring(s1.year)) ~= nil, "muestra el año de la partida")
+	check(M.find(card, Util.money(s1.money)) ~= nil, "muestra el dinero")
+	check(s1.lastModel ~= nil and M.find(card, s1.lastModel) ~= nil, "muestra el último vehículo creado (" .. tostring(s1.lastModel) .. ")")
+	check(M.find(card, "Reputación") == nil and M.find(card, "Empleados") == nil and M.find(card, "Tiempo jugado") == nil, "sin datos de más")
+	local stroke = card:FindFirstChildOfClass("UIStroke")
+	check(stroke ~= nil and stroke.Color == M.Color3.fromHex(s1.color), "borde con el color corporativo")
+	check(card.BackgroundColor3 ~= M.Color3.fromHex(s1.color) and card.BackgroundTransparency > 0, "sin pintar la tarjeta entera")
+	eq(height(1), expandedH, "la elegida mide lo expandido")
+	for i = 2, 4 do
+		eq(height(i), compactH, "la " .. i .. " queda compacta")
+	end
+	local c2 = named("Elegir_2")
+	check(c2 ~= nil and M.find(c2, slots["2"].name) ~= nil and M.find(c2, "Año " .. tostring(slots["2"].year)) ~= nil, "la compacta muestra logo, nombre y año")
+	check(M.find(c2, Util.money(slots["2"].money)) == nil, "la compacta no muestra el dinero")
+	check(named("Continuar_1") ~= nil and named("Renombrar_1") ~= nil and named("Eliminar_1") ~= nil, "empresa: Continuar, renombrar y eliminar")
+	check(named("Crear_1") == nil and named("Comprar_1") == nil, "sin acciones de otro tipo")
+	check(shownKey() == "1" and accentIs(s1.color), "el showroom recibió la empresa 1 y su color")
+	-- El último vehículo es el diseño más reciente (las plantillas no cuentan) y sin diseños no hay ninguno.
+	local GameState = require("./.build-ui/server/GameState")
+	local g1 = Util.deepCopy(Sessions.instance.list[player].profile.slots["1"])
+	table.insert(g1.designs, { id = "plantilla", name = "Plantilla X", template = true, createdDay = g1.time.day + 1 })
+	eq(GameState.summary(g1).lastModel, s1.lastModel, "una plantilla no cuenta como vehículo creado")
+	g1.designs = {}
+	eq(GameState.summary(g1).lastModel, nil, "sin diseños: sin último vehículo")
+	-- Eliminar pide confirmación.
+	clickN("Eliminar_1")
+	M.task.wait()
+	check(#App.ui.dialogs == 1 and App.profile.slots["1"] ~= nil, "eliminar pide confirmación antes de borrar")
+	App.closeAllDialogs()
+	-- 9. Cambiar de empresa: una sola animación por tarjeta que cambia de tamaño (la nueva y la anterior).
+	local TS = M.services.TweenService
+	local orig = TS.Create
+	local tweens = {}
+	TS.Create = function(self, inst, info, props)
+		if string.sub(inst.Name, 1, 8) == "Espacio_" then
+			table.insert(tweens, { name = inst.Name, time = info and info.Time, to = props.Size })
+		end
+		return orig(self, inst, info, props)
+	end
+	clickN("Elegir_2")
+	M.task.wait()
+	eq(App.ui.menuSel, "2", "el clic elige la empresa 2")
+	eq(#tweens, 2, "dos animaciones: la que se expande y la que se compacta")
+	local names = {}
+	for _, t in tweens do
+		names[t.name] = t.to.Y.Offset
+		check(t.time == nil or (t.time >= 0.2 and t.time <= 0.35), "duración entre 0,2 y 0,35 s")
+	end
+	check(names.Espacio_2 == expandedH and names.Espacio_1 == compactH, "la nueva se expande y la anterior se compacta")
+	check(M.find(named("Ranura_2"), slots["2"].lastModel or "Sin vehículos creados") ~= nil, "empresa 2: último vehículo o «Sin vehículos creados»")
+	check(shownKey() == "2" and accentIs(slots["2"].color), "el showroom recibió la empresa 2 y su color (su transición es la única del auto)")
+	-- Redibujar sin cambiar la selección no anima nada.
+	table.clear(tweens)
+	App.forceRender()
+	M.task.wait()
+	eq(#tweens, 0, "redibujar la misma selección no anima")
+	-- Elegir la misma tarjeta otra vez no redibuja.
+	table.clear(tweens)
+	Menu.select("2")
+	eq(#tweens, 0, "elegir la ya elegida no hace nada")
+	-- 10. Cambios rápidos: sin errores ni animaciones acumuladas; queda la última.
+	for i = 1, 12 do
+		table.clear(tweens)
+		Menu.select(tostring((i % 4) + 1))
+		check(#Menu._running <= 2, "nunca más de dos animaciones a la vez")
+	end
+	M.task.wait()
+	eq(App.ui.menuSel, "1", "queda la última elegida")
+	eq(shownKey(), "1", "y el showroom muestra esa")
+	eq(height(1), expandedH, "expandida")
+	TS.Create = orig
+	-- Espacio bloqueado elegido: «Desbloquear» (deshabilitado mientras el producto no tenga id).
+	Menu.select("3")
+	M.task.wait()
+	local buy = named("Comprar_3")
+	check(buy ~= nil and buy:GetAttribute("label") == "Desbloquear", "bloqueado: acción «Desbloquear»")
+	eq(buy:GetAttribute("disabled"), Catalog.PRODUCTS.slot3.id == 0, "sin producto configurado queda deshabilitado")
+	check(named("NotaCompra") ~= nil or Catalog.PRODUCTS.slot3.id ~= 0, "y lo dice")
+	check(named("Continuar_3") == nil and named("Crear_3") == nil, "sin continuar ni crear")
+	-- Desbloqueo individual (como lo deja la compra): el 3 pasa a ser un espacio libre, el 4 sigue bloqueado.
+	local sess = Sessions.instance.list[player]
+	sess.profile.unlocked = sess.profile.unlocked or {}
+	sess.profile.unlocked["3"] = true
+	Sessions.instance:push(sess)
+	M.task.wait()
+	eq(Menu.slotState("3"), "empty", "desbloqueado, el 3 es un espacio libre")
+	eq(Menu.slotState("4"), "locked", "el 4 sigue bloqueado")
+	local create = named("Crear_3")
+	check(create ~= nil and create:GetAttribute("label") == "Crear empresa", "libre: acción «Crear empresa»")
+	check(find("Espacio 3 · disponible") ~= nil, "con la indicación de disponible")
+	clickN("Crear_3")
+	eq(App.ui.route, "nueva", "abre el formulario de nombre, símbolo y color existente")
+	eq(App.ui.newCompany.slot, "3", "para el espacio 3")
+	App.go("menu")
+	M.task.wait()
+	sess.profile.unlocked["3"] = nil
+	Sessions.instance:push(sess)
+	M.task.wait()
+	eq(Menu.slotState("3"), "locked", "vuelve a quedar bloqueado")
+	-- Enter continúa la empresa elegida (no la primera de la lista) y no abre compras.
+	Menu.select("4")
+	Menu.enterKey()
+	M.task.wait()
+	check(App.g == nil and App.ui.route == "menu", "Enter sobre un espacio bloqueado no hace nada")
+	-- «Reducir movimiento»: el cambio de tarjeta es instantáneo.
+	local prof = App.payload.profile.settings or {}
+	App.payload.profile.settings = prof
+	prof.reduceMotion = true
+	App.forceRender()
+	tweens = {}
+	TS.Create = function(self, inst, info, props)
+		if string.sub(inst.Name, 1, 8) == "Espacio_" then
+			table.insert(tweens, inst.Name)
+		end
+		return orig(self, inst, info, props)
+	end
+	Menu.select("2")
+	eq(#tweens, 0, "sin animación con «Reducir movimiento»")
+	eq(height(2), expandedH, "y la tarjeta ya está expandida")
+	TS.Create = orig
+	prof.reduceMotion = false
+	App.forceRender()
+	-- 12. El resto del menú sigue: configuración, novedades y demostraciones.
+	check(named("Configuracion") ~= nil and named("Novedades") ~= nil and named("Demostraciones") ~= nil, "configuración, novedades y demostraciones")
+	clickN("Novedades")
+	M.task.wait()
+	eq(#App.ui.dialogs, 1, "novedades abre su diálogo")
+	App.closeAllDialogs()
+	clickN("Demostraciones")
+	check(M.find(App.dropLayer, "Demo: garaje") ~= nil, "la lista de demostraciones se abre")
+	for _, c in App.dropLayer:GetChildren() do
+		c:Destroy()
+	end
+	-- Renombrar en la tarjeta expandida.
+	clickN("Renombrar_2")
+	check(named("NombreRanura") ~= nil and Menu.isRenaming(), "renombrar edita el nombre en la tarjeta")
+	Menu.cancelRename()
+	check(named("NombreEmpresa") ~= nil, "cancelar vuelve al nombre")
+	-- Continuar abre la empresa elegida.
+	Menu.select("2")
+	clickN("Continuar_2")
+	check(waitFor(function()
+		return App.g ~= nil
+	end), "Continuar abre la empresa")
+	eq(App.g.company.name, slots["2"].name, "la empresa elegida")
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	App.ui.route = "menu"
+	App.forceRender()
+	noErrors("Tarjetas del menú")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

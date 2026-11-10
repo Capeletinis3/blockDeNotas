@@ -106,3 +106,18 @@ Respaldo: tag `respaldo-pre-correcciones-showroom` y copia del `.rbxl` anterior.
 - **Plataforma y anillo:** el anillo queda apoyado sobre el piso (antes casi enterrado), centrado con la plataforma y con un diámetro según el auto.
 - **Transiciones:** al ocultarse a mitad de un cambio se libera el auto que salía y, al volver, se muestra el de la última empresa. «Reducir movimiento» también aplica el color al instante.
 - Pruebas: `tests/ui.luau` (1.158) cubre cámara, luz, sombras, entrada, anillo, transición y modo reducido.
+
+## Tarjetas de empresas del menú (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-tarjetas-menu` y copia del `.rbxl` anterior. El showroom y SceneCamera no se tocaron.
+- `ScreenMenu.luau` (reescrito):
+  - Columna izquierda con los 4 espacios (≈ 27 % del ancho en PC, entre 300 y 520 px).
+  - La elegida se expande (logo, nombre, año, dinero, último vehículo o «Sin vehículos creados») con borde del color corporativo; las demás quedan compactas (logo, nombre y año).
+  - Libres: «Crear empresa · disponible». Bloqueados: candado y «Espacio adicional · bloqueado».
+- Acción principal abajo a la derecha: Continuar / Crear empresa / Desbloquear. En una empresa existente, Renombrar y Eliminar (con confirmación) quedan como secundarias.
+  - Desbloquear usa la compra existente (`buyProduct`); con id 0 queda deshabilitado.
+  - Abajo a la izquierda: Configuración, Novedades y Demostraciones (lista).
+- Animación: cada tarjeta pasa de su altura anterior a la nueva en 0,26 s y un cambio nuevo cancela el anterior; no hay animación con «Reducir movimiento». El auto lo cambia el showroom (`Showroom.show`).
+- Enter continúa la empresa elegida (antes, la primera de la lista).
+- `GameState.summary` agrega `lastModel` (último diseño creado, sin plantillas). Es solo un dato del menú: no cambia el guardado.
+- Pruebas: `tests/ui.luau` (1.235), más un control de superposición con el motor de vista previa en 1024×768, 1280×720, 1366×768, 1600×900, 1920×1080 y 390×844.
