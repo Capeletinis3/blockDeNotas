@@ -1630,7 +1630,7 @@ test("Demostraciones de la V3: se juegan en memoria y no tocan las ranuras", fun
 			local g = mgr.list[p].game
 			check(Rules.extraYears(g) >= 1 and Rules.year(g) == 2030, "Imperio: año comercial extra con 2030 visible")
 			check(Rules.nextExpansion(g) ~= nil and g.counters.unitsSold >= Rules.nextExpansion(g).sold, "Imperio: la primera región se puede abrir")
-			check(mgr:request(p, "expandGlobal", { requestId = rid() }).ok, "Imperio: abre la primera región")
+			check(mgr:request(p, "expandGlobal", { country = "JP", requestId = rid() }).ok, "Imperio: abre el país que elige (Japón)")
 		end
 	end
 	-- Los modelos de la demostración ya tuvieron su lote: se fabrica un modelo nuevo (duplicado).
@@ -2021,9 +2021,9 @@ test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué in
 	local g = bigCompany("Global SA")
 	local ctx = makeCtx(202)
 	g.sede = 4
-	check(not Actions.expandGlobal(g, ctx, {}).ok, "sin Imperio no hay expansión")
+	check(not Actions.expandGlobal(g, ctx, { country = "BR" }).ok, "sin Imperio no hay expansión")
 	g.sede = 5
-	check(not Actions.expandGlobal(g, ctx, {}).ok, "sin las ventas pedidas no hay expansión")
+	check(not Actions.expandGlobal(g, ctx, { country = "BR" }).ok, "sin las ventas pedidas no hay expansión")
 	g.counters.unitsSold = 1000000
 	local function corpCost(): number
 		local p = Rules.campaignPlan(g, { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = 30 })
@@ -2032,16 +2032,34 @@ test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué in
 	local dem, camp, line = Rules.demand(g, "sedan"), corpCost(), Rules.lineRate(g)
 	local nx = Rules.nextExpansion(g)
 	local m = g.money
-	check(Actions.expandGlobal(g, ctx, {}).ok, "se expande")
+	check(not Actions.expandGlobal(g, ctx, {}).ok, "hay que elegir el país")
+	check(not Actions.expandGlobal(g, ctx, { country = "XX" }).ok, "país desconocido")
+	eq(g.money, m, "nada cobrado")
+	check(Actions.expandGlobal(g, ctx, { country = "ZA" }).ok, "se expande al país elegido (el último de la lista)")
 	eq(g.money, m - nx.cost, "cobra el costo")
+	eq(g.countries[1], "ZA", "queda registrado el país elegido")
+	check(not Actions.expandGlobal(g, ctx, { country = "ZA" }).ok, "no se abre dos veces el mismo país")
 	check(math.abs(Rules.demand(g, "sedan") / dem - (1 + Catalog.EXPANSION.demand)) < 1e-6, "+15 % de demanda")
 	check(corpCost() > camp and Rules.lineRate(g) > line, "campañas corporativas más caras y líneas más rápidas")
 	check(Rules.nextExpansion(g).cost > nx.cost, "la siguiente región cuesta más")
 	g.money = 1e12
-	for _ = 2, #Catalog.EXPANSION.regions do
-		check(Actions.expandGlobal(g, ctx, {}).ok, "región " .. (g.expansion + 1))
+	for i = #Catalog.EXPANSION.countries, 1, -1 do
+		local c = Catalog.EXPANSION.countries[i]
+		if not Rules.countryOpen(g, c.id) then
+			check(Actions.expandGlobal(g, ctx, { country = c.id }).ok, "país " .. c.name)
+		end
 	end
-	check(not Actions.expandGlobal(g, ctx, {}).ok, "después de la última no hay más")
+	eq(#g.countries, #Catalog.EXPANSION.countries, "todos, en el orden elegido")
+	check(not Actions.expandGlobal(g, ctx, { country = "BR" }).ok, "después del último no hay más")
+	check(GameState.validate(g), "válida con los países elegidos")
+	-- Migración 14 → 15: la cantidad de regiones abiertas se conserva como los primeros países.
+	local old = jsonCopy(g)
+	old.schema = 14
+	old.countries = nil
+	old.expansion = 3
+	local mg = GameState.migrate(old, 1)
+	check(mg and GameState.validate(mg), "migra")
+	eq(table.concat(mg.countries, ","), "BR,US,DE", "tres países conservados")
 	check(Rules.missionState(g, Catalog.mission("s18")) == "lista", "misión de las diez regiones lista")
 	local bad = jsonCopy(g)
 	bad.sede = 3
@@ -3410,6 +3428,66 @@ test("[I10] Recorrido integral de una empresa (20 pasos) con sesiones reales, do
 	eq(g2.payroll.debt, snap.debt, "20. misma deuda salarial")
 	eq(g2.counters.unitsSold, snap.sold, "20. mismas ventas")
 	check(GameState.validate(g2), "partida válida")
+end)
+
+test("[R2] Línea 3 de la cuenta: una compra vale en todas las empresas (también las nuevas) y persiste", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local prompts = {}
+	local mgr = makeServer(store, "A", clock, { prompt = function(_, id)
+		table.insert(prompts, id)
+	end })
+	local p = { UserId = 1201 }
+	mgr:add(p)
+	local s = mgr.list[p]
+	check(mgr:request(p, "createCompany", { slot = "1", name = "Línea Uno", color = "#7667FF", logo = "pico" }).ok, "empresa 1")
+	local g1 = s.game
+	eq(Rules.caps(g1).lines, 1, "una línea antes de comprar")
+	local saved = Catalog.PRODUCTS.line3.id
+	Catalog.PRODUCTS.line3.id = 3333
+	mgr:request(p, "leaveCompany", {})
+	check(mgr:request(p, "buyProduct", { product = "line3" }).ok and prompts[1] == 3333, "se puede comprar desde el menú (no hace falta una empresa abierta)")
+	check(mgr:processReceipt({ PlayerId = 1201, ProductId = 3333, PurchaseId = "l3-1" }) == true, "recibo acreditado")
+	eq(s.profile.owned.line3, true, "queda en la cuenta")
+	eq(Rules.caps(g1).lines, 2, "la empresa 1 suma la línea 3 (líneas 1 y 3)")
+	check(not mgr:request(p, "buyProduct", { product = "line3" }).ok, "no se vuelve a vender")
+	check(mgr:processReceipt({ PlayerId = 1201, ProductId = 3333, PurchaseId = "l3-1" }) == true, "el mismo recibo no se duplica")
+	eq(#s.profile.receipts, 1, "un recibo")
+	check(mgr:request(p, "createCompany", { slot = "2", name = "Línea Dos", color = "#F7C95C", logo = "rayo" }).ok, "empresa nueva después de comprar")
+	eq(Rules.caps(s.game).lines, 2, "la empresa nueva también tiene la línea 3")
+	eq(s.game.facilities.lines["2"], nil, "independiente de la línea 2")
+	-- Persistencia en otro servidor.
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	local s2 = mgr2.list[p]
+	eq(s2.profile.owned.line3, true, "persistida en la cuenta")
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abre la empresa 1")
+	eq(Rules.caps(s2.game).lines, 2, "la empresa 1 conserva la línea 3")
+	check(GameState.validate(s2.game), "partida válida")
+	Catalog.PRODUCTS.line3.id = saved
+end)
+
+test("[R4] Capacitaciones: más de 12 a la vez (una por empleado) y sin capacitaciones vacías al despedir", function()
+	local g = bigCompany("Muchas SA")
+	local ctx = makeCtx(1401)
+	for i = 1, 20 do
+		local c = Simulation.makeCandidate(g, ctx, "produccion")
+		c.skills.velocidad, c.potential.velocidad = 10, 100
+		table.insert(g.candidates, c)
+		check(Actions.hire(g, ctx, { candidateId = c.id, dept = "produccion" }).ok, "contrata " .. i)
+	end
+	for i, e in g.employees do
+		local r = Actions.startTraining(g, ctx, { scope = "individual", level = "basico", skill = "velocidad", employeeId = e.id })
+		check(r.ok, "capacitación " .. i .. ": " .. r.msg)
+	end
+	eq(#g.trainings, 20, "20 capacitaciones simultáneas (el tope es una por empleado)")
+	check(GameState.validate(g), "válida")
+	local e = g.employees[1]
+	e.hiredDay = Rules.absDay(g)
+	check(Actions.fire(g, ctx, { employeeId = e.id }).ok, "despide a quien se capacitaba")
+	eq(#g.trainings, 19, "su capacitación (sin otros participantes) desaparece")
+	check(GameState.validate(g), "sigue válida")
 end)
 
 T.finish()

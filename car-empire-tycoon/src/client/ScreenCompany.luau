@@ -184,9 +184,12 @@ function Screen.create(btn: any)
 	end
 	local r = App.request("createCompany", { slot = st.slot, name = Util.trim(st.name), color = st.color, logo = st.logo }, { button = btn })
 	if r.ok then
+		local company = { name = Util.trim(st.name), color = st.color, logo = st.logo }
 		st.name = ""
 		App.ui.enteringGame = true
 		App.go("juego")
+		-- Introducción cinematográfica (se puede saltar); la empresa queda en pausa mientras dura.
+		App.screens.intro.play(company)
 	end
 end
 

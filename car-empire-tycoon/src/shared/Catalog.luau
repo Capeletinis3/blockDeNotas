@@ -134,7 +134,8 @@ Catalog.START = { money = 90000, reputation = 3.0 }
 --[[ Compras con Robux (Developer Products, compra permanente registrada por recibo). id = 0: el producto
 	todavía no está configurado en el panel de Roblox y la compra queda deshabilitada (no se simula nada).
 	- slot3 / slot4: habilitan esa ranura de empresa en la cuenta (cada una por separado).
-	- line3: la línea de producción 3 de la empresa activa, permanente e independiente de la línea 2. ]]
+	- line3: la línea de producción 3, permanente para la CUENTA (vale en todas sus empresas, también en las que
+	  cree después) e independiente de la línea 2. Se guarda en el perfil (profile.owned.line3). ]]
 Catalog.PRODUCTS = {
 	slot3 = { id = 0, kind = "slot", slot = "3", name = "Ranura de empresa 3" },
 	slot4 = { id = 0, kind = "slot", slot = "4", name = "Ranura de empresa 4" },
@@ -497,7 +498,7 @@ Catalog.MATERIALS = {
 	  No da líneas.
 	- Centro de investigación (1–5): PI por minuto.
 	- Líneas: la 1 viene siempre; la 2 se compra con dinero (obra); la 3 es un desbloqueo permanente con Robux
-	  (Catalog.PRODUCTS.line3), independiente de la 2. Ninguna mejora da líneas sola.
+	  (Catalog.PRODUCTS.line3) de la cuenta, independiente de la 2. Ninguna mejora da líneas sola.
 	La fábrica y el centro no pueden superar el nivel de las oficinas. ]]
 Catalog.SEDES = {
 	{ level = 1, name = "Garaje inicial", office = "Oficinas básicas", reach = 1, staff = 3, cost = 0, days = 0, req = { sold = 0, rep = 0 } },
@@ -663,8 +664,12 @@ Catalog.TRAINING = {
 		{ id = "avanzado", name = "Avanzado", cost = 7000, days = 90, gain = 12, office = 3 },
 	},
 	scopes = { individual = "Individual", departamento = "Departamento", general = "General (toda la empresa)" },
-	maxActive = 12, -- capacitaciones simultáneas como máximo (cada empleado, en una sola)
+	-- Sin tope propio de capacitaciones simultáneas: cada empleado hace una a la vez, así que nunca hay más que
+	-- empleados. maxActive (= el límite global de empleados con las oficinas máximas) es solo una protección del
+	-- guardado contra datos dañados; se completa debajo, cuando ya existen las oficinas.
+	maxActive = 0,
 }
+Catalog.TRAINING.maxActive = Catalog.SEDES[#Catalog.SEDES].staff
 
 --[[ Investigación y desarrollo (I+D). Cuatro categorías del departamento de I+D: Chasis, Motores,
 	Seguridad y Tecnología (las mejoras de producción de versiones anteriores ahora son niveles de la fábrica y

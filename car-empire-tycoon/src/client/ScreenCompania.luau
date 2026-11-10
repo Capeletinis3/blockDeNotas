@@ -161,7 +161,7 @@ function Screen.build(main: Frame, side: Frame)
 	local ready3 = line3.id ~= 0
 	table.insert(cards, Ui.card({
 		Ui.row({ Ui.grow(Ui.text("Línea de producción 3", { size = Ui.S.base, weight = W.bold })), Ui.chip(Rules.ownsLine(g, 3) and "Desbloqueada" or "Bloqueada", Rules.ownsLine(g, 3) and "cg" or "cn") }, 8),
-		Ui.text("Desbloqueo permanente con Robux para esta empresa, independiente de la línea 2.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
+		Ui.text("Desbloqueo permanente con Robux para tu cuenta: vale en todas tus empresas, también en las que crees después. Independiente de la línea 2.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
 		(not Rules.ownsLine(g, 3)) and Ui.button("Desbloquear con Robux", "default", function()
 			App.request("buyProduct", { product = "line3" })
 		end, { small = true, fill = true, disabled = not ready3 or g.demo ~= nil, why = (not ready3) and "Compra no configurada todavía" or "No disponible en demostraciones", name = "ComprarLinea3" }) or nil,
@@ -178,28 +178,41 @@ function Screen.build(main: Frame, side: Frame)
 	local exRows: { Instance? } = {
 		Ui.row({ Ui.grow(Ui.lbl("Expansión internacional")), Ui.chip(lvl .. "/" .. #E.regions .. " países", lvl > 0 and "cg" or "cn") }, 10),
 		Ui.text("Cada país abre mercados nuevos: <b>+" .. Util.round(E.demand * 100) .. " % de demanda</b> en todos los tipos (repartida con las mismas reglas entre vos y los rivales) y <b>+" .. Util.round(E.line * 100) .. " % de autos por minuto</b> en cada línea (capacidad global de la empresa). Las campañas corporativas cuestan más con cada país. El mapa mundial llegará en una etapa visual posterior.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
-		lvl > 0 and Ui.between("Mercado mundial", "×" .. Util.num(Rules.marketFactor(g), 2) .. " · " .. table.concat(table.move(E.regions, 1, lvl, 1, {}), ", "), { size = Ui.S.xs }) or nil,
+		lvl > 0 and Ui.between("Mercado mundial", "×" .. Util.num(Rules.marketFactor(g), 2), { size = Ui.S.xs }) or nil,
 	}
 	local nx = Rules.nextExpansion(g)
+	local opened = Rules.openedCountries(g)
+	local ok = nx ~= nil
 	if nx then
-		local ok = true
+		table.insert(exRows, Ui.text("Próximo país (el que elijas): " .. Util.money(nx.cost), { size = Ui.S.sm, weight = W.bold }))
 		for _, c in Rules.expansionChecks(g) do
 			ok = ok and c[1]
 			table.insert(exRows, Ui.text((c[1] and "✓ " or "✕ ") .. c[2], { size = Ui.S.sm, color = c[1] and T.gr or T.re2 }))
 		end
-		table.insert(exRows, Ui.button("Abrir " .. nx.name .. " · " .. Util.money(nx.cost), "p", function()
-			App.openDialog("confirm", {
-				title = "¿Expandirte a " .. nx.name .. "?",
-				body = "Cuesta " .. Util.money(nx.cost) .. " (no se devuelve). La demanda de todos los tipos pasa a ×" .. Util.num(1 + E.demand * nx.level, 2) .. " y cada línea fabrica " .. Util.round(E.line * 100) .. " % más. Las campañas cuestan " .. Util.round(E.demand * 100) .. " % más.",
-				okLabel = "Expandirme",
-				onOk = function()
-					App.request("expandGlobal")
-				end,
-			})
-		end, { disabled = not ok, why = "Faltan requisitos", name = "ExpansionGlobal" }))
-	elseif lvl >= #E.regions then
+	end
+	if nx or lvl > 0 then
+		local tiles = {}
+		for _, c in E.countries do
+			local isOpen = table.find(opened, c.id) ~= nil
+			table.insert(tiles, Ui.card({
+				Ui.row({ Ui.grow(Ui.text(c.name, { size = Ui.S.sm, weight = W.bold })), isOpen and Ui.chip("Presente", "cg") or nil }, 6),
+				(not isOpen and nx) and Ui.button("Abrir", "p", function()
+					App.openDialog("confirm", {
+						title = "¿Expandirte a " .. c.name .. "?",
+						body = "Cuesta " .. Util.money(nx.cost) .. " (no se devuelve). La demanda de todos los tipos pasa a ×" .. Util.num(1 + E.demand * nx.level, 2) .. " y cada línea fabrica " .. Util.round(E.line * 100) .. " % más. Las campañas corporativas cuestan más.",
+						okLabel = "Expandirme",
+						onOk = function()
+							App.request("expandGlobal", { country = c.id })
+						end,
+					})
+				end, { small = true, fill = true, disabled = not ok, why = "Faltan requisitos", name = "Pais_" .. c.id }) or nil,
+			}, { gap = 6, name = "Pais_" .. c.id .. "_tarjeta" }))
+		end
+		table.insert(exRows, Ui.grid(tiles, phone and 2 or 5, nil, 8))
+	end
+	if not nx and lvl >= #E.regions then
 		table.insert(exRows, Ui.note("g", "Tu marca está en todo el mundo."))
-	else
+	elseif not nx then
 		table.insert(exRows, Ui.text("Se abre con las oficinas centrales de nivel 5 (Imperio automotriz).", { size = Ui.S.sm, color = T.mut }))
 	end
 	Ui.card(exRows, { gap = 8, pad = 18, name = "Expansion" }).Parent = main

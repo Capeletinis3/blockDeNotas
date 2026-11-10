@@ -427,8 +427,15 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 			tryBuild("factory", flat and 3 or 1.3)
 			tryBuild("research", flat and 4 or 1.6)
 			local nx = Rules.nextExpansion(g)
-			if nx and not o.noExpansion and g.counters.unitsSold >= nx.sold and g.money >= nx.cost * 1.2 and Actions.expandGlobal(g, ctx, {}).ok then
-				mark("region " .. g.expansion, nx.name)
+			if nx and not o.noExpansion and g.counters.unitsSold >= nx.sold and g.money >= nx.cost * 1.2 and Actions.expandGlobal(g, ctx, { country = (function(): string?
+				for _, c in Catalog.EXPANSION.countries do
+					if not Rules.countryOpen(g, c.id) then
+						return c.id
+					end
+				end
+				return nil
+			end)() }).ok then
+				mark("region " .. g.expansion, Rules.country(g.countries[#g.countries]).name)
 			end
 		end
 		if Rules.year(g) ~= lastYear then

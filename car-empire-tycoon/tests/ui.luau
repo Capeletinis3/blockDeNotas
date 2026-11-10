@@ -131,6 +131,23 @@ test("Crear empresa escribiendo solo el nombre (el botón se habilita en vivo)",
 		return App.g ~= nil
 	end), "la empresa se crea")
 	eq(App.ui.route, "juego", "entra a la sede")
+	-- Introducción cinematográfica: aparece, pausa la empresa y se puede saltar.
+	check(named("Intro") ~= nil and named("SaltarIntro") ~= nil, "introducción con botón Saltar")
+	for _ = 1, 60 do
+		M.services.RunService.RenderStepped:Fire(1 / 60)
+	end
+	check(find("1 de enero de 1970") ~= nil, "muestra la fecha de inicio")
+	check(App.menuPaused(), "la empresa queda en pausa mientras dura")
+	local sess0 = Sessions.instance.list[player]
+	check(waitFor(function()
+		return sess0.uiPaused == true
+	end), "el servidor pausa solo esa empresa")
+	clickN("SaltarIntro")
+	M.task.wait()
+	check(named("Intro") == nil and not App.menuPaused(), "saltada: la empresa sigue")
+	check(waitFor(function()
+		return sess0.uiPaused == false
+	end), "el servidor la reanuda")
 	eq(App.g and App.g.company.name, "Ruta Norte", "nombre guardado")
 	noErrors("Crear empresa")
 end)
@@ -470,6 +487,13 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	check(waitFor(function()
 		return App.g ~= nil
 	end), "se crea la segunda empresa")
+	-- La introducción también termina sola: se simula su duración completa.
+	check(named("Intro") ~= nil, "introducción de la segunda empresa")
+	for _ = 1, math.ceil(App.screens.intro.DURATION * 60) + 5 do
+		M.services.RunService.RenderStepped:Fire(1 / 60)
+	end
+	M.task.wait()
+	check(named("Intro") == nil and not App.menuPaused(), "termina sola y la empresa sigue")
 	eq(App.g.company.name, "Magnate SA", "es la nueva")
 	eq(App.g.company.difficulty, nil, "sin dificultad: misma condición inicial")
 	eq(App.g.money, 90000, "capital inicial igual para todas")
@@ -926,7 +950,7 @@ test("Fin de partida: expansión global, récords y años extra en las cuatro re
 			local bad = overflow()
 			check(#bad == 0, route .. " (fin de partida) en " .. res[1] .. "×" .. res[2] .. " no se sale" .. (#bad > 0 and (": " .. bad[1]) or ""))
 			if route == "compania" then
-				check(named("Expansion") ~= nil and named("ExpansionGlobal") ~= nil, "tarjeta y botón de expansión global")
+				check(named("Expansion") ~= nil and named("Pais_JP") ~= nil, "tarjeta y países para elegir")
 			elseif route == "autos" then
 				check(named("Records") ~= nil and M.find(App.content, "Otros 312 modelos") ~= nil, "récords permanentes y «Otros modelos»")
 				check(named("MostrarMas") ~= nil, "la historia se muestra de a 20 modelos")

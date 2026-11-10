@@ -265,6 +265,9 @@ function Sessions:activate(s: any, key: string, demoGame: any?)
 		s.profile.active = key
 		s.game = s.profile.slots[key]
 	end
+	if not demoGame then
+		GameState.applyAccount(s.profile, s.damaged) -- compras de la cuenta (línea 3) también en una empresa recién creada
+	end
 	Simulation.ensureMarket(s.game, s.ctx) -- candidatos del mes (8, se renuevan cada mes)
 	local garage = self.deps.garage
 	if garage then
@@ -455,11 +458,8 @@ function Sessions:productBlock(s: any, p: any): string?
 			return "Ya tenés la ranura " .. p.slot .. "."
 		end
 	elseif p.kind == "line3" then
-		if not s.game or s.demo then
-			return "Abrí la empresa que va a recibir la línea 3."
-		end
-		if Simulation.ownsLine(s.game, 3) then
-			return "Esta empresa ya tiene la línea 3."
+		if s.profile.owned and s.profile.owned.line3 == true then
+			return "Tu cuenta ya tiene la línea 3 (vale en todas tus empresas)."
 		end
 	end
 	return nil
@@ -474,11 +474,15 @@ local function grantProduct(s: any, p: any): (() -> ())?
 			s.profile.unlocked[p.slot] = before
 		end
 	elseif p.kind == "line3" then
-		local g = s.game
-		if not g or s.demo then
-			return nil -- sin empresa abierta: Roblox reintenta el recibo más tarde
+		-- Compra de la cuenta: queda en el perfil y se refleja en todas sus empresas (también las futuras).
+		s.profile.owned = s.profile.owned or {}
+		local before = s.profile.owned.line3
+		s.profile.owned.line3 = true
+		GameState.applyAccount(s.profile, s.damaged)
+		return function()
+			s.profile.owned.line3 = before
+			GameState.applyAccount(s.profile, s.damaged)
 		end
-		return Simulation.grantLine3(g)
 	end
 	return nil
 end

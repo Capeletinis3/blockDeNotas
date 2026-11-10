@@ -878,7 +878,7 @@ local function leftCards(g: any): { Instance }
 		}, 9)
 	else
 		local ex = Rules.nextExpansion(g)
-		sedeBody = Ui.text(ex and ("Oficinas al máximo. Próximo país: <b><font color=\"#F5F7FA\">" .. ex.name .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos · costo " .. Util.money(ex.cost)) or ("Oficinas al máximo · " .. Rules.expansion(g) .. " países abiertos."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
+		sedeBody = Ui.text(ex and ("Oficinas al máximo. Próximo país (a elección en Compañía): <b><font color=\"#F5F7FA\">" .. Util.money(ex.cost) .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos") or ("Oficinas al máximo · " .. Rules.expansion(g) .. " países abiertos."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
 	end
 	table.insert(out, hcCard("Sede", {
 		cardHead("sede", "building", T.ye, T.ye, 0.15, "Oficinas centrales · nivel " .. g.sede, g.derived.sedeName),

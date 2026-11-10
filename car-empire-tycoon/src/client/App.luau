@@ -93,6 +93,7 @@ App.popLayer = layer("Menus", 40)
 App.dialogLayer = layer("Dialogos", 50)
 App.dropLayer = layer("Desplegables", 55)
 App.toastLayer = layer("Avisos", 60)
+App.introLayer = layer("Introduccion", 65) -- introducción cinematográfica al fundar una empresa (Intro.luau)
 
 local toastSeq = 0
 local toastList = Ui.new("Frame", {
@@ -538,7 +539,7 @@ end
 	lleva la pausa de cada sesión por separado; acá solo se avisa cuando cambia. ]]
 local sentPause: boolean? = nil
 function App.menuPaused(): boolean
-	return App.g ~= nil and ((FULLSCREEN[App.ui.route] == true and App.ui.route ~= "menu" and App.ui.route ~= "nueva") or #App.ui.dialogs > 0)
+	return App.g ~= nil and ((FULLSCREEN[App.ui.route] == true and App.ui.route ~= "menu" and App.ui.route ~= "nueva") or #App.ui.dialogs > 0 or App.ui.intro ~= nil)
 end
 function App.syncPause()
 	local want = App.menuPaused()

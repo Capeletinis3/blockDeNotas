@@ -135,12 +135,22 @@ function Actions.expandSede(g: any, ctx: any, _payload: any): any
 	return Actions.upgradeFacility(g, ctx, { kind = "offices" })
 end
 
--- Expansión global: después del Imperio automotriz, cada región suma alcance y capacidad de las líneas.
-function Actions.expandGlobal(g: any, ctx: any, _payload: any): any
+--[[ Expansión internacional: después de las oficinas máximas, el jugador elige libremente qué país abrir
+	(payload = { country = id }). Cada país suma demanda y capacidad global de las líneas; el costo depende de
+	cuántos países ya tiene, no de cuál elige. ]]
+function Actions.expandGlobal(g: any, ctx: any, payload: any): any
 	local nx = Rules.nextExpansion(g)
 	if not nx then
-		return fail(Rules.nextSede(g) and "La expansión global se abre con el Imperio automotriz." or "Ya abriste todas las regiones.")
+		return fail(Rules.nextSede(g) and "La expansión internacional se abre con las oficinas centrales al máximo." or "Ya abriste todos los países.")
 	end
+	local country = Rules.country(arg(payload, "country"))
+	if not country then
+		return fail("Elegí el país que querés abrir.")
+	end
+	if Rules.countryOpen(g, country.id) then
+		return fail("Ya tenés presencia en " .. country.name .. ".")
+	end
+	nx.name = country.name
 	for _, check in Rules.expansionChecks(g) do
 		if not check[1] then
 			return fail("Faltan requisitos para expandirte: " .. check[2] .. ".")
@@ -149,9 +159,12 @@ function Actions.expandGlobal(g: any, ctx: any, _payload: any): any
 	if not Simulation.spend(g, nx.cost, "sede", "Expansión global: " .. nx.name) then
 		return fail("Fondos insuficientes.")
 	end
-	g.expansion = nx.level
+	local list = Rules.openedCountries(g)
+	table.insert(list, country.id)
+	g.countries = list
+	g.expansion = #list
 	Simulation.addXp(g, ctx, 1000)
-	Simulation.notify(g, ctx, "ok", "¡Nueva región: " .. nx.name .. "!", "compania")
+	Simulation.notify(g, ctx, "ok", "¡Nuevo país: " .. nx.name .. "!", "compania")
 	return { ok = true, msg = "Abriste " .. nx.name .. ": la demanda de todos los tipos sube a ×" .. Util.num(Rules.marketFactor(g), 2) .. " y cada línea fabrica " .. Util.num(Rules.lineRate(g), 0) .. " autos/min." }
 end
 
@@ -740,10 +753,16 @@ function Actions.fire(g: any, _ctx: any, payload: any): any
 	if cost > 0 then
 		Simulation.spend(g, cost, "indemnizacion", "Indemnización de " .. e.name)
 	end
-	for _, t in g.trainings or {} do
+	local trainings = g.trainings or {}
+	for i = #trainings, 1, -1 do
+		local t = trainings[i]
 		local k = table.find(t.members, e.id)
 		if k then
 			table.remove(t.members, k)
+			t.results[e.id] = nil
+			if #t.members == 0 then
+				table.remove(trainings, i) -- sin participantes no queda nada que capacitar (lo pagado no se devuelve)
+			end
 		end
 	end
 	table.remove(g.employees, i :: number)

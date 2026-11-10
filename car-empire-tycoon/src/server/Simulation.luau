@@ -397,14 +397,14 @@ function Simulation.ownsLine(g: any, n: number): boolean
 	return Rules.ownsLine(g, n)
 end
 
--- Acredita la línea 3 (compra con Robux). Devuelve la función que la deshace si el guardado falla.
+-- Refleja la línea 3 de la cuenta en una empresa (la compra vive en el perfil: GameState.applyAccount).
+-- Devuelve la función que deshace el cambio.
 function Simulation.grantLine3(g: any): () -> ()
 	g.facilities = g.facilities or {}
-	g.facilities.lines = g.facilities.lines or {}
-	local before = g.facilities.lines["3"]
-	g.facilities.lines["3"] = true
+	local before = g.facilities.accountLine3
+	g.facilities.accountLine3 = true
 	return function()
-		g.facilities.lines["3"] = before
+		g.facilities.accountLine3 = before
 	end
 end
 

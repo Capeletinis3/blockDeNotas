@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 14
+GameState.SCHEMA = 15
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -54,7 +54,8 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		-- Instalaciones: fábrica y centro de investigación (1–5), líneas compradas y obras en curso
 		-- builds = { { id, kind = "offices" | "factory" | "research" | "line2", level, progress, days, cost } }
 		facilities = { factory = 1, research = 1, lines = {}, builds = {}, invested = 0 },
-		expansion = 0, -- regiones abiertas de la expansión global (después del Imperio automotriz)
+		expansion = 0, -- cantidad de países abiertos (expansión internacional, después de las oficinas máximas)
+		countries = {}, -- ids de los países elegidos, en orden (Catalog.EXPANSION.countries)
 		money = Catalog.START.money, -- todas las empresas empiezan igual
 		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
 		rp = 0, -- banco de puntos de investigación
@@ -497,7 +498,8 @@ function GameState.validate(g: any): (boolean, string?)
 		end
 	end
 	local f = g.facilities
-	if type(f) ~= "table" or not isInt(f.factory, 1, 5) or not isInt(f.research, 1, 5) or type(f.lines) ~= "table" or not isList(f.builds) or not nonNeg(f.invested) then
+	if type(f) ~= "table" or not isInt(f.factory, 1, 5) or not isInt(f.research, 1, 5) or type(f.lines) ~= "table" or not isList(f.builds) or not nonNeg(f.invested)
+		or (f.accountLine3 ~= nil and type(f.accountLine3) ~= "boolean") then
 		return fail("Las instalaciones están dañadas.")
 	end
 	for k, v in f.lines do
@@ -512,6 +514,16 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("Hay una obra dañada.")
 		end
 		building[b.kind] = true
+	end
+	if not isList(g.countries) or #g.countries > (tonumber(g.expansion) or 0) then
+		return fail("Los países de la expansión están dañados.")
+	end
+	local seenCountry = {}
+	for _, id in g.countries do
+		if type(id) ~= "string" or seenCountry[id] or not Rules.country(id) then
+			return fail("Hay un país desconocido o repetido en la expansión.")
+		end
+		seenCountry[id] = true
 	end
 	if not isInt(g.expansion, 0, #Catalog.EXPANSION.regions) or (g.expansion > 0 and g.sede < #Catalog.SEDES) then
 		return fail("La expansión global está dañada.")
@@ -1033,6 +1045,14 @@ MIGRATIONS[13] = function(g: any, _now: number)
 	g.schema = 14
 end
 
+-- 14 → 15: la expansión pasa a ser por países elegidos. Las partidas que ya tenían N regiones abiertas
+-- conservan la cantidad y quedan con los primeros N países del catálogo (los mismos nombres que veían).
+MIGRATIONS[14] = function(g: any, _now: number)
+	g.countries = {}
+	g.countries = Rules.openedCountries(g)
+	g.schema = 15
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1061,7 +1081,7 @@ end
 -- Perfil (varias empresas por jugador) ---------------------------------------------------
 
 function GameState.newProfile(): any
-	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {}, unlocked = {}, receipts = {} }
+	return { slots = {}, active = nil, settings = Util.deepCopy(GameState.DEFAULT_SETTINGS), processed = {}, unlocked = {}, receipts = {}, owned = {} }
 end
 
 -- ¿Se puede usar la ranura? Las dos primeras son gratuitas; la 3 y la 4 solo si se habilitaron
@@ -1072,6 +1092,17 @@ function GameState.slotUsable(profile: any, key: string): boolean
 		return false
 	end
 	return n <= Catalog.RULES.slotsFree or (profile.unlocked and profile.unlocked[key] == true) or profile.slots[key] ~= nil
+end
+
+-- Refleja en cada empresa de la cuenta las compras permanentes de la cuenta (hoy: la línea 3). Las ranuras
+-- dañadas no se tocan (se conservan tal como estaban guardadas).
+function GameState.applyAccount(profile: any, damaged: any?)
+	local line3 = type(profile.owned) == "table" and profile.owned.line3 == true or nil
+	for key, g in profile.slots do
+		if not (damaged and damaged[key]) and type(g) == "table" and type(g.facilities) == "table" then
+			g.facilities.accountLine3 = line3
+		end
+	end
 end
 
 function GameState.slotKeys(): { string }
@@ -1129,6 +1160,9 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	if not isList(profile.receipts) then
 		profile.receipts = {} -- recibos de Robux ya acreditados (PurchaseId)
 	end
+	if type(profile.owned) ~= "table" then
+		profile.owned = {} -- compras permanentes de la cuenta: { line3 = true }
+	end
 	local damaged = {}
 	for key, raw in profile.slots do
 		if not tonumber(key) or tonumber(key) > Catalog.RULES.slots then
@@ -1157,6 +1191,7 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 	if profile.active ~= nil and (profile.slots[profile.active] == nil or damaged[profile.active]) then
 		profile.active = nil
 	end
+	GameState.applyAccount(profile, damaged)
 	return profile, damaged
 end
 

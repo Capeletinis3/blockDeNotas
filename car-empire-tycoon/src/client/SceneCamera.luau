@@ -26,6 +26,17 @@ function SceneCamera.state(): any
 	return view
 end
 
+-- Recorrido de cámara de la introducción: gira y se acerca durante `seconds` (nil lo detiene).
+local cine: { t: number, dur: number }? = nil
+function SceneCamera.cinematic(seconds: number?)
+	if seconds then
+		cine = { t = 0, dur = seconds }
+		view.dist = view.maxDist
+	else
+		cine = nil
+	end
+end
+
 local function active(): boolean
 	return App.g ~= nil and App.ui.route == "juego" and #App.ui.dialogs == 0
 end
@@ -66,7 +77,16 @@ function SceneCamera.start()
 			SceneCamera.zoom(1 / math.clamp(scale, 0.9, 1.1))
 		end
 	end)
-	RunService.RenderStepped:Connect(function()
+	RunService.RenderStepped:Connect(function(dt: number)
+		if cine then
+			cine.t += dt or 0
+			local k = math.clamp(cine.t / cine.dur, 0, 1)
+			view.yaw = (view.yaw + (dt or 0) * 18) % 360
+			view.dist = view.maxDist + (70 - view.maxDist) * (1 - (1 - k) * (1 - k))
+			if k >= 1 then
+				cine = nil
+			end
+		end
 		local cam = workspace.CurrentCamera
 		local center = player:GetAttribute("PlotCenter")
 		if not cam or typeof(center) ~= "Vector3" or App.g == nil then

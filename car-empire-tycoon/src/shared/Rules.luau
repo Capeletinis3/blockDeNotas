@@ -107,14 +107,22 @@ end
 
 -- Sede y capacidades ---------------------------------------------------------------------
 
--- ¿La empresa tiene la línea de producción n? La 1 viene siempre; la 2 se compra con dinero del juego y la 3
--- con Robux (independiente de la 2). g.facilities.lines = { [2] = true, [3] = true }.
+-- ¿La empresa tiene la línea de producción n? La 1 viene siempre; la 2 se compra con dinero del juego (por
+-- empresa: g.facilities.lines["2"]) y la 3 es de la CUENTA (compra con Robux): el servidor la refleja en cada
+-- empresa como g.facilities.accountLine3 (GameState.applyAccount). lines["3"] solo existe en partidas migradas
+-- que ya tenían 3 líneas antes de que la línea 3 fuera de Robux.
 function Rules.ownsLine(g: any, n: number): boolean
 	if n == 1 then
 		return true
 	end
 	local f = g.facilities
-	return type(f) == "table" and type(f.lines) == "table" and f.lines[tostring(n)] == true
+	if type(f) ~= "table" then
+		return false
+	end
+	if n == 3 and f.accountLine3 == true then
+		return true
+	end
+	return type(f.lines) == "table" and f.lines[tostring(n)] == true
 end
 
 function Rules.sede(g: any): any
@@ -313,14 +321,51 @@ function Rules.reach(g: any): number
 	return Rules.sede(g).reach
 end
 
--- Próxima región: { level, name, cost, sold } o nil (sin Imperio o con todas abiertas).
+-- País del catálogo por id (o nil).
+function Rules.country(id: any): any
+	for _, c in Catalog.EXPANSION.countries do
+		if c.id == id then
+			return c
+		end
+	end
+	return nil
+end
+
+-- Países abiertos (ids, en el orden en que se abrieron). g.countries guarda los elegidos; si una partida
+-- vieja solo tiene la cantidad (g.expansion), se completan con los primeros del catálogo.
+function Rules.openedCountries(g: any): { string }
+	local out, seen = {}, {}
+	for _, id in (type(g.countries) == "table" and g.countries) or {} do
+		if Rules.country(id) and not seen[id] and #out < Rules.expansion(g) then
+			table.insert(out, id)
+			seen[id] = true
+		end
+	end
+	for _, c in Catalog.EXPANSION.countries do
+		if #out >= Rules.expansion(g) then
+			break
+		end
+		if not seen[c.id] then
+			table.insert(out, c.id)
+			seen[c.id] = true
+		end
+	end
+	return out
+end
+
+function Rules.countryOpen(g: any, id: string): boolean
+	return table.find(Rules.openedCountries(g), id) ~= nil
+end
+
+-- Próxima apertura (el jugador elige el país): { level, name, cost, sold } o nil (sin Imperio o con todos
+-- abiertos). El costo y las ventas pedidas dependen de cuántos países van, no de cuál se elige.
 function Rules.nextExpansion(g: any): any
 	local E = Catalog.EXPANSION
 	local n = Rules.expansion(g) + 1
-	if Rules.nextSede(g) ~= nil or n > #E.regions then
+	if Rules.nextSede(g) ~= nil or n > #E.countries then
 		return nil
 	end
-	return { level = n, name = E.regions[n], cost = Rules.expansionCost(g, Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000), sold = E.soldBase + E.soldStep * (n - 1) }
+	return { level = n, name = "un país a elección", cost = Rules.expansionCost(g, Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000), sold = E.soldBase + E.soldStep * (n - 1) }
 end
 
 function Rules.expansionChecks(g: any): { any }
