@@ -49,6 +49,8 @@ Catalog.RULES = {
 	maxModelDetail = 150,
 	maxModelHistory = 600,
 	maxDesigns = 60,
+	-- Borradores del editor por empresa: solo protege el tamaño del guardado (cada uno ≈ 1 KB).
+	maxDrafts = 20,
 	maxLedger = 200,
 	statsDaysKept = 72, -- meses de agregados (6 años)
 	slots = 4, -- empresas por cuenta (ranuras "1".."4")
@@ -898,7 +900,7 @@ Catalog.RIVALS = {
 -- goalScale = "reach": la meta se multiplica por el alcance de la sede (crece con la empresa).
 -- reward.pi = puntos de investigación.
 Catalog.MISSIONS = {
-	{ id = "t1", kind = "tutorial", title = "Diseñá y guardá tu primer auto", desc = "Abrí Diseño, elegí una base y guardá el proyecto en Revisión.", counter = "designsSaved", goal = 1, reward = { money = 15000, pi = 2, xp = 200 }, go = "editor" },
+	{ id = "t1", kind = "tutorial", title = "Diseñá y finalizá tu primer auto", desc = "Abrí Diseño, recorré las cinco etapas y tocá «Finalizar diseño» en Resumen.", counter = "designsSaved", goal = 1, reward = { money = 15000, pi = 2, xp = 200 }, go = "editor" },
 	{ id = "t2", kind = "tutorial", title = "Ordená tu primer lote", desc = "En Producción, elegí el modelo y cuántas unidades fabricar (cada modelo tiene un solo lote).", counter = "lotsLaunched", goal = 1, reward = { money = 10000, xp = 150 }, go = "fabrica" },
 	{ id = "t3", kind = "tutorial", title = "Vendé tus primeros 25 autos", desc = "Cuando termina el lote llegan las reseñas: elegí el precio y los autos se venden solos.", counter = "unitsSold", goal = 25, reward = { money = 20000, pi = 3, xp = 300 }, go = "ventas" },
 	{ id = "t4", kind = "tutorial", title = "Mejorá la fábrica", desc = "Subí de nivel una estación en Producción › Estaciones.", counter = "stationUpgrades", goal = 1, reward = { money = 8000, xp = 120 }, go = "fabrica" },

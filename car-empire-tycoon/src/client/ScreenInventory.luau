@@ -93,10 +93,11 @@ function Screen.designRow(g: any, d: any): Frame
 			App.closeAllDialogs()
 			App.openDialog("lot", { designId = d.id, wide = true })
 		end, { small = true, name = "LanzarLote", disabled = d.lotLaunched == true, why = "Este modelo ya tuvo su lote: duplicalo o creá una nueva generación" }))
-		table.insert(actions, Ui.button("Editar", "default", function()
+		-- Un modelo terminado no se edita: se puede partir de él para un diseño nuevo.
+		table.insert(actions, Ui.button("Basar un diseño nuevo", "default", function()
 			App.closeAllDialogs()
-			App.go("editor", { designId = d.id })
-		end, { small = true, name = "Editar" }))
+			App.go("editor", { basedOn = d.id })
+		end, { small = true, name = "BasarEn" }))
 		table.insert(actions, Ui.button("Nueva generación", "default", function()
 			App.closeAllDialogs()
 			App.go("editor", { newGenOf = d.id })
@@ -236,7 +237,7 @@ function Screen.build(main: Frame, side: Frame)
 			end
 		end
 		if #g.designs == 0 then
-			Ui.empty("pen", "Todavía no guardaste diseños. Abrí Diseño, elegí una base y guardalo en Revisión.", Ui.button("Abrir el editor", "p", function()
+			Ui.empty("pen", "Todavía no finalizaste diseños. Abrí Diseño, recorré las cinco etapas y finalizalo en Resumen.", Ui.button("Abrir el editor", "p", function()
 				App.go("editor")
 			end, { small = true })).Parent = main
 		elseif shown == 0 then

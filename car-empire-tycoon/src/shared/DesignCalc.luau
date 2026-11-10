@@ -743,6 +743,23 @@ function DesignCalc.sanitize(g: any, raw: any): (any?, string?)
 	return d, nil
 end
 
+--[[ Borrador del editor: el mismo saneamiento que un diseño (solo piezas, opciones y valores del catálogo que la
+	empresa puede usar), pero el nombre puede estar a medio escribir: si no es válido se guarda uno provisional.
+	La validación completa del nombre (y del filtro de texto) se hace al finalizar. ]]
+function DesignCalc.sanitizeDraft(g: any, raw: any): (any?, string?)
+	if type(raw) ~= "table" then
+		return nil, "El borrador no es válido."
+	end
+	local copy = table.clone(raw)
+	local name = type(raw.name) == "string" and Util.truncateChars(Util.trim((string.gsub(raw.name, "[%c<>&]", ""))), 24) or ""
+	if Util.charCount(name) < 2 then
+		local b = Catalog.base(raw.baseId)
+		name = b and DesignCalc.autoName(g, b.id) or "Proyecto"
+	end
+	copy.name = name
+	return DesignCalc.sanitize(g, copy)
+end
+
 -- Compara dos diseños solo por los campos que el jugador puede cambiar.
 function DesignCalc.sameSpec(a: any, b: any): boolean
 	local fields = { "name", "brand", "chassis", "segment", "objective", "quality", "baseId", "caliper", "spoiler", "vehicleModel", "motorLevel", "motorVariant" }

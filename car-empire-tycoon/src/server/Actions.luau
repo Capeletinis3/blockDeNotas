@@ -244,18 +244,11 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 		d.gen = maxGen(g, d.lineage) + 1
 	end
 	d.generation = DesignCalc.generationLabel(d.modelYear, d.gen)
+	-- Los modelos finalizados son inmutables: para fabricar otra versión se crea un diseño nuevo o una nueva
+	-- generación (las especificaciones originales se conservan para siempre).
 	local source = nil
-	if payload.sourceId ~= nil and parent == nil then
-		source = findById(g.designs, payload.sourceId)
-		if not source or source.template then
-			return fail("El diseño que estabas editando ya no existe. Guardalo como proyecto nuevo.")
-		end
-		if DesignCalc.sameSpec(source, d) then
-			return fail("No hay cambios para guardar.")
-		end
-		-- Una nueva versión del mismo diseño conserva su familia, generación y año de modelo.
-		d.lineage, d.gen, d.modelYear = source.lineage, source.gen or 1, source.modelYear or year
-		d.generation = DesignCalc.generationLabel(d.modelYear, d.gen)
+	if payload.sourceId ~= nil then
+		return fail("Los modelos terminados no se modifican. Para otra versión, creá un diseño nuevo o una nueva generación.")
 	elseif #g.designs >= Catalog.RULES.maxDesigns then
 		return fail("Llegaste al máximo de " .. Catalog.RULES.maxDesigns .. " diseños.")
 	end
@@ -322,6 +315,84 @@ function Actions.saveDesign(g: any, ctx: any, payload: any): any
 		version = d.version,
 		paid = cash,
 	}
+end
+
+-- Borradores del editor ----------------------------------------------------------------------
+-- Un borrador guarda la configuración, la etapa y hasta dónde llegó el jugador. No se fabrica, no se vende y
+-- no recibe reseñas: solo un diseño finalizado (Actions.finalizeDesign) pasa a Producción.
+local function validDraftId(id: any): boolean
+	return type(id) == "string" and #id >= 6 and #id <= 48 and string.match(id, "^[%w%-_]+$") ~= nil
+end
+Actions.validDraftId = validDraftId
+
+function Actions.findDraft(g: any, id: any): (any, number?)
+	return findById(g.drafts, id)
+end
+
+--[[ Guarda (o crea) un borrador en la partida. Se llama cada pocos segundos mientras se edita y al salir del
+	editor; el guardado en DataStore lo hace el autoguardado de la sesión (no se escribe en cada clic).
+	payload = { draftId, draft = configuración, step, visited, newGenOf? } ]]
+function Actions.saveDraft(g: any, _ctx: any, payload: any): any
+	-- Los errores vuelven sin aviso emergente: el editor los muestra en el estado del borrador.
+	local function quietFail(msg: string): any
+		local r = fail(msg)
+		r.quiet = true
+		return r
+	end
+	if type(payload) ~= "table" or not validDraftId(payload.draftId) then
+		return quietFail("Borrador inválido.")
+	end
+	local d, err = DesignCalc.sanitizeDraft(g, payload.draft)
+	if not d then
+		return quietFail(err or "El borrador no es válido.")
+	end
+	local step = isInt(payload.step, 1, 5) and payload.step or 1
+	local visited = isInt(payload.visited, 1, 5) and payload.visited or step
+	local dr = findById(g.drafts, payload.draftId)
+	if not dr then
+		if #g.drafts >= Catalog.RULES.maxDrafts then
+			return quietFail("Tenés " .. Catalog.RULES.maxDrafts .. " borradores: finalizá o eliminá alguno para empezar otro.")
+		end
+		local parent = payload.newGenOf ~= nil and findById(g.designs, payload.newGenOf) or nil
+		dr = { id = payload.draftId, createdDay = g.time.day, newGenOf = (parent and not parent.template) and parent.id or nil }
+		table.insert(g.drafts, dr)
+	end
+	d.id = nil
+	dr.spec = d
+	dr.step = step
+	dr.visited = math.max(dr.visited or 1, visited, step)
+	dr.updatedDay = g.time.day
+	return { ok = true, quiet = true, draftId = dr.id }
+end
+
+function Actions.deleteDraft(g: any, _ctx: any, payload: any): any
+	local dr, i = findById(g.drafts, arg(payload, "draftId"))
+	if not dr then
+		return fail("El borrador ya no existe.")
+	end
+	table.remove(g.drafts, i :: number)
+	return { ok = true, msg = "Borrador «" .. tostring(dr.spec and dr.spec.name) .. "» eliminado." }
+end
+
+--[[ Finaliza un borrador: valida el nombre y la configuración completa en el servidor (DesignCalc.sanitize),
+	cobra el desarrollo, crea el modelo (Actions.saveDesign) y retira el borrador. Si el borrador ya no está
+	(una confirmación repetida), no se crea nada: así nunca hay modelos duplicados.
+	payload = { draftId, draft = configuración final, requestId } ]]
+function Actions.finalizeDesign(g: any, ctx: any, payload: any): any
+	if type(payload) ~= "table" or not validDraftId(payload.draftId) then
+		return fail("Borrador inválido.")
+	end
+	local dr, i = findById(g.drafts, payload.draftId)
+	if not dr then
+		return fail("Este borrador ya se finalizó o fue eliminado.")
+	end
+	local r = Actions.saveDesign(g, ctx, { draft = payload.draft, newGenOf = dr.newGenOf })
+	if r.ok then
+		table.remove(g.drafts, i :: number)
+		r.draftId = dr.id
+		r.msg = "Diseño finalizado: «" .. tostring(findById(g.designs, r.designId).name) .. "». Ya podés fabricarlo en Producción." .. ((r.paid or 0) > 0 and (" Desarrollo pagado: " .. money(r.paid) .. ".") or "")
+	end
+	return r
 end
 
 function Actions.dupDesign(g: any, _ctx: any, payload: any): any
@@ -876,6 +947,7 @@ end
 Actions.handlers = {
 	setIdentity = Actions.setIdentity, setShowcase = Actions.setShowcase, expandSede = Actions.expandSede, upgradeFacility = Actions.upgradeFacility, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
+	saveDraft = Actions.saveDraft, deleteDraft = Actions.deleteDraft, finalizeDesign = Actions.finalizeDesign,
 	createLot = Actions.createLot, launchSale = Actions.launchSale, setLotPrice = Actions.setLotPrice, toggleLotPause = Actions.toggleLotPause, moveLot = Actions.moveLot,
 	closeSale = Actions.closeSale, upgradeStation = Actions.upgradeStation, startCampaign = Actions.startCampaign, cancelCampaign = Actions.cancelCampaign,
 	startResearch = Actions.startResearch, cancelResearch = Actions.cancelResearch,
@@ -889,7 +961,7 @@ Actions.readOnly = { saveNow = true }
 
 -- Acciones económicas: llevan un identificador de solicitud para que un reenvío no se aplique dos veces.
 Actions.economic = {
-	saveDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
+	saveDesign = true, finalizeDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, startCampaign = true, cancelCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
 	claimMission = true, claimDaily = true, expandSede = true, upgradeFacility = true, expandGlobal = true,
 }

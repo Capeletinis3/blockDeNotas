@@ -130,13 +130,25 @@ function Screen.build(main: Frame, side: Frame)
 	Ui.row({
 		Ui.button("Lanzar lote", "p", function()
 			App.openDialog("lot", { wide = true })
-		end, { icon = "plus", disabled = not canLot, why = "Primero guardá un diseño en el editor", name = "LanzarLote" }),
+		end, { icon = "plus", disabled = not canLot, why = "Primero finalizá un diseño en el editor", name = "LanzarLote" }),
 		Ui.inline("Capacidad: " .. Util.num(caps.capacity, 1) .. " autos/min en " .. caps.lines .. (caps.lines == 1 and " línea" or " líneas"), { size = Ui.S.sm, color = T.mut }),
 	}, 10, { wrap = true }).Parent = main
 	if not canLot then
-		Ui.note("b", "Para fabricar necesitás un diseño guardado.", Ui.button("Abrir el editor", "default", function()
+		Ui.note("b", "Para fabricar necesitás un diseño finalizado (los borradores no se fabrican).", Ui.button("Abrir el editor", "default", function()
 			App.go("editor")
 		end, { small = true })).Parent = main
+	end
+	-- Recién finalizado en el editor: acceso directo a su lote (la cantidad se elige acá, no en el editor).
+	local fresh = nil
+	for _, d in g.designs do
+		if d.id == App.ui.lastFinalized and not d.lotLaunched then
+			fresh = d
+		end
+	end
+	if fresh then
+		Ui.note("g", "«" .. fresh.name .. "» está finalizado y listo para fabricar. Cada modelo tiene un solo lote: elegí cuántas unidades.", Ui.button("Lanzar lote de «" .. fresh.name .. "»", "p", function()
+			App.openDialog("lot", { designId = fresh.id, wide = true })
+		end, { small = true, name = "LoteRecienFinalizado" })).Parent = main
 	end
 
 	-- Lotes con producción pendiente (en línea, en cola o en pausa)

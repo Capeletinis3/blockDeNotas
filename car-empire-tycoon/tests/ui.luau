@@ -181,6 +181,21 @@ test("Todas las pantallas se construyen en escritorio", function()
 end)
 
 
+-- Recorre las etapas que falten y finaliza el diseño abierto (con la confirmación).
+local function finishDesign(): boolean
+	local before = #App.g.designs
+	for _ = 1, 5 do
+		if App.ui.editor.step < #App.screens.editor.STEPS then
+			clickN("Siguiente")
+		end
+	end
+	clickN("FinalizarDiseno")
+	clickN("Confirmar")
+	return waitFor(function()
+		return #App.g.designs > before
+	end)
+end
+
 local function lotOf(designId: string): any
 	for _, l in App.g.lots do
 		if l.designId == designId then
@@ -199,23 +214,29 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	App.go("editor", { new = true })
 	M.task.wait()
 	eq(App.ui.route, "editor", "abre el editor")
-	App.screens.editor.goStep(2)
-	M.task.wait()
-	check(find("Efectos:") ~= nil, "las piezas muestran sus efectos")
-	App.screens.editor.goStep(1)
-	M.task.wait()
-	for step = 1, 3 do
+	-- Primer recorrido guiado por las cinco etapas.
+	App.screens.editor.goStep(3)
+	eq(App.ui.editor.step, 1, "la primera vez no se saltean etapas")
+	for step = 1, 4 do
 		local nb = named("Siguiente")
-		check(nb ~= nil, "paso " .. step .. ": botón Siguiente")
+		check(nb ~= nil, "etapa " .. step .. ": botón Siguiente")
+		if step == 2 then
+			check(named("Impacto") ~= nil, "las tarjetas muestran el impacto real en estadísticas y costo")
+		end
 		M.click(nb)
 	end
-	local save = named("GuardarDiseno")
-	check(save ~= nil and save:GetAttribute("disabled") == false, "guardar habilitado con fondos iniciales")
-	M.click(save)
+	eq(App.ui.editor.step, 5, "llega al resumen")
+	local fin = named("FinalizarDiseno")
+	check(fin ~= nil and fin:GetAttribute("disabled") == false, "finalizar habilitado con fondos iniciales")
+	M.click(fin)
+	eq(topKind(), "confirm", "pide confirmar que el diseño será definitivo")
+	clickN("Confirmar")
 	check(waitFor(function()
-		return #App.g.designs >= 1 and App.ui.editor.sourceId ~= nil
-	end), "el diseño queda guardado")
-	check(App.g.money <= money0, "el desarrollo se cobra (o no cuesta) al guardar")
+		return #App.g.designs >= 1
+	end), "el diseño queda finalizado")
+	eq(#(App.g.drafts or {}), 0, "el borrador se retira")
+	eq(App.ui.route, "fabrica", "pasa a Producción")
+	check(App.g.money <= money0, "el desarrollo se cobra (o no cuesta) al finalizar")
 	eq(App.g.designs[1].modelYear, 1970, "año de modelo 1970")
 	App.go("juego")
 	M.task.wait()
@@ -343,40 +364,42 @@ test("Recorrido completo por la interfaz: diseñar → recompensa → lanzar lot
 	noErrors("Ventas")
 end)
 
-test("Editor: cambios sin guardar al salir y al abrir otro proyecto", function()
+test("Editor: el borrador se guarda solo al salir y un modelo terminado no se edita", function()
 	App.go("editor", { new = true })
 	M.task.wait()
 	App.screens.editor.change(function(d)
 		d.name = "Prueba sin guardar"
 	end)
-	check(App.ui.editor.dirty, "el borrador queda con cambios")
+	check(App.ui.editor.pendingSync, "queda pendiente de guardar (sin escribir en cada clic)")
+	local id = App.ui.editor.draftId
 	App.go("autos")
 	M.task.wait()
-	eq(topKind(), "unsaved", "pregunta antes de salir")
-	clickN("SeguirEditando")
-	eq(App.ui.route, "editor", "seguir editando no sale")
-	eq(App.ui.editor.draft.name, "Prueba sin guardar", "el borrador se conserva")
-	-- Abrir un proyecto guardado reemplazaría el borrador: también pregunta.
+	check(not dialogOpen(), "salir no pregunta nada")
+	local dr = App.screens.editor.findDraft(id)
+	check(dr ~= nil and dr.spec.name == "Prueba sin guardar", "al salir el borrador queda guardado en la partida")
+	-- Un modelo terminado abre un borrador NUEVO basado en él (el modelo no cambia).
 	local d = App.g.designs[1]
 	App.go("editor", { designId = d.id })
 	M.task.wait()
-	eq(topKind(), "unsaved", "pregunta antes de abrir otro proyecto")
-	clickN("Descartar")
-	eq(App.ui.route, "editor", "abre el otro proyecto")
-	eq(App.ui.editor.sourceId, d.id, "es el proyecto elegido")
+	eq(App.ui.route, "editor", "abre el editor")
+	check(App.ui.editor.draftId ~= id and App.ui.editor.draft.id == nil, "con un borrador nuevo, no el modelo")
 	-- Deshacer y rehacer.
+	local name0 = App.ui.editor.draft.name
 	App.screens.editor.change(function(dd)
 		dd.name = "Otro nombre"
 	end)
 	App.screens.editor.undo()
-	eq(App.ui.editor.draft.name, d.name, "deshacer vuelve al nombre anterior")
+	eq(App.ui.editor.draft.name, name0, "deshacer vuelve al nombre anterior")
 	App.screens.editor.redo()
 	eq(App.ui.editor.draft.name, "Otro nombre", "rehacer reaplica el cambio")
-	App.screens.editor.undo()
-	check(not App.ui.editor.dirty, "sin cambios reales ya no pide guardar")
+	-- El borrador anterior sigue y se puede retomar.
+	App.go("editor", { draftId = id })
+	M.task.wait()
+	eq(App.ui.editor.draftId, id, "se retoma el borrador anterior")
+	eq(App.ui.editor.draft.name, "Prueba sin guardar", "con su contenido")
 	App.go("juego")
 	M.task.wait()
-	eq(App.ui.route, "juego", "sale sin preguntar si no hay cambios")
+	eq(App.ui.route, "juego", "sale sin preguntar")
 	noErrors("Editor")
 end)
 
@@ -392,8 +415,10 @@ test("Editor V3: cámaras, pasos, ocultar interfaz, antes/después y modelos ant
 	M.services.RunService.RenderStepped:Fire(1 / 60) -- un cuadro: la cámara se ubica
 	local diag = App.screens.editor.diagnose()
 	check(diag.ok, "vista 3D: el auto está en el ViewportFrame y delante de la cámara" .. (diag.ok and "" or (": " .. table.concat(diag.problems, "; "))))
-	check(named("Camara_frontal") ~= nil and named("Camara_libre") ~= nil, "siete cámaras con su tecla")
-	clickN("Camara_frontal")
+	clickN("Camaras")
+	check(M.find(App.dropLayer, "Frontal") ~= nil and M.find(App.dropLayer, "Vista libre") ~= nil, "siete cámaras en la lista")
+	M.click(App.dropLayer:FindFirstChild("Opcion_frontal", true))
+	eq(App.screens.editor.CAMS[2][1], "frontal", "cámara frontal")
 	App.screens.editor.goStep(2)
 	M.task.wait()
 	eq(App.ui.editor.step, 2, "paso 2")
@@ -410,7 +435,7 @@ test("Editor V3: cámaras, pasos, ocultar interfaz, antes/después y modelos ant
 	check(named("PanelEditor") ~= nil, "la interfaz vuelve")
 	clickN("ModelosAnteriores")
 	M.task.wait()
-	eq(topKind(), "prevModels", "abre modelos anteriores")
+	eq(topKind(), "prevModels", "abre borradores y modelos")
 	click("Empezar un proyecto nuevo")
 	M.task.wait()
 	check(not dialogOpen() and App.ui.editor.step == 1, "empieza un proyecto nuevo en el paso 1")
@@ -502,13 +527,7 @@ test("Segunda empresa en otra ranura (Magnate) e independencia entre ranuras", f
 	-- Sin dinero manual, el capital inicial alcanza para el primer diseño y un primer lote.
 	App.go("editor", { new = true })
 	M.task.wait()
-	for _ = 1, 3 do
-		clickN("Siguiente")
-	end
-	clickN("GuardarDiseno")
-	waitFor(function()
-		return #App.g.designs >= 1
-	end)
+	finishDesign()
 	App.go("juego")
 	M.task.wait()
 	clickN("Reclamar")
@@ -710,11 +729,11 @@ test("Pioneer 70: carrocería 3D del sedán, pintura, ubicación y copias en el 
 	check(okBuild and fallback:GetAttribute("vehicleModel") == nil and fallback.PrimaryPart ~= nil, "si falta el modelo, provisional y sin errores")
 	CarModel.vehicleResolver = saved
 
-	-- Editor: en el paso 3 de un sedán se elige la carrocería 3D (Pioneer 70 o provisional).
+	-- Editor: en Chasis › Carrocería y pintura de un sedán se elige la carrocería 3D (Pioneer 70 o provisional).
 	App.go("editor", { new = true })
 	M.task.wait()
 	DesignCalc.changeBase(App.g, App.ui.editor.draft, "brisa")
-	App.screens.editor.goStep(3)
+	App.screens.editor.openStage(1, "carroceria")
 	M.task.wait()
 	check(named("Carroceria3D_pioneer70") ~= nil and named("Carroceria3D_provisional") ~= nil, "el editor ofrece la carrocería 3D del sedán")
 	clickN("Carroceria3D_provisional")
@@ -838,11 +857,9 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 	check(#inEditor == 1, "la vista 3D del editor muestra el Pioneer 70 (" .. #inEditor .. ")")
 	local vp = inEditor[1] and inEditor[1]:FindFirstAncestorWhichIsA("ViewportFrame")
 	print("    editor: modelo «" .. tostring(inEditor[1] and inEditor[1].Name) .. "» dentro de " .. tostring(vp and vp:GetFullName()))
-	-- 2) Elige un color en el paso 3 y guarda.
-	for _ = 1, 2 do
-		clickN("Siguiente")
-	end
-	check(named("Carroceria3D_pioneer70") ~= nil, "paso 3: la carrocería 3D elegida es el Pioneer 70")
+	-- 2) Elige un color en Chasis › Carrocería y pintura y finaliza.
+	clickN("Pestana_carroceria")
+	check(named("Carroceria3D_pioneer70") ~= nil, "carrocería y pintura: la carrocería 3D elegida es el Pioneer 70")
 	clickN("Pintura_Rojo carrera")
 	M.task.wait()
 	eq(App.ui.editor.draft.paint.primary, "#D6333F", "eligió «Rojo carrera»")
@@ -850,12 +867,7 @@ test("Recorrido de jugador: elegir el sedán en el editor muestra el Pioneer 70 
 	M.task.wait()
 	local red = find3d(gui)[1]
 	check(red ~= nil and red:FindFirstChild("Body_Paint").Color == M.Color3.fromHex("#D6333F"), "la vista 3D se repinta con el color elegido")
-	clickN("Siguiente")
-	local before = #App.g.designs
-	clickN("GuardarDiseno")
-	check(waitFor(function()
-		return #App.g.designs > before
-	end), "diseño guardado")
+	check(finishDesign(), "diseño finalizado")
 	local saved = App.g.designs[#App.g.designs]
 	print("    guardado: «" .. saved.name .. "» · base " .. saved.baseId .. " · carrocería " .. tostring(saved.vehicleModel) .. " · color " .. saved.paint.primary)
 	eq(saved.vehicleModel, "pioneer70", "el diseño guardado lleva el Pioneer 70")
@@ -1103,17 +1115,21 @@ test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultá
 	App.screens.editor.goStep(2)
 	M.task.wait()
 	check(named("NivelMotor_1") ~= nil and named("VarianteMotor_balanced") ~= nil, "nivel y variante del motor")
-	App.screens.editor.goStep(3)
-	M.task.wait()
 	local anyEquip = false
-	for _, e in Catalog.EQUIPMENT do
-		check(named("Equipo_" .. e.id) ~= nil, "equipamiento: " .. e.name)
-		if Rules.equipmentUnlocked(App.g, e) and not anyEquip then
-			anyEquip = true
-			eq(#App.ui.editor.draft.equipment, 0, "no viene instalado")
-			clickN("Equipo_" .. e.id)
-			M.task.wait()
-			eq(App.ui.editor.draft.equipment[1], e.id, "se elige " .. e.name)
+	for _, stage in { 3, 4 } do
+		App.screens.editor.goStep(stage)
+		M.task.wait()
+		for _, e in Catalog.EQUIPMENT do
+			if (e.group == "seguridad") == (stage == 3) then
+				check(named("Equipo_" .. e.id) ~= nil, "equipamiento: " .. e.name .. " en la etapa " .. stage)
+				if Rules.equipmentUnlocked(App.g, e) and not anyEquip then
+					anyEquip = true
+					eq(#App.ui.editor.draft.equipment, 0, "no viene instalado")
+					clickN("Equipo_" .. e.id)
+					M.task.wait()
+					eq(App.ui.editor.draft.equipment[1], e.id, "se elige " .. e.name)
+				end
+			end
 		end
 	end
 	check(anyEquip, "hay equipamiento investigado para elegir")
@@ -1904,6 +1920,228 @@ test("Menú: cuatro tarjetas de empresas, la elegida expandida, acciones según 
 	App.ui.route = "menu"
 	App.forceRender()
 	noErrors("Tarjetas del menú")
+end)
+
+test("Editor definitivo: cinco etapas guiadas, selección inmediata, comparación real, borradores persistentes y finalización", function()
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local Rules = require("./.build-ui/shared/Rules")
+	local Actions = require("./.build-ui/server/Actions")
+	local Ed = App.screens.editor
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = math.max(sess.game.money, 400000)
+	App.go("juego")
+	M.task.wait()
+	-- Abrir el editor pausa la empresa y no usa la cámara del Workspace.
+	App.go("editor", { new = true })
+	M.task.wait()
+	check(App.menuPaused(), "abrir el editor pausa la empresa")
+	M.services.RunService.RenderStepped:Fire(1 / 60)
+	check(Ed.diagnose().ok, "vista 3D propia con el auto encuadrado")
+	check(not App.screens.showroom.isVisible(), "sin el showroom de fondo")
+	local e = App.ui.editor
+	eq(e.step, 1, "empieza en Chasis")
+	check(named("Paso_5") ~= nil and named("TituloEtapa") ~= nil, "indicador de cinco etapas")
+	-- 1. Chasis: las tarjetas reflejan lo disponible; el Sedán y el Coupé de 1970 siempre están.
+	for _, b in Catalog.BASES do
+		local card = named("Base_" .. b.id)
+		check(card ~= nil and card:GetAttribute("bloqueado") == (DesignCalc.baseAvailable(App.g, b) ~= nil), "chasis " .. b.name .. ": disponible/bloqueado según la investigación")
+	end
+	check(named("Base_brisa"):GetAttribute("bloqueado") == false and named("Base_duna"):GetAttribute("bloqueado") == false, "Sedán y Coupé 1970 disponibles")
+	-- 4. Selección inmediata, sin confirmación, con el auto y las estadísticas actualizados.
+	clickN("Base_duna")
+	check(not dialogOpen(), "sin confirmación por componente")
+	eq(App.ui.editor.draft.baseId, "duna", "el chasis se aplica al borrador")
+	check(named("UltimoCambio") ~= nil, "se muestra qué cambió")
+	-- 3. Navegación guiada: no se saltea, se puede volver y las elecciones se conservan.
+	Ed.goStep(4)
+	eq(App.ui.editor.step, 1, "la primera vez no se saltea a una etapa no visitada")
+	clickN("Siguiente")
+	eq(App.ui.editor.step, 2, "Siguiente pasa a Motor")
+	-- 2. Motores I4 e I6 (nivel 1 de su familia investigada como mínimo).
+	check(named("Pieza_i4") ~= nil and named("Pieza_i6") ~= nil, "motores I4 e I6")
+	check(named("Pieza_i6"):GetAttribute("bloqueado") == false and named("Pieza_i4"):GetAttribute("bloqueado") == false, "ambos disponibles")
+	check(named("NivelMotor_1") ~= nil and named("NivelMotor_10") ~= nil, "niveles 1 a 10")
+	-- 5 y 6. Recalculo y comparación con los valores reales de DesignCalc.
+	local d0 = Util.deepCopy(App.ui.editor.draft)
+	local target = d0.parts.motor == "i4" and "i6" or "i4"
+	clickN("Pieza_" .. target)
+	local d1 = App.ui.editor.draft
+	eq(d1.parts.motor, target, "el motor se aplica al instante")
+	local a, b = DesignCalc.computeDesign(App.g, d0), DesignCalc.computeDesign(App.g, d1)
+	local hp = named("Stat_hp")
+	check(hp ~= nil and hp:GetAttribute("antes") == a.hp and hp:GetAttribute("ahora") == b.hp, "potencia: antes " .. a.hp .. " → ahora " .. b.hp .. " (cálculo real)")
+	eq(hp:GetAttribute("favorable"), b.hp > a.hp, "más potencia es favorable")
+	local cons = named("Stat_consumption")
+	if b.consumption ~= a.consumption then
+		eq(cons:GetAttribute("favorable"), b.consumption < a.consumption, "menos consumo es favorable (no todo aumento es bueno)")
+	end
+	local uc = named("Stat_unitCost")
+	if b.unitCost ~= a.unitCost then
+		eq(uc:GetAttribute("favorable"), b.unitCost < a.unitCost, "menor costo de fabricación es favorable")
+	end
+	-- 7. Lo no investigado está bloqueado y no se aplica.
+	for _, v in Catalog.ENGINE_VARIANTS do
+		local card = named("VarianteMotor_" .. v.id)
+		eq(card:GetAttribute("bloqueado"), DesignCalc.variantBlock(App.g, d1, v) ~= nil, "variante " .. v.name .. " según la investigación")
+		if card:GetAttribute("bloqueado") then
+			clickN("VarianteMotor_" .. v.id)
+			check(App.ui.editor.draft.motorVariant ~= v.id, "una variante bloqueada no se aplica")
+		end
+	end
+	-- Volver a Chasis conserva el motor elegido.
+	clickN("Paso_1")
+	eq(App.ui.editor.step, 1, "se vuelve a una etapa visitada")
+	eq(App.ui.editor.draft.parts.motor, target, "el motor se conserva")
+	clickN("Paso_2")
+	eq(App.ui.editor.step, 2, "y se vuelve directo a Motor")
+	clickN("Siguiente")
+	clickN("Siguiente")
+	eq(App.ui.editor.step, 4, "Tecnología y confort")
+	-- Equipamiento: instalar y quitar sin duplicar; lo no investigado queda bloqueado.
+	local free, locked = nil, nil
+	for _, x in Catalog.EQUIPMENT do
+		if x.group == "tecnologia" then
+			if Rules.equipmentUnlocked(App.g, x) then
+				free = free or x
+			else
+				locked = locked or x
+			end
+		end
+	end
+	if free then
+		clickN("Equipo_" .. free.id)
+		clickN("Equipo_" .. free.id)
+		eq(#App.ui.editor.draft.equipment, 0, "instalar y quitar deja el borrador como estaba")
+		clickN("Equipo_" .. free.id)
+		clickN("Paso_1")
+		clickN("Paso_4")
+		eq(#App.ui.editor.draft.equipment, 1, "ir y volver entre etapas no duplica componentes")
+	end
+	if locked then
+		check(named("Equipo_" .. locked.id):GetAttribute("bloqueado") == true, locked.name .. " sin investigar: bloqueado")
+		clickN("Equipo_" .. locked.id)
+		check(table.find(App.ui.editor.draft.equipment, locked.id) == nil, "no se instala")
+	end
+	-- 8. Guardado automático del borrador: unos segundos después del último cambio, en la partida.
+	local id = App.ui.editor.draftId
+	check(App.ui.editor.pendingSync, "cambio pendiente de guardar")
+	check(Actions.important.saveDraft == nil and Actions.economic.saveDraft == nil, "guardar un borrador no fuerza una escritura en DataStore")
+	M.task.wait(Ed.SYNC_DELAY + 0.3)
+	M.task.wait()
+	local dr = nil
+	for _, x in sess.game.drafts do
+		if x.id == id then
+			dr = x
+		end
+	end
+	check(dr ~= nil, "el borrador está en la partida del servidor")
+	eq(dr and dr.spec.parts.motor, target, "con el motor elegido")
+	eq(dr and dr.step, 4, "y la etapa")
+	eq(#sess.game.designs, #App.g.designs, "un borrador no es un modelo")
+	-- 9. Salir, volver al menú y cargar la empresa: el borrador vuelve igual.
+	App.ui.editor.draft.name = "Sin terminar"
+	App.screens.editor.change(function(dd)
+		dd.name = "Prototipo Uno"
+	end)
+	App.leaveToMenu()
+	check(waitFor(function()
+		return App.g == nil
+	end), "vuelve al menú (guarda la empresa)")
+	App.request("selectSlot", { slot = "1" })
+	check(waitFor(function()
+		return App.g ~= nil
+	end), "carga la empresa")
+	App.go("juego")
+	M.task.wait()
+	sess = Sessions.instance.list[player]
+	local back = nil
+	for _, x in App.g.drafts do
+		if x.id == id then
+			back = x
+		end
+	end
+	check(back ~= nil and back.spec.name == "Prototipo Uno", "el borrador se recupera tras cargar la empresa (el cambio de último momento incluido)")
+	App.go("editor")
+	M.task.wait()
+	eq(App.ui.editor.draftId, id, "el editor continúa ese borrador")
+	eq(App.ui.editor.step, 4, "en su etapa")
+	eq(App.ui.editor.draft.parts.motor, target, "con sus componentes")
+	-- 10. Investigar algo después e incorporarlo al mismo borrador.
+	if locked then
+		App.go("juego")
+		table.insert(sess.game.research.done, locked.research)
+		Sessions.instance:push(sess)
+		M.task.wait()
+		App.go("editor", { draftId = id })
+		M.task.wait()
+		check(named("Equipo_" .. locked.id):GetAttribute("bloqueado") == false, locked.name .. " ya investigado se puede elegir")
+		clickN("Equipo_" .. locked.id)
+		check(table.find(App.ui.editor.draft.equipment, locked.id) ~= nil, "se incorpora al borrador")
+	end
+	-- 11. Resumen: el nombre se valida y la finalización pide confirmación.
+	clickN("Siguiente")
+	eq(App.ui.editor.step, 5, "Resumen")
+	check(named("TituloPresentacion") ~= nil and named("NombreModelo") ~= nil and named("Ficha_Motor") ~= nil, "presentación con nombre editable y ficha técnica")
+	App.screens.editor.change(function(dd)
+		dd.name = "x"
+	end)
+	local fin = named("FinalizarDiseno")
+	check(fin:GetAttribute("disabled") == true and Ed.finalizeCheck() ~= nil, "un nombre inválido no se puede finalizar")
+	App.screens.editor.change(function(dd)
+		dd.name = "Halcón Definitivo"
+	end)
+	local spec = Util.deepCopy(App.ui.editor.draft)
+	local before = #App.g.designs
+	clickN("FinalizarDiseno")
+	eq(topKind(), "confirm", "confirmación de diseño definitivo")
+	check(find("definitivo") ~= nil, "avisa que no se podrá cambiar")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return #App.g.designs == before + 1
+	end), "se crea el modelo finalizado")
+	eq(App.ui.route, "fabrica", "pasa a Producción")
+	check(named("LoteRecienFinalizado") ~= nil, "con acceso directo a su lote")
+	-- 12. Sin duplicados por una segunda confirmación.
+	Ed.doFinalize()
+	local again = App.request("finalizeDesign", { draftId = id, draft = spec })
+	check(not again.ok, "una segunda confirmación se rechaza")
+	M.task.wait()
+	eq(#App.g.designs, before + 1, "sigue habiendo un solo modelo nuevo")
+	local inDrafts = false
+	for _, x in App.g.drafts do
+		inDrafts = inDrafts or x.id == id
+	end
+	check(not inDrafts, "el borrador se retiró")
+	-- 13. Especificaciones conservadas e inmutables.
+	local model = App.g.designs[#App.g.designs]
+	eq(model.name, "Halcón Definitivo", "nombre del modelo")
+	eq(model.parts.motor, target, "motor original")
+	eq(table.concat(model.equipment, ","), table.concat(spec.equipment, ","), "equipamiento original")
+	local edit = Util.deepCopy(model)
+	edit.paint.primary = "#D6333F"
+	check(not App.request("saveDesign", { draft = edit, sourceId = model.id }).ok, "el modelo terminado no se modifica")
+	App.go("editor", { designId = model.id })
+	M.task.wait()
+	check(App.ui.editor.draftId ~= id and App.ui.editor.draft.id == nil, "«editar» un modelo abre un borrador nuevo basado en él")
+	App.go("juego")
+	M.task.wait()
+	-- 14. Disponible en Producción: un solo lote.
+	local lot = App.request("createLot", { designId = model.id, qty = 5 })
+	check(lot.ok, "se fabrica: " .. tostring(lot.msg))
+	check(not App.request("createLot", { designId = model.id, qty = 5 }).ok, "un solo lote por modelo")
+	check(not App.request("createLot", { designId = id, qty = 5 }).ok, "un borrador no se fabrica")
+	-- 15. La partida (con borradores) sigue siendo válida.
+	local GameState = require("./.build-ui/server/GameState")
+	check(GameState.validate(sess.game), "la partida es válida")
+	noErrors("Editor definitivo")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

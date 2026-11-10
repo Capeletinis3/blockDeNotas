@@ -17,7 +17,7 @@ local Staff = require(Shared.Staff)
 
 local GameState = {}
 
-GameState.SCHEMA = 15
+GameState.SCHEMA = 16
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -64,7 +64,9 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		reputation = Catalog.START.reputation,
 		-- day = meses desde enero de 1970; minute = minutos de juego dentro del mes.
 		time = { day = 0, minute = 0, speed = 1 },
-		designs = {},
+		designs = {}, -- modelos finalizados (sus especificaciones no cambian)
+		-- Borradores del editor (no se fabrican ni se venden): { id, spec, step, visited, newGenOf?, createdDay, updatedDay }
+		drafts = {},
 		lots = {},
 		lotHistory = {}, -- historial reciente (lotes livianos)
 		modelHistory = {}, -- historial permanente: un resumen por modelo y generación
@@ -270,7 +272,7 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("Contador inválido: " .. tostring(k) .. ".")
 		end
 	end
-	for _, k in { "designs", "lots", "lotHistory", "ledger", "devPaid", "employees", "candidates", "notifications" } do
+	for _, k in { "designs", "drafts", "lots", "lotHistory", "ledger", "devPaid", "employees", "candidates", "notifications" } do
 		if not isList(g[k]) then
 			return fail("La lista «" .. k .. "» está dañada.")
 		end
@@ -320,6 +322,27 @@ function GameState.validate(g: any): (boolean, string?)
 		local e = checkSpec(d, "Diseño «" .. d.name .. "»")
 		if e then
 			return fail(e)
+		end
+	end
+	-- Borradores del editor: identificador, etapa (1–5) y una configuración legible.
+	if #g.drafts > Catalog.RULES.maxDrafts then
+		return fail("Hay demasiados borradores.")
+	end
+	local draftIds = {}
+	for _, dr in g.drafts do
+		if type(dr) ~= "table" or type(dr.id) ~= "string" or #dr.id < 6 or #dr.id > 48 or draftIds[dr.id] then
+			return fail("Hay un borrador sin identificador válido.")
+		end
+		draftIds[dr.id] = true
+		if not isInt(dr.step, 1, 5) or not isInt(dr.visited, 1, 5) or (dr.newGenOf ~= nil and type(dr.newGenOf) ~= "string") then
+			return fail("Un borrador tiene la etapa dañada.")
+		end
+		local e = checkSpec(dr.spec, "Borrador")
+		if e then
+			return fail(e)
+		end
+		if type(dr.spec.name) ~= "string" then
+			return fail("Un borrador no tiene nombre.")
 		end
 	end
 	-- Lotes (activos e historial): contadores enteros y coherentes; nunca más vendidas que fabricadas.
@@ -1051,6 +1074,15 @@ MIGRATIONS[14] = function(g: any, _now: number)
 	g.countries = {}
 	g.countries = Rules.openedCountries(g)
 	g.schema = 15
+end
+
+-- 15 → 16: borradores del editor guardados en la partida (antes vivían solo en el cliente). Los modelos ya
+-- guardados quedan como modelos finalizados, sin cambios.
+MIGRATIONS[15] = function(g: any, _now: number)
+	if type(g.drafts) ~= "table" then
+		g.drafts = {}
+	end
+	g.schema = 16
 end
 
 function GameState.migrate(g: any, now: number): (any?, string?)

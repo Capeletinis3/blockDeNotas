@@ -156,7 +156,7 @@ local HELP = {
 	compania = "Datos de marca, sede y finanzas acumuladas. Hay cinco sedes, del Garaje inicial al Imperio automotriz: cada una da más PI por minuto, más líneas de producción, más alcance comercial y más lugar para personal.",
 	misiones = "Las misiones avanzan con acciones reales. Las del año se reinician cada enero. Una recompensa reclamada queda registrada en la partida.",
 	estadisticas = "Todo se calcula con el historial mensual de la partida (base de caja). «Fabricación pagada» es lo que costaron las unidades terminadas en el período. «Margen de lo vendido» es informativo (precio − costo de cada auto vendido) y no se descuenta dos veces.",
-	editor = "El proyecto se guarda en la partida mientras editás. Solo aparecen motores, cajas y opciones de tu época o investigadas. La licencia del modelo y el desarrollo de piezas se pagan una sola vez al guardar el diseño; el costo de fabricación se paga por cada unidad del lote.",
+	editor = "Cinco etapas: chasis, motor, seguridad, tecnología y confort, y resumen. Cada tarjeta se aplica al instante y el panel derecho muestra cómo cambian las estadísticas y el costo (verde mejora, rojo empeora). El borrador se guarda solo en la partida: podés salir, investigar y volver. Solo aparecen componentes de tu época o investigados. Al «Finalizar diseño» se paga el desarrollo (licencia, prototipos e ingeniería) y el modelo queda definitivo, listo para Producción; el costo de fabricación se paga por cada unidad del lote.",
 }
 Dialogs.HELP = HELP
 Dialogs.help = function(box: Frame, params: any)
@@ -710,14 +710,50 @@ end
 
 Dialogs.prevModels = function(box: Frame)
 	local g = App.g
-	header(box, "Modelos anteriores y plantillas")
+	local Ed = App.screens.editor
+	header(box, "Borradores, modelos y plantillas")
 	local b = body(box)
 	Ui.button("Empezar un proyecto nuevo", "p", function()
 		App.closeDialog()
-		App.screens.editor.newProject()
-	end, { small = true, icon = "plus" }).Parent = b
+		Ed.newProject()
+	end, { small = true, icon = "plus", name = "NuevoProyecto" }).Parent = b
+	-- Borradores: se guardan solos con la empresa; no se fabrican hasta finalizarlos.
+	local drafts = Ed.drafts()
+	Ui.lbl("Borradores (" .. #drafts .. " de " .. Catalog.RULES.maxDrafts .. ")").Parent = b
+	if #drafts == 0 then
+		Ui.text("No hay borradores guardados.", { size = Ui.S.sm, color = T.mut }).Parent = b
+	end
+	local open = App.ui.editor and App.ui.editor.draftId
+	for _, dr in drafts do
+		local base = Catalog.base(dr.spec.baseId)
+		local del
+		del = Ui.button("", "q", function()
+			App.openDialog("confirm", {
+				title = "¿Eliminar el borrador «" .. tostring(dr.spec.name) .. "»?",
+				body = "Se borra solo este borrador. Los modelos terminados no se tocan.",
+				okLabel = "Eliminar borrador",
+				danger = true,
+				onOk = function()
+					Ed.deleteDraft(dr.id, del)
+					App.renderDialog()
+				end,
+			})
+		end, { small = true, icon = "trash", fg = T.re2, name = "EliminarBorrador_" .. dr.id })
+		Ui.card({
+			Ui.grow(Ui.col({
+				Ui.text(tostring(dr.spec.name) .. (open == dr.id and " <font color=\"#8DB8FF\">· abierto</font>" or ""), { size = Ui.S.base, weight = W.bold }),
+				Ui.text((base and base.name or "—") .. " · etapa " .. dr.step .. " de " .. #Ed.STEPS .. " (" .. Ed.STEPS[dr.step][2] .. ")" .. (dr.newGenOf and " · nueva generación" or ""), { size = Ui.S.xs, color = T.mut }),
+			}, 2)),
+			Ui.button(open == dr.id and "Seguir" or "Continuar", "p", function()
+				App.closeDialog()
+				App.go("editor", { draftId = dr.id })
+			end, { small = true, name = "ContinuarBorrador_" .. dr.id }),
+			del,
+		}, { dir = "H", v = "C", gap = 10, name = "Borrador_" .. dr.id }).Parent = b
+	end
+	Ui.lbl("Modelos terminados y plantillas").Parent = b
 	if #g.designs == 0 then
-		Ui.empty(nil, "Todavía no guardaste diseños.").Parent = b
+		Ui.empty(nil, "Todavía no finalizaste diseños.").Parent = b
 	end
 	for _, d in g.designs do
 		App.screens.autos.designRow(g, d).Parent = b

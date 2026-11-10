@@ -121,3 +121,25 @@ Respaldo: tag `respaldo-pre-tarjetas-menu` y copia del `.rbxl` anterior. El show
 - Enter continúa la empresa elegida (antes, la primera de la lista).
 - `GameState.summary` agrega `lastModel` (último diseño creado, sin plantillas). Es solo un dato del menú: no cambia el guardado.
 - Pruebas: `tests/ui.luau` (1.235), más un control de superposición con el motor de vista previa en 1024×768, 1280×720, 1366×768, 1600×900, 1920×1080 y 390×844.
+
+## Editor definitivo de vehículos (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-editor-definitivo` y copia del `.rbxl` anterior.
+- **Cinco etapas** (`ScreenEditor.luau`, paneles reescritos; 3D, cámaras, pintura, interior y deshacer se reutilizan):
+  1. Chasis: familias y generaciones, estructura, tren de rodaje, carrocería y pintura.
+  2. Motor: familia, niveles 1–10, variantes, transmisión y sistemas.
+  3. Seguridad: paquete, sistemas y frenos.
+  4. Tecnología y confort: equipamiento e interior.
+  5. Resumen: presentación, nombre editable, posicionamiento, economía, «Finalizar diseño».
+- **Navegación:** la primera vez es en orden; después se puede ir directo a cualquier etapa visitada. Las elecciones se conservan.
+- **Tarjetas:** se aplican al instante, sin confirmación, y muestran el impacto real (`DesignCalc.computeDesign`) en estadísticas y costo por unidad. Lo no investigado queda bloqueado con su requisito.
+- **Panel derecho:** antes → ahora con la diferencia, en verde si mejora y en rojo si empeora según cada estadística (en consumo, peso, frenado, aceleración y costo, menos es mejor).
+- **Borradores** (`g.drafts`, esquema 16; las partidas viejas migran con lista vacía):
+  - Se guardan en la partida 2,5 s después del último cambio, al salir del editor y antes de volver al menú (`Actions.saveDraft`).
+  - El DataStore lo escribe el autoguardado normal: no se escribe en cada clic.
+  - Varios por empresa (hasta 20, solo para proteger el tamaño del guardado). Se listan en «Borradores».
+  - No se fabrican, no se venden y no tienen reseñas.
+- **Finalizar** (`Actions.finalizeDesign`): el servidor valida el nombre (con el filtro de texto) y la configuración, cobra el desarrollo, crea el modelo y retira el borrador. Una segunda confirmación no crea duplicados.
+- **Modelos terminados inmutables:** `saveDesign` con `sourceId` se rechaza. «Basar un diseño nuevo» y «Nueva generación» abren un borrador nuevo.
+- Al finalizar, el editor lleva a Producción con acceso directo al lote del modelo (un lote por modelo; la cantidad se elige ahí).
+- Pruebas: `tests/run.luau` [ED] (servidor, migración) y `tests/ui.luau` «Editor definitivo» (recorrido completo con la sesión real).

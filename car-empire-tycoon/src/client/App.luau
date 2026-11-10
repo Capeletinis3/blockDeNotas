@@ -333,6 +333,8 @@ local function structuralSig(p: any): string
 	if g then
 		local copy = table.clone(g)
 		copy.time = { day = g.time.day, speed = g.time.speed }
+		-- Los borradores se guardan cada pocos segundos mientras se edita: no reconstruyen la pantalla.
+		copy.drafts = #(g.drafts or {})
 		copy.ledger = #g.ledger
 		copy.stats = nil
 		copy.derived = nil
@@ -382,14 +384,12 @@ local FULLSCREEN = {
 	personal = true, compania = true, misiones = true, estadisticas = true, menu = true, nueva = true,
 }
 
--- Si el editor tiene cambios sin guardar, pregunta antes de seguir (guardar, descartar o seguir editando).
+-- El borrador del editor se guarda solo: antes de salir (por ejemplo, al volver al menú) se envía lo pendiente.
 function App.guardEditor(proceed: () -> ())
-	local ed = App.ui.editor
-	if App.ui.route == "editor" and ed and ed.dirty and App.screens.editor and App.screens.editor.askUnsaved then
-		App.screens.editor.askUnsaved(proceed)
-	else
-		proceed()
+	if App.screens.editor and App.screens.editor.flush then
+		App.screens.editor.flush()
 	end
+	proceed()
 end
 
 function App.go(route: string, params: any?)

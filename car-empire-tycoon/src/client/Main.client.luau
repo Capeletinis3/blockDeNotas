@@ -164,7 +164,7 @@ UserInputService.InputBegan:Connect(function(input: InputObject, processed: bool
 				ed.goStep(e.step - 1)
 			end
 		elseif key == Enum.KeyCode.RightBracket then
-			if e.step < 4 then
+			if e.step < #ed.STEPS then
 				ed.goStep(e.step + 1)
 			end
 		elseif key == Enum.KeyCode.H then

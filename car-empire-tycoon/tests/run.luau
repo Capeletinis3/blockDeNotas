@@ -253,16 +253,18 @@ test("[P2] Diseñar y guardar un auto: desarrollo una sola vez, año de modelo y
 	local r2 = Actions.saveDesign(g, ctx, { draft = draftFor(g, "brisa", "Pixel Dos") })
 	local eng = DesignCalc.engineeringCost(g, g.designs[2] or d, "nuevo")
 	check(r2.ok and r2.paid == eng and g.money == m1 - eng, "la licencia no se vuelve a pagar: solo la ingeniería del modelo nuevo (" .. tostring(r2.paid) .. ")")
-	-- Cambios estéticos no pagan ingeniería; cambiar una pieza paga la de una versión.
+	-- Los modelos finalizados son inmutables: ni la pintura ni las piezas se cambian sobre el guardado.
 	local v = jsonCopy(g.designs[2])
+	local before2 = jsonCopy(g.designs[2])
 	v.paint.primary = "#D6333F"
 	local m2 = g.money
 	local r3 = Actions.saveDesign(g, ctx, { draft = v, sourceId = v.id })
-	check(r3.ok and r3.paid == 0 and g.money == m2, "pintar de nuevo no cuesta ingeniería")
+	check(not r3.ok and g.money == m2, "un modelo terminado no se vuelve a pintar")
 	v = jsonCopy(g.designs[2])
 	v.parts.transmision = "man4"
 	local r4 = Actions.saveDesign(g, ctx, { draft = v, sourceId = v.id })
-	check(r4.ok and r4.paid == DesignCalc.engineeringCost(g, v, "version"), "cambiar una pieza mecánica paga la ingeniería de una versión")
+	check(not r4.ok, "ni se le cambian piezas")
+	check(DesignCalc.sameSpec(before2, g.designs[2]) and g.designs[2].version == before2.version, "sus especificaciones originales quedan intactas")
 	check(DesignCalc.engineeringCost(g, v, "nuevo") < DesignCalc.engineeringCost({ time = { day = 40 * 12 }, research = { done = {} }, employees = {} }, v, "nuevo"), "la ingeniería cuesta más en épocas modernas")
 	check(not Actions.saveDesign(g, ctx, { draft = draftFor(g, "brisa", "pixel uno") }).ok, "nombre repetido rechazado")
 	-- Saneamiento: el cliente no puede inventar piezas ni bases.
@@ -2198,8 +2200,8 @@ test("Pioneer 70: carrocería 3D predeterminada del sedán en los 70, elegible d
 	check(not DesignCalc.sameSpec(d, edit), "pero cuenta como cambio del diseño")
 	local m = g.money
 	local sv = Actions.saveDesign(g, ctx, { draft = edit, sourceId = id })
-	check(sv.ok, sv.msg)
-	check(g.money == m, "guardar el cambio de carrocería no cobra")
+	check(not sv.ok and g.money == m, "un modelo terminado tampoco cambia de carrocería (y no cobra nada)")
+	eq(d.vehicleModel, "pioneer70", "conserva la carrocería con la que se finalizó")
 	-- Saneamiento del borrador que manda el cliente.
 	local raw = draftFor(g, "brisa", "Otro sedán")
 	raw.vehicleModel = "inventado"
@@ -3624,6 +3626,130 @@ test("[R1] Migración completa 8 → actual: una partida de la Etapa 3 carga sin
 	Simulation.ensureMarket(m, ctx)
 	runReal(m, ctx, 2)
 	check(GameState.validate(m), "válida después de jugar")
+end)
+
+
+-- Editor definitivo: borradores persistentes, finalización validada en el servidor y modelos inmutables ----------
+test("[ED] Borradores del editor: se guardan en la partida, sobreviven a guardar y cargar, y se finalizan una sola vez", function()
+	local g = newCompany("Ruta Norte Motors")
+	local ctx = makeCtx(41)
+	eq(#g.drafts, 0, "una empresa nueva no tiene borradores")
+	-- 1970: sedán y coupé de 1970; motores I4 e I6 de nivel 1.
+	check(DesignCalc.baseAvailable(g, Catalog.base("brisa")) == nil and DesignCalc.baseAvailable(g, Catalog.base("duna")) == nil, "Sedán y Coupé 1970 disponibles al empezar")
+	check(DesignCalc.baseAvailable(g, Catalog.base("brisa2")) ~= nil, "las generaciones siguientes, bloqueadas")
+	local d0 = draftFor(g, "brisa")
+	check(DesignCalc.partBlock(g, d0, Catalog.part("motor", "i4")) == nil and DesignCalc.partBlock(g, d0, Catalog.part("motor", "i6")) == nil, "I4 e I6 disponibles")
+	eq(Rules.engineLevelMax(g, "I4"), 1, "I4 en nivel 1")
+	eq(Rules.engineLevelMax(g, "I6"), 1, "I6 en nivel 1")
+	check(DesignCalc.variantBlock(g, d0, Catalog.engineVariant("balanced")) == nil, "variante equilibrada disponible")
+	check(DesignCalc.variantBlock(g, d0, Catalog.engineVariant("eco")) ~= nil and DesignCalc.variantBlock(g, d0, Catalog.engineVariant("sport")) ~= nil, "económica y deportiva requieren investigación")
+	-- Guardar un borrador: identificador del cliente, etapa y nombre provisional.
+	check(not Actions.saveDraft(g, ctx, { draftId = "x", draft = d0 }).ok, "identificador inválido rechazado")
+	local raw = draftFor(g, "duna", "a")
+	raw.parts.motor = "i6"
+	local r = Actions.saveDraft(g, ctx, { draftId = "borrador-1", draft = raw, step = 2, visited = 2 })
+	check(r.ok and r.quiet, "borrador guardado sin aviso")
+	eq(#g.drafts, 1, "un borrador")
+	local dr = g.drafts[1]
+	eq(dr.step, 2, "con su etapa")
+	eq(dr.spec.parts.motor, "i6", "y sus componentes")
+	check(Util.charCount(dr.spec.name) >= 2, "un nombre a medio escribir queda provisional (" .. dr.spec.name .. ")")
+	eq(#g.designs, 0, "un borrador no es un modelo")
+	-- Actualizar el mismo borrador no lo duplica; volver a una etapa anterior conserva hasta dónde llegó.
+	raw.name = "Halcón Sport"
+	check(Actions.saveDraft(g, ctx, { draftId = "borrador-1", draft = raw, step = 1, visited = 1 }).ok, "actualizar")
+	eq(#g.drafts, 1, "sigue habiendo uno")
+	eq(g.drafts[1].step, 1, "etapa actual")
+	eq(g.drafts[1].visited, 2, "conserva la etapa más lejana visitada")
+	eq(g.drafts[1].spec.name, "Halcón Sport", "nombre actualizado")
+	-- Tecnología no investigada: el servidor no la acepta en el borrador.
+	local locked = jsonCopy(raw)
+	locked.equipment = { "radio" }
+	check(not Actions.saveDraft(g, ctx, { draftId = "borrador-1", draft = locked }).ok, "radio sin investigar rechazada")
+	eq(#g.drafts[1].spec.equipment, 0, "el borrador no cambia")
+	-- Guardar y cargar la empresa: el borrador vuelve igual.
+	check(GameState.validate(g), "la partida con borradores es válida")
+	local loaded = jsonCopy(g)
+	check(GameState.validate(loaded), "también después de guardar y cargar")
+	eq(loaded.drafts[1].spec.name, "Halcón Sport", "el borrador se recupera")
+	eq(loaded.drafts[1].visited, 2, "con su progreso en el editor")
+	-- Investigar después y sumar la tecnología al mismo borrador.
+	table.insert(loaded.research.done, "te_radio")
+	check(Actions.saveDraft(loaded, ctx, { draftId = "borrador-1", draft = locked, step = 4, visited = 4 }).ok, "ya investigada, la radio se suma al borrador")
+	eq(loaded.drafts[1].spec.equipment[1], "radio", "radio en el borrador")
+	g = loaded
+	-- Los borradores no se fabrican.
+	check(not Actions.createLot(g, ctx, { designId = "borrador-1", qty = 10 }).ok, "un borrador no se puede fabricar")
+	-- Finalizar: el servidor valida el nombre completo.
+	local bad = jsonCopy(g.drafts[1].spec)
+	bad.name = "x"
+	check(not Actions.finalizeDesign(g, ctx, { draftId = "borrador-1", draft = bad }).ok, "nombre inválido: no se finaliza")
+	eq(#g.drafts, 1, "y el borrador sigue")
+	local final = jsonCopy(g.drafts[1].spec)
+	final.name = "Halcón 70"
+	local m0, saved0 = g.money, g.counters.designsSaved
+	local f = Actions.finalizeDesign(g, ctx, { draftId = "borrador-1", draft = final })
+	check(f.ok, f.msg)
+	eq(#g.designs, 1, "se crea el modelo")
+	eq(#g.drafts, 0, "y se retira el borrador")
+	eq(g.counters.designsSaved, saved0 + 1, "cuenta como diseño guardado (misiones)")
+	check(g.money <= m0, "se cobra el desarrollo")
+	local model = g.designs[1]
+	eq(model.name, "Halcón 70", "con su nombre")
+	eq(model.parts.motor, "i6", "con sus especificaciones originales")
+	eq(model.equipment[1], "radio", "y su equipamiento")
+	-- Una confirmación repetida no duplica el modelo.
+	check(not Actions.finalizeDesign(g, ctx, { draftId = "borrador-1", draft = final }).ok, "la segunda confirmación se rechaza")
+	eq(#g.designs, 1, "sigue habiendo un solo modelo")
+	-- El modelo terminado es inmutable y no cambia al investigar algo mejor.
+	local spec0 = jsonCopy(model)
+	table.insert(g.research.done, "co1")
+	check(not Actions.saveDesign(g, ctx, { draft = jsonCopy(model), sourceId = model.id }).ok, "no se edita")
+	check(DesignCalc.sameSpec(spec0, g.designs[1]), "sus especificaciones no cambian")
+	-- Disponible en Producción: un único lote.
+	local lot = Actions.createLot(g, ctx, { designId = model.id, qty = 10 })
+	check(lot.ok, lot.msg)
+	check(not Actions.createLot(g, ctx, { designId = model.id, qty = 10 }).ok, "cada modelo, un solo lote")
+	check(GameState.validate(g), "válida después de finalizar y fabricar")
+	-- Límite de borradores (protege el tamaño del guardado).
+	for i = 1, Catalog.RULES.maxDrafts do
+		check(Actions.saveDraft(g, ctx, { draftId = "lleno-" .. i, draft = draftFor(g, "brisa") }).ok, "borrador " .. i)
+	end
+	check(not Actions.saveDraft(g, ctx, { draftId = "uno-mas", draft = draftFor(g, "brisa") }).ok, "con el máximo no se crea otro")
+	check(Actions.saveDraft(g, ctx, { draftId = "lleno-1", draft = draftFor(g, "duna") }).ok, "pero los existentes se siguen guardando")
+	check(Actions.deleteDraft(g, ctx, { draftId = "lleno-1" }).ok, "eliminar un borrador")
+	eq(#g.drafts, Catalog.RULES.maxDrafts - 1, "queda uno menos")
+	-- Nueva generación desde un borrador: se finaliza como generación 2.
+	g.time.day += 12
+	local ng = draftFor(g, "duna", "Halcón 71")
+	check(Actions.saveDraft(g, ctx, { draftId = "gen-dos", draft = ng, newGenOf = model.id }).ok, "borrador de nueva generación")
+	g.money += 200000
+	local f2 = Actions.finalizeDesign(g, ctx, { draftId = "gen-dos", draft = ng })
+	check(f2.ok, f2.msg)
+	local gen2
+	for _, x in g.designs do
+		if x.id == f2.designId then
+			gen2 = x
+		end
+	end
+	check(gen2 ~= nil and gen2.gen == 2 and gen2.lineage == model.id, "segunda generación de la misma familia")
+end)
+
+test("[ED] Partidas anteriores: el esquema 15 pasa al 16 con borradores vacíos y los modelos intactos", function()
+	local g = newCompany("Vieja Motors")
+	local ctx = makeCtx(42)
+	local id = saveNew(g, ctx, "brisa", "Clásico")
+	local old = jsonCopy(g)
+	old.schema = 15
+	old.drafts = nil
+	local m, err = GameState.migrate(old, 1)
+	check(m ~= nil, err)
+	eq(m.schema, GameState.SCHEMA, "esquema actual")
+	eq(#m.drafts, 0, "sin borradores")
+	eq(m.designs[1].id, id, "el modelo sigue")
+	check(DesignCalc.sameSpec(m.designs[1], g.designs[1]), "con las mismas especificaciones")
+	check(GameState.validate(m), "válida")
+	check(Actions.createLot(m, ctx, { designId = id, qty = 5 }).ok, "y se puede fabricar")
 end)
 
 T.finish()

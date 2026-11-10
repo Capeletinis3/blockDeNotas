@@ -750,7 +750,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 		if not g then
 			return { ok = false, msg = "Primero elegí o creá una empresa." }
 		end
-		if action == "saveDesign" then
+		if action == "saveDesign" or action == "finalizeDesign" then
 			local draft = type(payload) == "table" and payload.draft or nil
 			if type(draft) ~= "table" or type(draft.name) ~= "string" then
 				return { ok = false, msg = "El diseño no es válido." }
@@ -803,7 +803,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	end
 	return {
 		ok = result.ok, msg = result.msg, quiet = result.quiet, duplicate = result.duplicate,
-		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid,
+		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid, draftId = result.draftId,
 	}
 end
 
