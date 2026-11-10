@@ -1,10 +1,15 @@
 --!strict
 --[[
-	Investigación y desarrollo (I+D): una pestaña por categoría (Chasis, Motores, Seguridad, Tecnología y
-	confort; «Empresa» guarda provisoriamente las mejoras de producción y marketing). Tarjetas en filas de tres
-	con nombre, nivel o generación, descripción, beneficios, costo en dinero, PI y días (con el recargo si se
-	adelanta), requisitos y estado. Se pueden llevar varias investigaciones a la vez; avanzan por días
-	simulados y no se cancelan. Todos los números salen de Rules.researchCost: los mismos que cobra el servidor.
+	Centro de investigación (I+D).
+	- Arriba: PI disponibles, generación por minuto y una franja compacta (con desplazamiento horizontal) con
+	  TODAS las investigaciones en curso de la empresa, de cualquier categoría.
+	- Izquierda: menú fijo con las cuatro categorías (Chasis, Motores, Seguridad, Tecnología).
+	- Centro: filtros (Todas, Disponibles, En curso, Bloqueadas, Completadas) y tarjetas en filas de tres con
+	  ilustración, nombre, nivel o generación, descripción, beneficios, costos (dinero, PI y días), año,
+	  requisitos, estado y acción. Se ve el catálogo completo, también lo futuro y bloqueado.
+	«Investigar» abre una confirmación (Dialogs.research) y recién al confirmar el servidor valida y cobra
+	(Actions.startResearch). Todos los números salen de Rules.researchCost, los mismos que cobra el servidor.
+	La pantalla es un menú de gestión: mientras está abierta, la empresa del jugador queda en pausa.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,34 +20,65 @@ local Rules = require(Shared.Rules)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
-local Sheet = require(script.Parent.ScreenSheet)
 local T = Ui.T
 local W = Ui.W
 
 local Screen = {
-	title = "Investigación",
+	title = "Centro de investigación",
 	icon = "flask",
 	color = Color3.fromHex("#6FE3F0"),
 	bg = Color3.fromHex("#12303A"),
+	custom = true, -- menú lateral fijo y catálogo desplazable (ScreenSheet)
 }
 
-local STATE_CHIP = { hecha = { "✓ Completada", "cg" }, activa = { "Investigándose", "cv" }, disponible = { "Disponible", "cb" }, bloqueada = { "Bloqueada", "cn" } }
+local STYLE = {
+	panel = Ui.hex("#0B1220"),
+	card = Ui.hex("#111A2B"),
+	line = Ui.hex("#22304A"),
+	accent = Ui.hex("#3B8BFF"),
+	accent2 = Ui.hex("#8DB8FF"),
+}
+
+-- Categorías del menú lateral: { clave del catálogo, nombre, ícono }.
+Screen.CATEGORIES = {
+	{ "chasis", "Chasis", "car" },
+	{ "motores", "Motores", "gear" },
+	{ "seguridad", "Seguridad", "check" },
+	{ "tecnologia", "Tecnología", "gem" },
+}
 local CATEGORY_DESC = {
-	chasis = "Plataformas y generaciones de chasis, estructura y materiales.",
-	motores = "Familias de motores con 10 niveles, variantes económica y deportiva, transmisiones y tecnología del motor.",
-	seguridad = "Cada tecnología se investiga sola y después se elige al diseñar: no se instala sola.",
-	tecnologia = "Equipamiento y confort: se investiga una vez y se elige en cada diseño.",
-	empresa = "Mejoras de la empresa de versiones anteriores (fabricación y marketing). Pasarán a Instalaciones y Marketing.",
+	chasis = "Plataformas y generaciones de chasis, estructura y materiales. Las generaciones nuevas se suman: las anteriores siguen en el editor.",
+	motores = "Familias de motores con 10 niveles, variantes económica y deportiva, transmisiones y tecnología del motor. Los niveles anteriores siguen disponibles.",
+	seguridad = "Cada tecnología se investiga una vez y después se elige al diseñar: no se instala sola en los autos.",
+	tecnologia = "Equipamiento y confort: se investiga una vez y se agrega a mano en cada diseño nuevo.",
 }
 
-local function piText(g: any): string
-	local p = g.derived.piPerMinute
-	return Util.num(p, p < 10 and 1 or 0) .. " PI/min"
+--[[ Ilustraciones: por ahora un ícono de la categoría. Para usar imágenes definitivas, cargar el id de la
+	imagen por tecnología (IMAGES[id]) o por categoría (IMAGES[categoría]): la tarjeta la muestra sola. ]]
+Screen.IMAGES = {} :: { [string]: string }
+
+Screen.FILTERS = {
+	{ "todas", "Todas" },
+	{ "disponibles", "Disponibles" },
+	{ "curso", "En curso" },
+	{ "bloqueadas", "Bloqueadas" },
+	{ "completadas", "Completadas" },
+}
+
+-- Estado de cada tarjeta: { texto, chip }
+local STATE_CHIP = {
+	disponible = { "Disponible", "cb" },
+	curso = { "En curso", "cv" },
+	bloqueada = { "Bloqueada", "cn" },
+	completada = { "✓ Completada", "cg" },
+	incluida = { "✓ Desde el inicio", "cg" },
+}
+
+local function piRate(g: any): number
+	return g.derived and g.derived.piPerMinute or Rules.piPerMinute(g)
 end
 
-function Screen.head(g: any): { Instance }
-	return { Ui.chip(Util.num(math.floor(g.rp)) .. " PI", "cv"), Ui.chip(piText(g), "cb"), Ui.chip(#(g.research.projects or {}) .. " en curso", "cn") }
-end
+-- Sin chips en el encabezado: los PI y las investigaciones en curso están en la zona superior de la pantalla.
 
 -- Nivel o generación que se muestra en la tarjeta.
 function Screen.levelLabel(n: any): string
@@ -57,17 +93,59 @@ function Screen.levelLabel(n: any): string
 	return Catalog.RESEARCH_RULES.complexityLabel[n.complexity] or "Mejora"
 end
 
--- Por qué no se puede empezar (o nil si se puede).
-function Screen.blockReason(g: any, n: any): string?
+--[[ Lo que la empresa tiene desde la fundación (no se investiga): Sedán y Coupé de 1970, motores I4 e I6 de
+	nivel 1 y la variante Equilibrada. Se muestran como tarjetas completadas para que el catálogo esté entero. ]]
+function Screen.builtins(cat: string): { any }
+	local out = {}
+	if cat == "chasis" then
+		for _, b in Catalog.BASES do
+			if b.research == nil and (b.year or 1970) <= Catalog.CALENDAR.startYear then
+				table.insert(out, { id = "inicio_" .. b.id, builtin = true, name = b.name, year = b.year or 1970, gen = b.gen or 1, gain = "Chasis disponible desde la fundación: " .. (Catalog.TYPES[b.type] or b.type) .. ", " .. b.weight .. " kg, seguridad " .. (b.safety or 40) .. ".", desc = "Generación " .. (b.gen or 1) .. " de la familia " .. tostring(b.family or b.type) .. "." })
+			end
+		end
+	elseif cat == "motores" then
+		for _, f in Catalog.ENGINE_FAMILIES do
+			if not f.req and f.first <= Catalog.CALENDAR.startYear then
+				table.insert(out, { id = "inicio_motor_" .. f.id, builtin = true, name = f.name .. " · nivel 1", year = f.first, level = 1, family = f.id, gain = "Motor disponible desde la fundación. Los niveles 2 a " .. Catalog.RESEARCH_RULES.engineMaxLevel .. " se investigan.", desc = "Familia " .. f.name .. "." })
+			end
+		end
+		local v = Catalog.ENGINE_VARIANTS[1]
+		table.insert(out, { id = "inicio_variante_" .. v.id, builtin = true, name = "Variante " .. v.name, year = Catalog.CALENDAR.startYear, gain = "Disponible desde la fundación para todos los motores.", desc = "La variante de serie de cada motor." })
+	end
+	return out
+end
+
+--[[ Estado de una tecnología para la interfaz: "disponible", "curso", "bloqueada", "completada" o "incluida",
+	más el adelanto (años antes de su año normal). «Adelantada» es una marca aparte: una tecnología puede estar
+	disponible y adelantada, o bloqueada y adelantada (por ejemplo, si le faltan requisitos), sin contradecirse.
+	Devuelve (estado, motivo de bloqueo o nil, años de adelanto). ]]
+function Screen.status(g: any, n: any): (string, string?, number)
+	if n.builtin then
+		return "incluida", nil, 0
+	end
 	local st = Rules.researchState(g, n)
 	if st == "hecha" then
-		return "Ya investigada"
+		return "completada", nil, 0
 	elseif st == "activa" then
-		return "En curso"
+		return "curso", nil, 0
 	end
+	local ahead = Rules.researchAhead(g, n)
 	local miss = Rules.researchMissing(g, n)
 	if #miss > 0 then
-		return table.concat(miss, " · ")
+		return "bloqueada", table.concat(miss, " · "), ahead
+	end
+	return "disponible", nil, ahead
+end
+
+-- Por qué no se puede empezar ahora (recursos o cupo), o nil. Los requisitos van en Screen.status.
+function Screen.blockReason(g: any, n: any): string?
+	local st, why = Screen.status(g, n)
+	if st == "completada" or st == "incluida" then
+		return "Ya investigada"
+	elseif st == "curso" then
+		return "En curso"
+	elseif st == "bloqueada" then
+		return why
 	end
 	if #(g.research.projects or {}) >= Catalog.RESEARCH_RULES.maxParallel then
 		return "Máximo de " .. Catalog.RESEARCH_RULES.maxParallel .. " investigaciones en curso"
@@ -82,66 +160,121 @@ function Screen.blockReason(g: any, n: any): string?
 	return nil
 end
 
-function Screen.card(g: any, n: any): Frame
-	local st = Rules.researchState(g, n)
-	local chip = STATE_CHIP[st]
-	local pi, cost, days, info = Rules.researchCost(g, n)
-	local why = Screen.blockReason(g, n)
-	local reqs: { Instance? } = {}
-	if #n.req > 0 then
-		local names = {}
-		for _, r in n.req do
-			table.insert(names, (Rules.has(g, r) and "✓ " or "✕ ") .. Catalog.researchNode(r).name)
+local function matches(filter: string, st: string): boolean
+	return filter == "todas"
+		or (filter == "disponibles" and st == "disponible")
+		or (filter == "curso" and st == "curso")
+		or (filter == "bloqueadas" and st == "bloqueada")
+		or (filter == "completadas" and (st == "completada" or st == "incluida"))
+end
+Screen.matches = matches
+
+-- Días que faltan a un proyecto (con la velocidad del personal de Investigación).
+function Screen.daysLeft(g: any, p: any): number
+	return math.max(0, p.days - p.progress) / Rules.researchSpeed(g)
+end
+
+local function daysText(d: number): string
+	local n = math.max(0, math.ceil(d))
+	return Util.num(n) .. (n == 1 and " día" or " días")
+end
+
+-- Ilustración de la tarjeta: imagen definitiva si existe; si no, el ícono de la categoría.
+local function illustration(n: any, cat: string, st: string): GuiObject
+	local img = Screen.IMAGES[n.id] or Screen.IMAGES[cat]
+	if img then
+		return Ui.new("ImageLabel", { Name = "Ilustracion", Image = img, ScaleType = Enum.ScaleType.Fit, BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 64), Corner = 8 })
+	end
+	local icon = "flask"
+	for _, c in Screen.CATEGORIES do
+		if c[1] == cat then
+			icon = c[3]
 		end
-		table.insert(reqs, Ui.text("Requisitos: " .. table.concat(names, ", "), { size = Ui.S.xs, color = T.mut }))
 	end
-	local costLine = Util.money(cost) .. " · " .. Util.num(pi) .. " PI · " .. days .. (days == 1 and " día" or " días")
-	local aheadNote = nil
-	if st ~= "hecha" and info.ahead > 0 then
-		local R = Catalog.RESEARCH_RULES
-		aheadNote = Ui.text("Adelantada " .. info.ahead .. (info.ahead == 1 and " año" or " años") .. " (aparece en " .. n.year .. "): +" .. Util.round(R.aheadMoney * info.ahead * 100) .. " % de dinero, +" .. Util.round(R.aheadPi * info.ahead * 100) .. " % de PI y +" .. Util.round(R.aheadDays * info.ahead * 100) .. " % de días (incluido arriba).", { size = Ui.S.xs, color = T.ye, name = "Adelanto" })
-	elseif st ~= "hecha" and info.diffusion < 1 then
-		aheadNote = Ui.text("Tecnología conocida: −" .. Util.round((1 - info.diffusion) * 100) .. " % de dinero y PI.", { size = Ui.S.xs, color = T.gr })
+	local done = st == "completada" or st == "incluida"
+	local color = (st == "bloqueada" and T.mut2) or (done and T.gr) or STYLE.accent2
+	local box = Ui.new("Frame", { Name = "Ilustracion", BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 64), Corner = 8 })
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(150, 160, 185))
+	g.Rotation = 90
+	g.Parent = box
+	local ic = Ui.icon(st == "bloqueada" and "lock" or icon, 26, color)
+	ic.AnchorPoint = Vector2.new(0.5, 0.5)
+	ic.Position = UDim2.fromScale(0.5, 0.5)
+	ic.Parent = box
+	return box
+end
+
+function Screen.card(g: any, n: any, cat: string): Frame
+	local st, why, ahead = Screen.status(g, n)
+	local chip = STATE_CHIP[st]
+	local items: { Instance? } = {
+		illustration(n, cat, st),
+		Ui.row({
+			Ui.chip(n.builtin and (n.level and ("Nivel " .. n.level) or (n.gen and ("Generación " .. n.gen)) or "De serie") or Screen.levelLabel(n), "cn"),
+			Ui.chip(chip[1], chip[2]),
+			(ahead > 0 and st ~= "completada") and Ui.chip("Adelantada " .. ahead .. (ahead == 1 and " año" or " años"), "cy") or nil,
+		}, 4, { wrap = true }),
+		Ui.text(n.name, { size = Ui.S.base, weight = W.bold, name = "Nombre" }),
+		Ui.text(n.desc or ((Catalog.RESEARCH[cat] and Catalog.RESEARCH[cat].label or "") .. " · aparece en " .. tostring(n.year)), { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
+		Ui.text("Beneficio: " .. tostring(n.gain), { size = Ui.S.xs, color = T.tx2, lineHeight = 1.3, name = "Beneficio" }),
+	}
+	if not n.builtin then
+		local pi, cost, days, info = Rules.researchCost(g, n)
+		if st ~= "completada" then
+			table.insert(items, Ui.text(Util.money(cost) .. " · " .. Util.num(pi) .. " PI · " .. daysText(days), { size = Ui.S.xs, weight = W.semi, color = T.or_, name = "Costo" }))
+		end
+		table.insert(items, Ui.text("Año: " .. n.year .. ((ahead > 0 and st ~= "completada") and (" · recargo +" .. Util.round(info.penalty.money * 100) .. " % dinero, +" .. Util.round(info.penalty.pi * 100) .. " % PI, +" .. Util.round(info.penalty.days * 100) .. " % días") or ""), { size = Ui.S.xs, color = (ahead > 0 and st ~= "completada") and T.ye or T.mut, name = "Anio" }))
+		if #n.req > 0 then
+			local names = {}
+			for _, r in n.req do
+				local rn = Catalog.researchNode(r)
+				table.insert(names, (Rules.has(g, r) and "✓ " or "✕ ") .. (rn and rn.name or r))
+			end
+			table.insert(items, Ui.text("Requisitos: " .. table.concat(names, ", "), { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }))
+		end
 	end
-	local action: Instance? = nil
-	if st == "activa" then
+	if st == "curso" then
 		local p = Rules.researchProject(g, n.id)
-		local bar, fill = Ui.bar(p and p.progress / p.days * 100 or 0, T.vi)
-		local lbl = Ui.inline("", { size = Ui.S.xs, color = T.mut })
+		local bar, fill = Ui.bar(p and p.progress / p.days * 100 or 0, STYLE.accent)
+		local lbl = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "AvanceTarjeta" })
 		local function upd(gg: any)
 			local x = Rules.researchProject(gg, n.id)
 			if x then
 				Ui.setBar(fill, x.progress / x.days * 100)
-				lbl.Text = math.floor(x.progress) .. "/" .. x.days .. " días"
+				lbl.Text = Util.round(x.progress / x.days * 100) .. " % · faltan " .. daysText(Screen.daysLeft(gg, x))
 			end
 		end
 		upd(g)
 		App.live(upd)
-		action = Ui.col({ bar, lbl }, 4)
-	elseif st ~= "hecha" then
-		local b
-		b = Ui.button("Investigar", "p", function()
-			App.request("startResearch", { id = n.id }, { button = b })
-		end, { small = true, fill = true, disabled = why ~= nil, why = why, name = "Investigar_" .. n.id })
-		action = Ui.col({ b, why and Ui.why(why) or nil }, 6)
+		table.insert(items, Ui.col({ bar, lbl }, 4))
+	elseif st == "disponible" then
+		local block = Screen.blockReason(g, n)
+		table.insert(items, Ui.button("Investigar", "p", function()
+			App.openDialog("research", { id = n.id })
+		end, { small = true, fill = true, icon = "flask", name = "Investigar_" .. n.id }))
+		if block then
+			table.insert(items, Ui.why(block))
+		end
+	elseif st == "bloqueada" then
+		table.insert(items, Ui.why(why or "Bloqueada"))
 	end
-	return Ui.card({
-		Ui.row({ Ui.chip(Screen.levelLabel(n), "cn"), Ui.spacer(), Ui.chip(chip[1], chip[2]) }, 6),
-		Ui.text(n.name, { size = Ui.S.sm, weight = W.bold }),
-		Ui.text((n.desc or (Catalog.RESEARCH[n.category].label .. " · aparece en " .. n.year)), { size = Ui.S.xs, color = T.mut }),
-		Ui.text("Beneficio: " .. n.gain, { size = Ui.S.xs, color = T.tx2, lineHeight = 1.35 }),
-		st ~= "hecha" and Ui.text(costLine, { size = Ui.S.xs, weight = W.semi, color = T.or_, name = "Costo" }) or nil,
-		aheadNote,
-		#reqs > 0 and Ui.col(reqs, 2) or nil,
-		action,
-	}, { gap = 6, stroke = st == "activa" and T.vi or (st == "hecha" and Color3.fromHex("#226043") or nil), name = "Nodo_" .. n.id })
+	local card = Ui.card(items, {
+		gap = 6, pad = 10, radius = 12, bg = STYLE.card, transparency = st == "bloqueada" and 0.4 or 0.12,
+		stroke = st == "curso" and { STYLE.accent, 2 } or ((st == "completada" or st == "incluida") and { Ui.hex("#226043"), 1 } or { STYLE.line, 1 }),
+		name = "Nodo_" .. n.id,
+	})
+	card:SetAttribute("estado", st)
+	card:SetAttribute("adelanto", ahead)
+	return card
 end
 
--- Tarjetas de una categoría. En Motores, los niveles se muestran de a uno por familia (el próximo a investigar
--- o el que está en curso) para no llenar la pantalla con 54 tarjetas.
-function Screen.visibleNodes(g: any, cat: string): { any }
-	local out = {}
-	local shownFamily = {}
+-- Tecnologías de una categoría (todas, en orden de año), más las incluidas desde la fundación. En Motores, los
+-- niveles se agrupan por familia (sección propia, del nivel 2 al 10) para que el catálogo se lea ordenado.
+function Screen.nodes(cat: string): ({ any }, { [string]: { any } }, { string })
+	local main = Screen.builtins(cat)
+	local families: { [string]: { any } } = {}
+	local order: { string } = {}
 	local nodes = table.clone(Catalog.RESEARCH[cat].nodes)
 	table.sort(nodes, function(a: any, b: any): boolean
 		if a.year ~= b.year then
@@ -151,114 +284,274 @@ function Screen.visibleNodes(g: any, cat: string): { any }
 	end)
 	for _, n in nodes do
 		if n.family then
-			local st = Rules.researchState(g, n)
-			if st == "activa" then
-				table.insert(out, n)
-			elseif st ~= "hecha" and not shownFamily[n.family] then
-				shownFamily[n.family] = true
-				table.insert(out, n)
+			if not families[n.family] then
+				families[n.family] = {}
+				table.insert(order, n.family)
 			end
+			table.insert(families[n.family], n)
 		else
-			table.insert(out, n)
+			table.insert(main, n)
 		end
 	end
-	return out
+	for _, list in families do
+		table.sort(list, function(a: any, b: any): boolean
+			return a.level < b.level
+		end)
+	end
+	return main, families, order
 end
 
-function Screen.build(main: Frame, side: Frame)
-	local g = App.g
-	local list = {}
-	for _, key in Catalog.RESEARCH_ORDER do
-		local avail = 0
-		for _, n in Catalog.RESEARCH[key].nodes do
-			if Screen.blockReason(g, n) == nil then
-				avail += 1
+local function counts(g: any, cat: string): any
+	local c = { todas = 0, disponibles = 0, curso = 0, bloqueadas = 0, completadas = 0 }
+	local main, families = Screen.nodes(cat)
+	local function add(n: any)
+		local st = Screen.status(g, n)
+		for _, f in Screen.FILTERS do
+			if matches(f[1], st) then
+				c[f[1]] += 1
 			end
 		end
-		table.insert(list, { key, Catalog.RESEARCH[key].label, avail > 0 and avail or nil })
 	end
-	local tabs, cat = Sheet.tabs("investigacion", list, Catalog.RESEARCH_ORDER[1])
-	tabs.Parent = main
-	Ui.text(CATEGORY_DESC[cat] or "", { size = Ui.S.xs, color = T.mut }).Parent = main
-	if cat == "motores" then
-		local fams = {}
-		for _, f in Catalog.ENGINE_FAMILIES do
-			table.insert(fams, Ui.chip(f.name .. " · nivel " .. Rules.engineLevelMax(g, f.id) .. "/" .. Catalog.RESEARCH_RULES.engineMaxLevel, "cv"))
-		end
-		Ui.row(fams, 6, { wrap = true, Name = "NivelesMotor" }).Parent = main
+	for _, n in main do
+		add(n)
 	end
-	local cards: { Instance } = {}
-	local pending: { Instance } = {}
-	for _, n in Screen.visibleNodes(g, cat) do
-		if Rules.has(g, n.id) then
-			table.insert(pending, Screen.card(g, n))
-		else
-			table.insert(cards, Screen.card(g, n))
+	for _, list in families do
+		for _, n in list do
+			add(n)
 		end
 	end
-	local cols = App.isPhone() and 1 or 3
-	if #cards > 0 then
-		Ui.grid(cards, cols, nil, 10).Parent = main
-	end
-	if #pending > 0 then
-		Ui.lbl("Completadas").Parent = main
-		Ui.grid(pending, cols, nil, 10).Parent = main
-	end
+	return c
+end
+Screen.counts = counts
 
-	-- Columna lateral: proyectos en curso y PI.
-	local current: { Instance? } = { Ui.lbl("En curso (" .. #g.research.projects .. "/" .. Catalog.RESEARCH_RULES.maxParallel .. ")") }
+local function category(): string
+	local cat = App.ui.tabs.investigacion
+	for _, c in Screen.CATEGORIES do
+		if c[1] == cat then
+			return cat
+		end
+	end
+	return Screen.CATEGORIES[1][1]
+end
+
+local function filter(): string
+	local f = App.ui.researchFilter
+	for _, x in Screen.FILTERS do
+		if x[1] == f then
+			return f
+		end
+	end
+	return "todas"
+end
+
+-- Franja de investigaciones en curso (todas las categorías), con desplazamiento horizontal.
+local function activeStrip(g: any): Frame
+	local items: { Instance? } = {}
 	for _, p in g.research.projects do
 		local n = Catalog.researchNode(p.id)
-		local bar, fill = Ui.bar(p.progress / p.days * 100, T.vi)
-		local lbl = Ui.text("", { size = Ui.S.xs, color = T.mut })
+		local catLabel = ""
+		for _, c in Screen.CATEGORIES do
+			if n and c[1] == n.category then
+				catLabel = c[2]
+			end
+		end
+		local bar, fill = Ui.bar(p.progress / p.days * 100, STYLE.accent, 5)
+		local pct = Ui.inline("", { size = Ui.S.xs, weight = W.bold, name = "Porcentaje" })
+		local left = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "Restante" })
 		local function upd(gg: any)
 			local x = Rules.researchProject(gg, p.id)
 			if x then
 				Ui.setBar(fill, x.progress / x.days * 100)
-				lbl.Text = math.floor(x.progress) .. "/" .. x.days .. " días · faltan ≈ " .. Util.realTime(Rules.projectSecondsLeft(x, gg.time.speed, gg)) .. (gg.time.speed == 0 and " (en pausa)" or "")
+				pct.Text = Util.round(x.progress / x.days * 100) .. " %"
+				left.Text = "faltan " .. daysText(Screen.daysLeft(gg, x))
 			end
 		end
 		upd(g)
 		App.live(upd)
-		table.insert(current, Ui.col({ Ui.text(n and n.name or p.id, { size = Ui.S.sm, weight = W.bold }), bar, lbl }, 4, { Name = "Proyecto_" .. p.id }))
+		table.insert(items, Ui.new("Frame", {
+			Name = "Proyecto_" .. p.id, Size = UDim2.fromOffset(230, 70), BackgroundColor3 = STYLE.card, BackgroundTransparency = 0.1, Corner = 10,
+			Stroke = { STYLE.line, 1 }, Pad = { 8, 10 }, List = { dir = "V", gap = 4 },
+		}, {
+			Ui.inline(Util.truncateChars(n and n.name or p.id, 28), { size = Ui.S.sm, weight = W.bold }),
+			Ui.row({ Ui.grow(Ui.inline(catLabel, { size = Ui.S.xs, color = STYLE.accent2 })), pct }, 6),
+			bar,
+			left,
+		}))
 	end
-	if #g.research.projects == 0 then
-		table.insert(current, Ui.text("No hay investigaciones en curso. Podés llevar varias a la vez: cada una avanza por días del juego.", { size = Ui.S.sm, color = T.mut }))
+	if #items == 0 then
+		table.insert(items, Ui.inline("No hay investigaciones en curso. Podés llevar hasta " .. Catalog.RESEARCH_RULES.maxParallel .. " a la vez: cada una avanza por días del juego.", { size = Ui.S.sm, color = T.mut }))
 	end
-	table.insert(current, Ui.text("Se pagan al empezar y no se pueden cancelar. Con la empresa en pausa (o un menú abierto) no avanzan.", { size = Ui.S.xs, color = T.mut }))
-	Ui.card(current, { gap = 8, name = "EnCurso" }).Parent = side
+	local scroll = Ui.new("ScrollingFrame", {
+		Name = "FranjaEnCurso", Size = UDim2.new(1, 0, 0, 84), BackgroundTransparency = 1, ScrollingDirection = Enum.ScrollingDirection.X,
+		AutomaticCanvasSize = Enum.AutomaticSize.X, CanvasSize = UDim2.new(), ScrollBarThickness = 4,
+	}, {
+		Ui.row(items, 8, { Size = UDim2.new(0, 0, 0, 74), AutomaticSize = Enum.AutomaticSize.X }),
+	})
+	return scroll
+end
 
-	local rpLabel = Ui.inline(Util.num(math.floor(g.rp)) .. " PI", { size = Ui.S.sm, weight = W.bold })
-	local center = Ui.inline("", { size = Ui.S.sm })
-	local lines = Ui.inline("", { size = Ui.S.sm })
-	local total = Ui.inline("", { size = Ui.S.sm, color = T.vi2 })
+-- Zona superior: PI, generación y la franja de investigaciones activas.
+local function topZone(g: any): Frame
+	local rp = Ui.inline(Util.num(math.floor(g.rp)), { size = 22, weight = W.heavy, name = "PIDisponibles" })
+	local rate = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "GeneracionPI" })
 	local function upd(gg: any)
-		rpLabel.Text = Util.num(math.floor(gg.rp)) .. " PI"
-		local c = Rules.piCenter(gg)
-		local l = Rules.piLines(gg)
-		center.Text = Util.num(c, 1) .. " PI/min"
-		lines.Text = Util.num(l, 1) .. " PI/min (" .. Rules.activeLines(gg) .. (Rules.activeLines(gg) == 1 and " línea" or " líneas") .. ")"
-		total.Text = Util.num(c + l, 1) .. " PI/min"
+		rp.Text = Util.num(math.floor(gg.rp))
+		rate.Text = "+" .. Util.num(piRate(gg), 1) .. " PI/min a 1× · centro " .. Util.num(Rules.piCenter(gg), 1) .. " + líneas " .. Util.num(Rules.piLines(gg), 1)
 	end
 	upd(g)
 	App.live(upd)
-	Ui.card({
-		Ui.lbl("Puntos de investigación (PI)"),
-		Ui.row({ Ui.grow(Ui.text("Disponibles", { size = Ui.S.sm })), rpLabel }, 10),
-		Ui.row({ Ui.grow(Ui.text("Centro de investigación (" .. Rules.researchCenter(g).name .. ")", { size = Ui.S.sm })), center }, 10),
-		Ui.row({ Ui.grow(Ui.text("Líneas fabricando (" .. Catalog.RESEARCH_RULES.linePi .. " PI/min cada una)", { size = Ui.S.sm })), lines }, 10),
-		Ui.row({ Ui.grow(Ui.text("Generación total a 1×", { size = Ui.S.sm, weight = W.bold })), total }, 10),
-		Ui.text("Los PI se generan mientras la simulación corre (a 2× y 3×, más rápido) y se acumulan sin tope. Ampliar la sede mejora el centro de investigación.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
-	}, { gap = 6, name = "PI" }).Parent = side
-	local totalNodes = 0
-	for _, key in Catalog.RESEARCH_ORDER do
-		totalNodes += #Catalog.RESEARCH[key].nodes
+	local n = #g.research.projects
+	return Ui.col({
+		Ui.row({
+			Ui.ico("flask", STYLE.accent2, STYLE.accent, 40, { alpha = 0.2, radius = 10, iconSize = 20 }),
+			Ui.col({ Ui.inline("PI disponibles", { size = Ui.S.xs, color = T.mut }), rp }, 0, { Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY }),
+			Ui.grow(rate),
+			Ui.chip(n .. " de " .. Catalog.RESEARCH_RULES.maxParallel .. " en curso", n > 0 and "cv" or "cn"),
+			Ui.chip("Año " .. Rules.year(g) .. " · adelanto hasta " .. (Rules.year(g) + Catalog.RESEARCH_RULES.aheadMaxYears), "cn"),
+		}, 12, { wrap = App.isPhone() }),
+		activeStrip(g),
+	}, 8, { Name = "ZonaSuperior" })
+end
+
+-- Menú lateral de categorías (fijo).
+local function sideMenu(g: any, cat: string, vertical: boolean): Frame
+	local items: { Instance? } = {}
+	for _, c in Screen.CATEGORIES do
+		local on = c[1] == cat
+		local cnt = counts(g, c[1])
+		local b = Ui.new("TextButton", {
+			Name = "Pestana_" .. c[1], Text = "", AutoButtonColor = false,
+			BackgroundColor3 = on and STYLE.accent or STYLE.card, BackgroundTransparency = on and 0.78 or 0.2,
+			Size = vertical and UDim2.new(1, 0, 0, 52) or UDim2.fromOffset(0, 44), AutomaticSize = vertical and Enum.AutomaticSize.None or Enum.AutomaticSize.X,
+			Corner = 10, Stroke = on and { STYLE.accent, 2 } or { STYLE.line, 1 }, Pad = { 0, 10 }, List = { dir = "H", gap = 10, v = "C" },
+		}, {
+			Ui.ico(c[3], on and T.tx or STYLE.accent2, on and STYLE.accent or Ui.hex("#16223A"), 32, { alpha = on and 0.6 or 1, radius = 8, iconSize = 16 }),
+			Ui.grow(Ui.col({
+				Ui.inline(c[2], { size = 15, weight = on and W.bold or W.semi, color = on and T.tx or T.tx2 }),
+				Ui.inline(cnt.disponibles .. " disponibles" .. (cnt.curso > 0 and (" · " .. cnt.curso .. " en curso") or ""), { size = Ui.S.xs, color = T.mut }),
+			}, 0)),
+		})
+		b:SetAttribute("activa", on)
+		b.Activated:Connect(function()
+			-- Cambiar de categoría solo cambia lo que se ve: las investigaciones en curso siguen igual.
+			App.ui.tabs.investigacion = c[1]
+			App.forceRender()
+		end)
+		table.insert(items, b)
 	end
-	Ui.card({
-		Ui.lbl("Progreso"),
-		Ui.between("Tecnologías completadas", #g.research.done .. "/" .. totalNodes),
-		Ui.between("Año actual", tostring(Rules.year(g)) .. " (se puede adelantar hasta " .. (Rules.year(g) + Catalog.RESEARCH_RULES.aheadMaxYears) .. ")"),
-	}, { gap = 6 }).Parent = side
+	if vertical then
+		table.insert(items, Ui.text("Las investigaciones se pagan al empezar, no se cancelan y avanzan por días del juego (con la empresa en pausa, o con este menú abierto, no avanzan).", { size = Ui.S.xs, color = T.mut, lineHeight = 1.35 }))
+		return Ui.col(items, 8, { Name = "MenuCategorias" })
+	end
+	return Ui.row(items, 6, { Name = "MenuCategorias", wrap = true })
+end
+
+local function filtersRow(g: any, cat: string, current: string): Frame
+	local cnt = counts(g, cat)
+	local items = {}
+	for _, f in Screen.FILTERS do
+		table.insert(items, Ui.opt(f[2] .. " (" .. cnt[f[1]] .. ")", current == f[1], function()
+			App.ui.researchFilter = f[1]
+			App.forceRender()
+		end, { height = 34, name = "Filtro_" .. f[1] }))
+	end
+	return Ui.row(items, 6, { Name = "Filtros", wrap = true })
+end
+
+-- Catálogo de la categoría con el filtro elegido.
+local function catalogBody(g: any, cat: string, f: string, parent: Instance)
+	local cols = App.isPhone() and 1 or 3
+	local main, families, order = Screen.nodes(cat)
+	-- Primero lo que está en curso y lo que se puede investigar; después lo bloqueado y lo completado.
+	local RANK = { curso = 1, disponible = 2, bloqueada = 3, completada = 4, incluida = 5 }
+	local rank = {}
+	for i, n in main do
+		rank[n] = RANK[(Screen.status(g, n))] * 10000 + i
+	end
+	table.sort(main, function(a: any, b: any): boolean
+		return rank[a] < rank[b]
+	end)
+	local cards: { Instance } = {}
+	for _, n in main do
+		if matches(f, (Screen.status(g, n))) then
+			table.insert(cards, Screen.card(g, n, cat))
+		end
+	end
+	local shown = #cards
+	if #cards > 0 then
+		Ui.grid(cards, cols, nil, 10).Parent = parent
+	end
+	-- Motores: una sección por familia con sus niveles.
+	for _, fam in order do
+		local famCards: { Instance } = {}
+		for _, n in families[fam] do
+			if matches(f, (Screen.status(g, n))) then
+				table.insert(famCards, Screen.card(g, n, cat))
+			end
+		end
+		if #famCards > 0 then
+			local name = fam
+			for _, x in Catalog.ENGINE_FAMILIES do
+				if x.id == fam then
+					name = x.name
+				end
+			end
+			Ui.lbl("Familia " .. name .. " · nivel " .. Rules.engineLevelMax(g, fam) .. " de " .. Catalog.RESEARCH_RULES.engineMaxLevel).Parent = parent
+			Ui.grid(famCards, cols, nil, 10).Parent = parent
+			shown += #famCards
+		end
+	end
+	if shown == 0 then
+		local msg = {
+			disponibles = "No hay tecnologías disponibles para investigar ahora en esta categoría. Mirá las bloqueadas para ver qué falta.",
+			curso = "No hay investigaciones en curso en esta categoría.",
+			bloqueadas = "No hay tecnologías bloqueadas en esta categoría.",
+			completadas = "Todavía no completaste tecnologías en esta categoría.",
+			todas = "Esta categoría no tiene tecnologías.",
+		}
+		Ui.empty("flask", msg[f] or "").Parent = parent
+	end
+end
+
+function Screen.build(holder: Instance)
+	local g = App.g
+	local phone = App.isPhone()
+	local cat = category()
+	local f = filter()
+	if phone then
+		local scroll = Ui.scroll({}, { name = "Principal", gap = 12, pad = 12 })
+		scroll.Parent = holder
+		App.keepScroll(scroll, "investigacion:" .. cat .. ":" .. f)
+		topZone(g).Parent = scroll
+		sideMenu(g, cat, false).Parent = scroll
+		filtersRow(g, cat, f).Parent = scroll
+		Ui.text(CATEGORY_DESC[cat] or "", { size = Ui.S.xs, color = T.mut }).Parent = scroll
+		catalogBody(g, cat, f, scroll)
+		return
+	end
+	local top = topZone(g)
+	top.Position = UDim2.fromOffset(18, 14)
+	top.Size = UDim2.new(1, -36, 0, 0)
+	top.Parent = holder
+	local topH = 14 + 48 + 8 + 84 + 12
+	local menu = sideMenu(g, cat, true)
+	menu.Position = UDim2.fromOffset(18, topH)
+	menu.Size = UDim2.fromOffset(220, 0)
+	menu.Parent = holder
+	local body = Ui.scroll({}, { name = "Principal", gap = 12, pad = { 0, 6, 12, 0 } })
+	body.Position = UDim2.fromOffset(18 + 220 + 16, topH)
+	body.Size = UDim2.new(1, -(18 + 220 + 16 + 18), 1, -(topH + 10))
+	body.AutomaticSize = Enum.AutomaticSize.None
+	body.Parent = holder
+	App.keepScroll(body, "investigacion:" .. cat .. ":" .. f)
+	Ui.row({
+		Ui.grow(Ui.text(CATEGORY_DESC[cat] or "", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 })),
+	}, 8).Parent = body
+	filtersRow(g, cat, f).Parent = body
+	catalogBody(g, cat, f, body)
+	if not Ui.reduceMotion then
+		Ui.fadeIn(body)
+	end
 end
 
 return Screen

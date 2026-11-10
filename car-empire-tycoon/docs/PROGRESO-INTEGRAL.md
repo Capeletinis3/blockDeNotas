@@ -174,3 +174,18 @@ Respaldo: tag `respaldo-pre-produccion-ventas` y copia del `.rbxl` anterior. La 
 - **Demanda:** `Rules.demandInfo` compara el peso comercial del auto (el mismo de la simulación: precio, atractivo, reseñas, reputación, alcance, segmento y campaña) con el de los rivales del año. Umbrales en `Catalog.DEMAND_LEVELS`.
 - **Fabricación avanzada:** queda preparada como futura (`Catalog.RULES.advancedManufacturing = false`, `Rules.lotProgress`), sin fases que cambien la simulación.
 - Pruebas: `tests/run.luau` [PV] y líneas, `tests/ui.luau` (recorrido completo, catálogo, reseñas automáticas).
+
+## Centro de investigación definitivo (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-investigacion` y copia del `.rbxl` anterior. La lógica de investigación (costos, PI, adelanto, días, simultáneas, desbloqueos y guardado) ya cumplía las reglas y se conserva. Cambios:
+- `ScreenResearch.luau` (reescrita):
+  - Menú lateral fijo con las cuatro categorías.
+  - Zona superior con los PI, la generación por minuto y una franja con desplazamiento horizontal que muestra todas las investigaciones en curso (% y días restantes).
+  - Filtros Todas / Disponibles / En curso / Bloqueadas / Completadas, y tarjetas de a tres.
+  - Se ve el catálogo completo, también lo futuro. Lo que la empresa tiene desde la fundación (Sedán y Coupé 1970, I4 e I6 nivel 1, variante Equilibrada) figura como «Desde el inicio».
+  - Motores agrupados por familia con sus diez niveles.
+  - «Adelantada» es una marca aparte del estado: una tecnología puede estar disponible y adelantada, o bloqueada y adelantada, sin contradecirse.
+  - Ilustraciones reemplazables: `Screen.IMAGES[id o categoría] = "rbxassetid://…"`.
+- `Dialogs.research`: confirmación obligatoria. Abrirla no cobra. Muestra los costos definitivos con su base y el recargo (`Rules.researchCost` ahora informa `base` y `penalty`), requisitos, recursos antes y después, y la advertencia. Se recalcula sola si algo cambia mientras está abierta.
+- `ScreenSheet`: modo `custom` para pantallas con distribución propia.
+- Pruebas: `tests/run.luau` [ID] y `tests/ui.luau` «Centro de investigación» (categorías, filtros, estados, franja, confirmación sin cobro, cobro único, duplicadas, tope de 5 años, recargo, pausa y lo incluido desde el inicio).

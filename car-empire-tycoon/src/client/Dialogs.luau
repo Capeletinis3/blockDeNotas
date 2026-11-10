@@ -151,7 +151,7 @@ local HELP = {
 	autos = "El catálogo reúne tus diseños con su año de modelo y generación. Desde acá lanzás lotes, editás, creás una nueva generación de un modelo o lo duplicás. «Historia de modelos» muestra cada generación con sus lotes, ventas y resultado.",
 	ventas = "Lo fabricado se vende solo, sin negociar. Elegí un modelo de la lista para ver su precio, costo, precio recomendado, demanda estimada (de muy baja a muy alta), ventas, stock, ingresos y la nota de los críticos. El precio es libre: escribilo y la demanda prevista y el margen se actualizan antes de aplicarlo; afecta solo las ventas futuras. La demanda depende del precio, la calidad, las prestaciones, las reseñas, tu reputación, los rivales y las campañas. «Cerrar venta» (con el lote ya fabricado) deja de vender el modelo y descarta lo que no se vendió, sin reintegro.",
 	mercado = "Muestra la demanda de cada tipo de vehículo este año y cómo se reparte entre tus modelos, las marcas rivales ficticias y el resto del mercado. Es el mismo cálculo que usa la simulación para vender.",
-	investigacion = "Cuatro áreas: Chasis, Motores, Seguridad y Tecnología. Cada investigación cuesta dinero y puntos de investigación (PI), que se pagan al empezar, y dura una cantidad de días de juego. Podés llevar varias a la vez y no se cancelan. Los PI los genera el centro de investigación (la sede) y cada línea que está fabricando. Se puede adelantar hasta 5 años, con recargo por año. Lo investigado queda para siempre; el equipamiento se elige al diseñar.",
+	investigacion = "Cuatro categorías en el menú de la izquierda: Chasis, Motores, Seguridad y Tecnología. Arriba ves tus PI y todas las investigaciones en curso. Los filtros (Todas, Disponibles, En curso, Bloqueadas, Completadas) solo cambian qué tarjetas se ven: en «Todas» está el catálogo completo, también lo futuro con su año y sus requisitos. «Investigar» abre una confirmación con el costo definitivo en dinero y PI, la duración y el recargo si la adelantás (hasta 5 años: +15 % de dinero y PI y +10 % de duración por año); recién al confirmar se descuentan los recursos. Podés llevar varias a la vez y no se cancelan. Los PI los genera el centro de investigación y cada línea que fabrica; con la empresa en pausa (o con este menú abierto) no avanzan. Lo investigado aparece en el editor para elegirlo en diseños nuevos: no se instala solo en los autos.",
 	personal = "El personal es opcional. Contratar tiene un costo único y un salario mensual. Asignado a una estación acelera la fábrica, en ventas o marketing suma alcance comercial (con topes). No hay cansancio ni descansos que atender.",
 	compania = "Datos de marca, sede y finanzas acumuladas. Hay cinco sedes, del Garaje inicial al Imperio automotriz: cada una da más PI por minuto, más líneas de producción, más alcance comercial y más lugar para personal.",
 	misiones = "Las misiones avanzan con acciones reales. Las del año se reinician cada enero. Una recompensa reclamada queda registrada en la partida.",
@@ -674,6 +674,74 @@ Dialogs.price = function(box: Frame, params: any, dd: any)
 		App.closeDialog()
 	end).Parent = b
 	footer(box, { Ui.button("Cerrar", "default", App.closeDialog) })
+end
+
+--[[ Confirmar investigación: muestra los costos definitivos (los mismos de Rules.researchCost que cobra el
+	servidor), el desglose del recargo por adelanto, requisitos y recursos actuales. Abrirla no cobra nada; si
+	algo cambia mientras está abierta (dinero, PI, cupo, estado) se vuelve a dibujar con los datos nuevos.
+	params = { id } ]]
+Dialogs.research = function(box: Frame, params: any, dd: any)
+	local g = App.g
+	local n = Catalog.researchNode(params.id)
+	local R = App.screens.investigacion
+	dd.sig = function(gg: any): string
+		return table.concat({ tostring(math.floor(gg.rp)), tostring(gg.money), tostring(#gg.research.projects), tostring(Rules.researchState(gg, n)), tostring(Rules.year(gg)) }, "|")
+	end
+	if not n then
+		info(box, "Investigación", { Ui.note("r", "Esa investigación no existe.") })
+		return
+	end
+	local st, why, ahead = R.status(g, n)
+	local pi, cost, days, detail = Rules.researchCost(g, n)
+	local block = R.blockReason(g, n)
+	header(box, "Investigar «" .. n.name .. "»")
+	local b = body(box)
+	Ui.row({ Ui.chip(R.levelLabel(n), "cn"), Ui.chip(Catalog.RESEARCH[n.category].label, "cb"), ahead > 0 and Ui.chip("Adelantada " .. ahead .. (ahead == 1 and " año" or " años"), "cy") or nil }, 6, { wrap = true }).Parent = b
+	Ui.text(n.desc or ("Tecnología de " .. string.lower(Catalog.RESEARCH[n.category].label) .. " que aparece en " .. n.year .. "."), { size = Ui.S.sm, color = T.mut, lineHeight = 1.35 }).Parent = b
+	Ui.text("<b>Beneficios:</b> " .. n.gain, { size = Ui.S.sm, lineHeight = 1.35, name = "Beneficios" }).Parent = b
+	local function withBase(value: string, base: string, pct: number): string
+		return pct > 0 and (value .. " <font size=\"11\" color=\"#F7C95C\">(base " .. base .. " +" .. Util.round(pct * 100) .. " %)</font>") or value
+	end
+	local effective = Rules.researchEffectiveDays(g, days)
+	Ui.grid({
+		(Ui.kv("Costo", withBase(Util.money(cost), Util.money(detail.base.money), detail.penalty.money), { color = cost > g.money and T.re2 or T.or_, name = "CostoInvestigacion" })),
+		(Ui.kv("Puntos de investigación", withBase(Util.num(pi) .. " PI", Util.num(detail.base.pi), detail.penalty.pi), { color = pi > g.rp and T.re2 or T.vi2, name = "PIInvestigacion" })),
+		(Ui.kv("Duración", withBase(Util.num(days) .. " días", Util.num(detail.base.days), detail.penalty.days), { sub = math.abs(effective - days) >= 0.5 and ("≈ " .. Util.num(math.ceil(effective)) .. " días con el personal de Investigación") or "días del juego", name = "DuracionInvestigacion" })),
+		(Ui.kv("Año de la tecnología", tostring(n.year), { sub = "Año actual " .. Rules.year(g) })),
+	}, App.isPhone() and 2 or 4, nil, 10).Parent = b
+	if #n.req > 0 then
+		local names = {}
+		for _, r in n.req do
+			local rn = Catalog.researchNode(r)
+			table.insert(names, (Rules.has(g, r) and "✓ " or "✕ ") .. (rn and rn.name or r))
+		end
+		Ui.text("<b>Requisitos:</b> " .. table.concat(names, " · "), { size = Ui.S.sm, lineHeight = 1.35 }).Parent = b
+	else
+		Ui.text("<b>Requisitos:</b> ninguno", { size = Ui.S.sm }).Parent = b
+	end
+	if ahead > 0 then
+		Ui.note("y", "Adelanto de " .. ahead .. (ahead == 1 and " año" or " años") .. " (aparece en " .. n.year .. "): +" .. Util.round(detail.penalty.money * 100) .. " % de dinero, +" .. Util.round(detail.penalty.pi * 100) .. " % de PI y +" .. Util.round(detail.penalty.days * 100) .. " % de duración, ya incluidos arriba.").Parent = b
+	end
+	Ui.grid({
+		(Ui.kv("Tu dinero", Util.money(g.money), { sub = block == nil and ("después: " .. Util.money(g.money - cost)) or nil })),
+		(Ui.kv("Tus PI", Util.num(math.floor(g.rp)) .. " PI", { sub = block == nil and ("después: " .. Util.num(math.floor(g.rp - pi)) .. " PI") or nil })),
+		(Ui.kv("Investigaciones en curso", #g.research.projects .. " de " .. Catalog.RESEARCH_RULES.maxParallel)),
+	}, 3, nil, 10).Parent = b
+	Ui.note("y", "Una vez iniciada, esta investigación no podrá cancelarse. Los recursos se descontarán al confirmar.").Parent = b
+	if block then
+		Ui.note("r", (st == "bloqueada" and why) or block, nil, "warn").Parent = b
+	end
+	local ok
+	ok = Ui.button("Confirmar investigación", "p", function()
+		-- El servidor vuelve a validar todo (recursos, requisitos, año, que no esté hecha ni en curso) y cobra una vez.
+		local r = App.request("startResearch", { id = n.id }, { button = ok, key = "investigar:" .. n.id })
+		if r.ok then
+			App.closeDialog()
+		else
+			App.renderDialog()
+		end
+	end, { name = "ConfirmarInvestigacion", icon = "flask", disabled = block ~= nil, why = block })
+	footer(box, { Ui.button("Volver", "default", App.closeDialog, { name = "VolverInvestigacion" }), ok })
 end
 
 -- No se pudo guardar el borrador del editor: el editor no se cierra solo; se puede reintentar sin perder nada.

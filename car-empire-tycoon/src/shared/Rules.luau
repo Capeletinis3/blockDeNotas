@@ -1035,10 +1035,26 @@ function Rules.researchCost(g: any, n: any): (number, number, number, any)
 	local age = Rules.year(g) - n.year - RR.diffusionGrace
 	local diffusion = age > 0 and math.max(RR.diffusionFloor, 1 - RR.diffusionPerYear * age) or 1
 	local mod = Rules.researchModifiers(g)
-	local pi = math.max(1, math.floor(n.rp * diffusion * (1 + R.aheadPi * ahead) * mod.pi + 0.5))
-	local money = math.floor(n.cost * diffusion * (1 + R.aheadMoney * ahead) * mod.money / 100 + 0.5) * 100
-	local days = math.max(1, math.floor(n.days * (1 + R.aheadDays * ahead) * mod.days + 0.5))
-	return pi, money, days, { ahead = ahead, diffusion = diffusion }
+	local function calc(a: number): (number, number, number)
+		local pi = math.max(1, math.floor(n.rp * diffusion * (1 + R.aheadPi * a) * mod.pi + 0.5))
+		local money = math.floor(n.cost * diffusion * (1 + R.aheadMoney * a) * mod.money / 100 + 0.5) * 100
+		local days = math.max(1, math.floor(n.days * (1 + R.aheadDays * a) * mod.days + 0.5))
+		return pi, money, days
+	end
+	local pi, money, days = calc(ahead)
+	-- Valores sin el recargo por adelanto (los mismos cálculos con ahead = 0), para mostrar el desglose.
+	local bPi, bMoney, bDays = calc(0)
+	return pi, money, days, {
+		ahead = ahead,
+		diffusion = diffusion,
+		base = { pi = bPi, money = bMoney, days = bDays },
+		penalty = { money = R.aheadMoney * ahead, pi = R.aheadPi * ahead, days = R.aheadDays * ahead },
+	}
+end
+
+-- Días efectivos de un proyecto (la creatividad del personal de Investigación acelera el avance).
+function Rules.researchEffectiveDays(g: any, days: number): number
+	return days / Rules.researchSpeed(g)
 end
 
 -- Segundos reales que le faltan a un proyecto a la velocidad indicada (1 día = realSecondsPerDay a 1×).

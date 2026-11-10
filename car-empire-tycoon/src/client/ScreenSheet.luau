@@ -160,6 +160,11 @@ function Sheet.build(parent: Instance, route: string)
 	head:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
 
 	local tabKey = tostring(App.ui.tabs[route] or "")
+	-- Pantallas con distribución propia (por ejemplo, Investigación: menú lateral fijo y catálogo desplazable).
+	if screen.custom then
+		screen.build(holder)
+		return
+	end
 	if narrow or screen.noSide then
 		local main = Ui.scroll({}, { name = "Principal", gap = 14, pad = phone and 12 or { 16, 18 } })
 		main.Parent = holder

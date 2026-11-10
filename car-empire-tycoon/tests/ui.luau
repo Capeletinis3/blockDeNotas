@@ -1132,7 +1132,7 @@ test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultá
 	for _, key in { "chasis", "motores", "seguridad", "tecnologia" } do
 		check(named("Pestana_" .. key) ~= nil, "pestaña " .. Catalog.RESEARCH[key].label)
 	end
-	check(named("PI") ~= nil and named("EnCurso") ~= nil, "panel de PI y de proyectos en curso")
+	check(named("PIDisponibles") ~= nil and named("FranjaEnCurso") ~= nil, "PI disponibles y franja de investigaciones en curso")
 	-- Una investigación disponible por categoría: se empiezan dos a la vez desde sus tarjetas.
 	local started = {}
 	for _, key in { "tecnologia", "seguridad" } do
@@ -1150,6 +1150,8 @@ test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultá
 			check(card ~= nil, key .. ": tarjeta de " .. pick.name)
 			check(card and card:FindFirstChild("Costo", true) ~= nil, key .. ": muestra dinero, PI y días")
 			clickN("Investigar_" .. pick.id)
+			eq(topKind(), "research", key .. ": abre la confirmación")
+			clickN("ConfirmarInvestigacion")
 			check(waitFor(function()
 				return Rules.researchProject(App.g, pick.id) ~= nil
 			end), key .. ": empieza " .. pick.name)
@@ -1175,8 +1177,12 @@ test("Etapa 3 en la interfaz: investigación por categorías, proyectos simultá
 	end
 	App.request("setSpeed", { speed = 1 })
 	App.go("investigacion")
+	App.ui.researchFilter = "completadas"
+	App.ui.tabs.investigacion = started[1] and started[1].category or "tecnologia"
+	App.forceRender()
 	M.task.wait()
-	check(find("COMPLETADAS") ~= nil, "sección de completadas")
+	check(started[1] and named("Nodo_" .. started[1].id) ~= nil and named("Nodo_" .. started[1].id):GetAttribute("estado") == "completada", "filtro de completadas")
+	App.ui.researchFilter = nil
 	-- Editor: nivel de motor, variante y equipamiento (solo lo investigado).
 	App.go("editor", { new = true, force = true })
 	M.task.wait()
@@ -2432,6 +2438,162 @@ test("Producción y Ventas: modelos usados no disponibles en el catálogo y rese
 	App.go("juego")
 	M.task.wait()
 	noErrors("Producción y Ventas")
+end)
+
+test("Centro de investigación: categorías, filtros, estados, franja de activas y confirmación antes de cobrar", function()
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Rules = require("./.build-ui/shared/Rules")
+	local R = App.screens.investigacion
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = 50000000
+	sess.game.rp = 100000
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.rp == 100000
+	end)
+	App.go("investigacion")
+	App.ui.researchFilter = nil
+	App.ui.tabs.investigacion = "chasis"
+	App.forceRender()
+	M.task.wait()
+	check(find("Centro de investigación") ~= nil, "título")
+	check(named("PIDisponibles") ~= nil and named("FranjaEnCurso") ~= nil and named("Panel_investigacion"):FindFirstChild("Lateral", true) == nil, "PI y franja arriba, sin panel derecho")
+	check(App.menuPaused(), "la pantalla pausa la empresa")
+	-- 1–2. Cuatro categorías en el menú lateral.
+	for _, c in R.CATEGORIES do
+		check(named("Pestana_" .. c[1]) ~= nil, "categoría " .. c[2])
+	end
+	eq(#R.CATEGORIES, 4, "exactamente cuatro")
+	-- 3–4. Todas las tecnologías (también futuras) y estados coherentes en cada filtro.
+	for _, c in R.CATEGORIES do
+		clickN("Pestana_" .. c[1])
+		M.task.wait()
+		eq(named("Pestana_" .. c[1]):GetAttribute("activa"), true, c[2] .. " queda activa")
+		local main, families = R.nodes(c[1])
+		local total = #main
+		for _, list in families do
+			total += #list
+		end
+		for _, f in R.FILTERS do
+			App.ui.researchFilter = f[1]
+			App.forceRender()
+			M.task.wait()
+			local seen = 0
+			for _, d in root:GetDescendants() do
+				if string.sub(d.Name, 1, 5) == "Nodo_" and M.visible(d) then
+					seen += 1
+					local id = string.sub(d.Name, 6)
+					local n = Catalog.researchNode(id)
+					local st = d:GetAttribute("estado")
+					check(R.matches(f[1], st), c[2] .. " / " .. f[2] .. ": " .. id .. " (" .. tostring(st) .. ")")
+					if n then
+						eq(st, (R.status(App.g, n)), "estado coherente de " .. id)
+					end
+				end
+			end
+			if f[1] == "todas" then
+				eq(seen, total, c[2] .. ": «Todas» muestra el catálogo completo (" .. total .. ")")
+			end
+		end
+	end
+	App.ui.researchFilter = nil
+	-- Lo que la empresa tiene desde la fundación figura como completado.
+	App.ui.tabs.investigacion = "chasis"
+	App.forceRender()
+	M.task.wait()
+	check(named("Nodo_inicio_brisa") ~= nil and named("Nodo_inicio_brisa"):GetAttribute("estado") == "incluida", "Sedán 1970 desde el inicio")
+	check(named("Nodo_inicio_duna") ~= nil, "Coupé 1970 desde el inicio")
+	App.ui.tabs.investigacion = "motores"
+	App.forceRender()
+	M.task.wait()
+	check(named("Nodo_inicio_motor_I4") ~= nil and named("Nodo_inicio_motor_I6") ~= nil and named("Nodo_inicio_variante_balanced") ~= nil, "I4 e I6 nivel 1 y variante Equilibrada desde el inicio")
+	-- Una tecnología demasiado adelantada se consulta pero no se inicia.
+	local far = nil
+	for _, n in Catalog.RESEARCH.motores.nodes do
+		if not far and n.year > Rules.year(App.g) + Catalog.RESEARCH_RULES.aheadMaxYears then
+			far = n
+		end
+	end
+	check(far ~= nil and named("Nodo_" .. far.id) ~= nil, "una tecnología futura se muestra: " .. tostring(far and far.name))
+	eq(named("Nodo_" .. far.id):GetAttribute("estado"), "bloqueada", "bloqueada")
+	check(named("Investigar_" .. far.id) == nil, "sin botón de investigar")
+	check(not App.request("startResearch", { id = far.id }).ok, "el servidor tampoco la inicia")
+	-- 9–12. Confirmación: abrirla no cobra; confirmar cobra una sola vez; adelanto con su recargo.
+	local pick = nil
+	for _, key in { "motores", "chasis", "seguridad", "tecnologia" } do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			local st, _, ahead = R.status(App.g, n)
+			if not pick and st == "disponible" and ahead > 0 then
+				pick = n
+			end
+		end
+	end
+	check(pick ~= nil, "hay una tecnología adelantada disponible")
+	App.ui.tabs.investigacion = pick.category
+	App.forceRender()
+	M.task.wait()
+	local card = named("Nodo_" .. pick.id)
+	check(card:GetAttribute("adelanto") > 0 and find("Adelantada") ~= nil, "la tarjeta marca el adelanto sin dejar de estar disponible")
+	local pi, cost, days, detail = Rules.researchCost(App.g, pick)
+	local a = detail.ahead
+	check(math.abs(detail.penalty.money - 0.15 * a) < 1e-9 and math.abs(detail.penalty.pi - 0.15 * a) < 1e-9 and math.abs(detail.penalty.days - 0.10 * a) < 1e-9, "recargo de " .. a .. " años: +" .. 15 * a .. " % dinero y PI, +" .. 10 * a .. " % días")
+	check(cost >= detail.base.money and pi >= detail.base.pi and days >= detail.base.days, "sobre los valores base")
+	local m0, rp0, n0 = App.g.money, App.g.rp, #App.g.research.projects
+	clickN("Investigar_" .. pick.id)
+	eq(topKind(), "research", "abre la confirmación")
+	for _, n in { "CostoInvestigacion", "PIInvestigacion", "DuracionInvestigacion", "Beneficios", "ConfirmarInvestigacion", "VolverInvestigacion" } do
+		check(named(n) ~= nil, "la confirmación muestra " .. n)
+	end
+	check(find("no podrá cancelarse") ~= nil and find("Los recursos se descontarán al confirmar") ~= nil, "advertencia")
+	check(find(Util.money(cost)) ~= nil, "costo definitivo")
+	M.task.wait()
+	check(App.g.money == m0 and App.g.rp == rp0 and #App.g.research.projects == n0, "abrir la confirmación no cobra")
+	clickN("VolverInvestigacion")
+	check(not dialogOpen() and App.g.money == m0, "Volver no cobra")
+	clickN("Investigar_" .. pick.id)
+	clickN("ConfirmarInvestigacion")
+	check(waitFor(function()
+		return Rules.researchProject(App.g, pick.id) ~= nil
+	end), "confirmar la inicia")
+	eq(App.g.money, m0 - cost, "descuenta el dinero una vez")
+	eq(App.g.rp, rp0 - pi, "y los PI una vez")
+	-- 10. Duplicada: el botón ya no aparece y el servidor la rechaza sin cobrar.
+	check(named("Investigar_" .. pick.id) == nil, "en curso: sin botón")
+	local again = App.request("startResearch", { id = pick.id })
+	check(not again.ok, "una segunda solicitud se rechaza")
+	eq(App.g.money, m0 - cost, "sin doble cobro")
+	-- 5 y 13. Otra en curso de otra categoría: la franja muestra las dos.
+	local other = nil
+	for _, key in { "tecnologia", "seguridad", "chasis", "motores" } do
+		if key ~= pick.category then
+			for _, n in Catalog.RESEARCH[key].nodes do
+				if not other and R.status(App.g, n) == "disponible" then
+					other = n
+				end
+			end
+		end
+	end
+	check(App.request("startResearch", { id = other.id }).ok, "segunda investigación simultánea")
+	App.ui.tabs.investigacion = "chasis"
+	App.forceRender()
+	M.task.wait()
+	check(named("Proyecto_" .. pick.id) ~= nil and named("Proyecto_" .. other.id) ~= nil, "la franja muestra las de todas las categorías")
+	-- 14. Con la pantalla abierta (empresa en pausa) no avanzan; cambiar de categoría no las reinicia.
+	local p0 = Rules.researchProject(App.g, pick.id).progress
+	advance(5)
+	eq(Rules.researchProject(App.g, pick.id).progress, p0, "en pausa no avanzan")
+	clickN("Pestana_tecnologia")
+	eq(Rules.researchProject(App.g, pick.id).progress, p0, "navegar no reinicia el progreso")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Centro de investigación")
 end)
 
 test("Eliminar empresa exige escribir el nombre", function()

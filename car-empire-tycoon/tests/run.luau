@@ -4040,6 +4040,97 @@ test("[PV] Reseñas una sola vez, demanda en cinco niveles del modelo real, prec
 	check(not Actions.createLot(g, ctx, { designId = id, qty = 10 }).ok, "agotado: no se fabrica otro lote del mismo modelo")
 end)
 
+
+-- Investigación definitiva ---------------------------------------------------------------------------------
+test("[ID] Investigación: recargo por adelanto exacto, tope de 5 años, cobro único, simultáneas, PI y guardado", function()
+	local g = newCompany("Ciencia SA")
+	local ctx = makeCtx(701)
+	g.money = 100000000
+	g.rp = 1000000
+	-- Recargo exacto: una tecnología sin requisitos que aparece 3 años después del año actual.
+	local three = nil
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if not three and #n.req == 0 and n.year == Rules.year(g) + 3 then
+				three = n
+			end
+		end
+	end
+	check(three ~= nil, "una tecnología de " .. (Rules.year(g) + 3))
+	local pi, money, days, d = Rules.researchCost(g, three)
+	eq(d.ahead, 3, "tres años de adelanto")
+	check(math.abs(d.penalty.money - 0.45) < 1e-9 and math.abs(d.penalty.pi - 0.45) < 1e-9 and math.abs(d.penalty.days - 0.30) < 1e-9, "+45 % dinero, +45 % PI, +30 % duración")
+	local R = Catalog.RESEARCH_RULES
+	eq(pi, math.max(1, math.floor(three.rp * (1 + 0.45) + 0.5)), "PI sobre la base")
+	eq(money, math.floor(three.cost * (1 + 0.45) / 100 + 0.5) * 100, "dinero sobre la base (redondeo a $100)")
+	eq(days, math.max(1, math.floor(three.days * (1 + 0.30) + 0.5)), "días sobre la base")
+	eq(d.base.money, math.floor(three.cost / 100 + 0.5) * 100, "valor base informado")
+	check(R.aheadMaxYears == 5, "adelanto máximo de cinco años")
+	-- Más de cinco años: no se puede iniciar.
+	local far = nil
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if not far and #n.req == 0 and n.year > Rules.year(g) + 5 then
+				far = n
+			end
+		end
+	end
+	local m0 = g.money
+	check(not Actions.startResearch(g, ctx, { id = far.id }).ok, "a más de cinco años no se inicia: " .. far.name)
+	eq(g.money, m0, "sin cobro")
+	-- Cobro único y sin duplicados (también con el mismo identificador de solicitud).
+	local rp0 = g.rp
+	check(Actions.startResearch(g, ctx, { id = three.id }).ok, "inicia la adelantada")
+	eq(g.money, m0 - money, "cobra el dinero una vez")
+	eq(g.rp, rp0 - pi, "y los PI una vez")
+	check(not Actions.startResearch(g, ctx, { id = three.id }).ok, "no se inicia dos veces")
+	eq(g.money, m0 - money, "sin doble cobro")
+	check(not Actions.cancelResearch(g, ctx, { id = three.id }).ok, "no se cancela")
+	-- Simultáneas y avance por días con el calendario.
+	local second = nil
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if not second and n.category ~= three.category and Rules.researchState(g, n) == "disponible" and Rules.researchAhead(g, n) == 0 then
+				second = n
+			end
+		end
+	end
+	check(Actions.startResearch(g, ctx, { id = second.id }).ok, "segunda simultánea")
+	eq(#g.research.projects, 2, "dos en curso")
+	-- Guardado y carga: progreso, PI y proyectos se conservan.
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 5)
+	local saved = jsonCopy(g)
+	check(GameState.validate(saved), "válida")
+	eq(#saved.research.projects, 2, "proyectos guardados")
+	eq(saved.research.projects[1].progress, g.research.projects[1].progress, "con su progreso")
+	check(math.abs(saved.rp - g.rp) < 1e-6, "PI guardados")
+	-- Al terminar se desbloquea una sola vez.
+	check(runUntil(saved, ctx, function()
+		return #saved.research.projects == 0
+	end, 200), "terminan")
+	check(Rules.has(saved, three.id) and Rules.has(saved, second.id), "desbloqueadas")
+	local count = 0
+	for _, id in saved.research.done do
+		count += (id == three.id) and 1 or 0
+	end
+	eq(count, 1, "sin desbloqueos duplicados")
+	-- Generación de PI: centro + líneas; el personal no la aumenta.
+	local h = newCompany("PI SA")
+	local before = Rules.piPerMinute(h)
+	Simulation.ensureMarket(h, ctx)
+	local hired = 0
+	for _, c in table.clone(h.candidates) do
+		if hired < 3 and Actions.hire(h, ctx, { candidateId = c.id, dept = "investigacion" }).ok then
+			hired += 1
+		end
+	end
+	check(hired > 0, "personal de Investigación contratado")
+	eq(Rules.piPerMinute(h), before, "los empleados de Investigación no suben los PI por minuto")
+	local rpA = h.rp
+	Simulation.simulate(h, ctx, Catalog.RULES.gameDayMinutes * 30)
+	check(h.rp > rpA, "los PI se generan con el tiempo simulado")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)
