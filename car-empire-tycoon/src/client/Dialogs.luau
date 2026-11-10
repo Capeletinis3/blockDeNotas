@@ -692,19 +692,24 @@ Dialogs.price = function(box: Frame, params: any, dd: any)
 	footer(box, { Ui.button("Cancelar", "default", App.closeDialog), ok })
 end
 
+-- No se pudo guardar el borrador del editor: el editor no se cierra solo; se puede reintentar sin perder nada.
 Dialogs.unsaved = function(box: Frame, params: any)
-	header(box, params.title or "Tenés cambios sin guardar", false)
+	header(box, "No se pudo guardar el borrador", false)
 	local b = body(box)
-	local pend = params.pending or 0
-	Ui.text("«" .. tostring(params.name) .. "» tiene cambios que no se guardaron como diseño. " .. (pend > 0 and ("Guardar cobra el desarrollo pendiente de " .. Util.money(pend) .. ".") or "Guardar no tiene costo adicional."), { size = 15, lineHeight = 1.5 }).Parent = b
-	local save
-	save = Ui.button(params.saveLabel or "Guardar y salir", "p", function()
-		params.onSave(save)
-	end, { name = "GuardarCambios" })
+	Ui.text("Los últimos cambios de «" .. tostring(params.name) .. "» todavía no llegaron al servidor" .. (params.reason and (" (" .. tostring(params.reason) .. ")") or "") .. ". Siguen en el editor: podés reintentar o seguir editando.", { size = 15, lineHeight = 1.5, name = "MotivoGuardado" }).Parent = b
+	Ui.note("y", "Si salís igual, los cambios que no se guardaron pueden perderse.").Parent = b
+	local retry
+	retry = Ui.button("Reintentar", "p", function()
+		Ui.setBusy(retry, true)
+		params.onRetry()
+		if retry.Parent then
+			Ui.setBusy(retry, false)
+		end
+	end, { name = "ReintentarGuardado", icon = "reset" })
 	footer(box, {
 		Ui.button("Seguir editando", "default", App.closeDialog, { name = "SeguirEditando" }),
-		Ui.button("Descartar", "d", params.onDiscard, { name = "Descartar" }),
-		save,
+		Ui.button("Salir igual", "d", params.onLeave, { name = "SalirIgual" }),
+		retry,
 	})
 end
 

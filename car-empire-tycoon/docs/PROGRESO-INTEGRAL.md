@@ -143,3 +143,13 @@ Respaldo: tag `respaldo-pre-editor-definitivo` y copia del `.rbxl` anterior.
 - **Modelos terminados inmutables:** `saveDesign` con `sourceId` se rechaza. «Basar un diseño nuevo» y «Nueva generación» abren un borrador nuevo.
 - Al finalizar, el editor lleva a Producción con acceso directo al lote del modelo (un lote por modelo; la cantidad se elige ahí).
 - Pruebas: `tests/run.luau` [ED] (servidor, migración) y `tests/ui.luau` «Editor definitivo» (recorrido completo con la sesión real).
+
+## Corrección: protección del guardado de borradores (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-guardado-borradores` y copia del `.rbxl` anterior.
+- **Revisiones.**
+  - Cada cambio sube `e.rev` y el servidor confirma la revisión guardada (`e.ackRev`).
+  - Hay una sola solicitud en curso por editor, y una respuesta vieja nunca baja la confirmación.
+  - El servidor descarta revisiones iguales o más viejas que la guardada (`Actions.saveDraft`). Los borradores sin revisión (partidas o clientes anteriores) se guardan como antes.
+- **Salida protegida.** `App.guardEditor` usa `ScreenEditor.ensureSaved`: espera un envío en curso y, si falta, guarda ya. Mientras el servidor no confirme, no se sale del editor, no se abre otro borrador ni un proyecto nuevo, no se vuelve al menú y no se finaliza.
+- **Aviso.** El diálogo «No se pudo guardar el borrador» muestra el motivo y ofrece Reintentar, Seguir editando o Salir igual (elección explícita). El borrador sigue en memoria y se reintenta solo cada 10 s, nunca con un envío por clic.

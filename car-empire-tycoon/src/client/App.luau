@@ -384,10 +384,17 @@ local FULLSCREEN = {
 	personal = true, compania = true, misiones = true, estadisticas = true, menu = true, nueva = true,
 }
 
--- El borrador del editor se guarda solo: antes de salir (por ejemplo, al volver al menú) se envía lo pendiente.
+--[[ Protección del borrador del editor: antes de salir del editor, abrir otro borrador o volver al menú se
+	comprueba que el servidor aceptó los últimos cambios. Si no, NO se sale: el borrador sigue en memoria y se
+	muestra el aviso para reintentar (o salir igual, si el jugador lo elige). ]]
 function App.guardEditor(proceed: () -> ())
-	if App.screens.editor and App.screens.editor.flush then
-		App.screens.editor.flush()
+	local ed = App.screens.editor
+	if ed and ed.ensureSaved then
+		local ok, why = ed.ensureSaved()
+		if not ok then
+			ed.askUnsaved(proceed, why)
+			return
+		end
 	end
 	proceed()
 end
@@ -412,7 +419,8 @@ function App.go(route: string, params: any?)
 		App.closeAllDialogs()
 		App.forceRender()
 	end
-	if App.ui.route == "editor" and route ~= "editor" then
+	local ed = App.screens.editor
+	if App.ui.route == "editor" and (route ~= "editor" or (ed and ed.wouldSwitch and ed.wouldSwitch(params))) then
 		App.guardEditor(doIt)
 	else
 		doIt()

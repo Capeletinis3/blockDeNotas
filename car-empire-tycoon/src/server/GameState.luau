@@ -334,7 +334,7 @@ function GameState.validate(g: any): (boolean, string?)
 			return fail("Hay un borrador sin identificador válido.")
 		end
 		draftIds[dr.id] = true
-		if not isInt(dr.step, 1, 5) or not isInt(dr.visited, 1, 5) or (dr.newGenOf ~= nil and type(dr.newGenOf) ~= "string") then
+		if not isInt(dr.step, 1, 5) or not isInt(dr.visited, 1, 5) or (dr.newGenOf ~= nil and type(dr.newGenOf) ~= "string") or (dr.rev ~= nil and not isInt(dr.rev, 0)) then
 			return fail("Un borrador tiene la etapa dañada.")
 		end
 		local e = checkSpec(dr.spec, "Borrador")

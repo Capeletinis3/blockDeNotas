@@ -330,13 +330,22 @@ local function newEditor(draft: any, o: { [string]: any }?): any
 	return {
 		draft = draft, draftId = opts.draftId or HttpService:GenerateGUID(false), step = step, visited = math.max(opts.visited or 1, step),
 		newGenOf = opts.newGenOf, companyId = App.g and App.g.company.id or nil, touched = opts.touched == true, pendingSync = false,
+		rev = opts.rev or 0, ackRev = opts.rev or 0, onServer = opts.onServer == true,
 		start = Util.deepCopy(draft), tabs = {}, cmp = nil, colorTarget = "primary", undo = {}, redo = {}, compare = false, split = 0.5,
 		hideUI = false, hotspots = true,
 	}
 end
 
--- Guardado del borrador en la partida (no en DataStore en cada clic: el servidor lo guarda con la empresa).
+--[[ Guardado del borrador en la partida (no en DataStore en cada clic: el servidor lo guarda con la empresa).
+	Cada cambio sube e.rev; e.ackRev es la última revisión que el servidor confirmó. Hay como mucho una solicitud
+	en curso por editor, una respuesta vieja nunca baja e.ackRev y el servidor descarta revisiones más viejas que
+	la guardada: así un envío atrasado no pisa cambios más nuevos. Si falla, el borrador sigue en memoria y se
+	reintenta solo (cada RETRY_DELAY segundos), nunca con un envío por clic. ]]
+local RETRY_DELAY = 10
+Screen.RETRY_DELAY = RETRY_DELAY
 local syncToken = 0
+local queueSync: (number?) -> () = nil :: any
+
 local function syncNow(): boolean
 	local e = ed()
 	if not e or not App.g or not e.touched or e.finalized then
@@ -345,31 +354,46 @@ local function syncNow(): boolean
 	if e.companyId ~= App.g.company.id then
 		return false
 	end
-	e.pendingSync = false
+	if e.ackRev >= e.rev then
+		e.pendingSync = false
+		return true
+	end
+	if e.syncing then
+		return false -- ya hay un envío en curso: lo pendiente sale cuando termine
+	end
+	local rev = e.rev
 	e.syncing = true
-	local r = App.request("saveDraft", { draftId = e.draftId, draft = Util.deepCopy(e.draft), step = e.step, visited = e.visited, newGenOf = e.newGenOf }, { key = e.draftId })
+	local r = App.request("saveDraft", { draftId = e.draftId, draft = Util.deepCopy(e.draft), step = e.step, visited = e.visited, newGenOf = e.newGenOf, rev = rev }, { key = "borrador:" .. e.draftId })
 	e.syncing = false
 	if r.ok then
+		e.ackRev = math.max(e.ackRev, rev)
+		e.onServer = true
 		e.syncError = nil
-		e.saved = true
-	else
-		e.pendingSync = true
-		e.syncError = if r.pending then nil else (r.msg ~= "" and r.msg or "Sin respuesta del servidor")
+	elseif not r.pending then
+		local first = e.syncError == nil
+		e.syncError = (type(r.msg) == "string" and r.msg ~= "") and r.msg or "sin respuesta del servidor"
+		-- Los rechazos del servidor llegan sin aviso (quiet); los de red ya los avisa App.request.
+		if first and r.quiet then
+			App.toast("error", "No se pudo guardar el borrador «" .. tostring(e.draft.name) .. "»: " .. e.syncError .. " Tus cambios siguen en el editor.")
+		end
 	end
-	return r.ok == true
+	e.pendingSync = e.ackRev < e.rev
+	if e.pendingSync and ed() == e then
+		-- Cambios hechos mientras se guardaba (o un fallo): otro intento más tarde.
+		queueSync(if r.ok then SYNC_DELAY else RETRY_DELAY)
+	end
+	return not e.pendingSync
 end
 Screen.syncNow = syncNow
 
-local function scheduleSync()
+queueSync = function(delay: number?)
 	local e = ed()
 	if not e then
 		return
 	end
-	e.touched = true
-	e.pendingSync = true
 	syncToken += 1
 	local token = syncToken
-	task.delay(SYNC_DELAY, function()
+	task.delay(delay or SYNC_DELAY, function()
 		if token == syncToken and ed() == e and e.pendingSync then
 			syncNow()
 			if App.ui.route == "editor" and ed() == e then
@@ -378,14 +402,80 @@ local function scheduleSync()
 		end
 	end)
 end
+
+-- Marca un cambio del borrador: nueva revisión y guardado diferido (unos segundos sin cambios).
+local function scheduleSync()
+	local e = ed()
+	if not e then
+		return
+	end
+	e.touched = true
+	e.rev += 1
+	e.pendingSync = true
+	queueSync(SYNC_DELAY)
+end
 Screen.scheduleSync = scheduleSync
 
--- Guarda ya lo pendiente (al salir del editor, al cambiar de borrador o antes de volver al menú).
+-- Intento inmediato de lo pendiente (sin garantía: para salir del editor se usa ensureSaved).
 function Screen.flush()
 	local e = ed()
 	if e and e.pendingSync then
 		syncNow()
 	end
+end
+
+--[[ ¿Están los últimos cambios aceptados por el servidor? Espera un envío en curso y, si falta, guarda ya.
+	Devuelve (true) o (false, motivo). App.guardEditor no deja salir del editor mientras sea false. ]]
+function Screen.ensureSaved(): (boolean, string?)
+	local e = ed()
+	if not e or not App.g or not e.touched or e.finalized or e.companyId ~= App.g.company.id then
+		return true, nil
+	end
+	local t0 = os.clock()
+	while e.syncing and os.clock() - t0 < 15 do
+		task.wait(0.05)
+	end
+	if e.ackRev >= e.rev then
+		return true, nil
+	end
+	syncNow()
+	if e.ackRev >= e.rev then
+		return true, nil
+	end
+	return false, e.syncError or (e.syncing and "el guardado anterior todavía no terminó" or "el servidor no confirmó el guardado")
+end
+
+-- ¿Abrir el editor con estos parámetros reemplazaría el borrador abierto por otro?
+function Screen.wouldSwitch(params: any): boolean
+	local e = ed()
+	if not e or not params then
+		return false
+	end
+	if params.draftId then
+		return params.draftId ~= e.draftId
+	end
+	return params.new == true or params.fresh == true or params.fromTemplate ~= nil or params.newGenOf ~= nil or params.basedOn ~= nil or params.designId ~= nil
+end
+
+-- Aviso cuando no se pudo guardar: reintentar, seguir editando o salir igual (elección explícita del jugador).
+function Screen.askUnsaved(proceed: () -> (), why: string?)
+	local e = ed()
+	local params: any = { name = e and e.draft.name or "", reason = why }
+	params.onRetry = function()
+		local ok, again = Screen.ensureSaved()
+		if ok then
+			App.closeDialog()
+			proceed()
+		else
+			params.reason = again
+			App.renderDialog()
+		end
+	end
+	params.onLeave = function()
+		App.closeDialog()
+		proceed()
+	end
+	App.openDialog("unsaved", params)
 end
 
 -- Después de un cambio: comparación antes/después (cálculo real de DesignCalc) y guardado diferido.
@@ -453,7 +543,7 @@ local function latestDraft(g: any): any
 end
 
 local function fromRecord(dr: any): any
-	return newEditor(Util.deepCopy(dr.spec), { draftId = dr.id, step = dr.step, visited = dr.visited, newGenOf = dr.newGenOf, touched = true })
+	return newEditor(Util.deepCopy(dr.spec), { draftId = dr.id, step = dr.step, visited = dr.visited, newGenOf = dr.newGenOf, touched = true, rev = dr.rev or 0, onServer = true })
 end
 
 -- Borrador nuevo a partir de un modelo, una plantilla o una generación anterior.
@@ -1581,11 +1671,16 @@ local function doFinalize()
 		return
 	end
 	e.finalizing = true
-	e.touched = true
-	-- El borrador tiene que existir en el servidor (si nunca se guardó, se guarda ahora).
-	if not syncNow() then
+	-- El borrador tiene que existir en el servidor con la última revisión (si nunca se guardó, se guarda ahora).
+	if not e.onServer and e.ackRev >= e.rev then
+		e.touched = true
+		e.rev += 1
+		e.pendingSync = true
+	end
+	local saved, why = Screen.ensureSaved()
+	if not saved then
 		e.finalizing = false
-		App.toast("error", e.syncError or "No se pudo guardar el borrador. Probá de nuevo.")
+		App.toast("error", "No se pudo guardar el borrador antes de finalizar: " .. tostring(why) .. ". Tus cambios siguen en el editor; probá de nuevo.")
 		return
 	end
 	local r = App.request("finalizeDesign", { draftId = e.draftId, draft = Util.deepCopy(e.draft) }, { key = "finalizar" })
@@ -1807,15 +1902,16 @@ end
 
 -- Nuevo diseño: el actual queda guardado como borrador (no se pierde nada).
 function Screen.newProject()
-	Screen.flush()
-	App.closeAllDialogs()
-	local b = DesignCalc.firstBase(App.g)
-	App.ui.editor = newEditor(DesignCalc.newDraft(App.g, b.id))
-	if App.ui.route == "editor" then
-		App.forceRender()
-	else
-		App.go("editor")
-	end
+	App.guardEditor(function()
+		App.closeAllDialogs()
+		local b = DesignCalc.firstBase(App.g)
+		App.ui.editor = newEditor(DesignCalc.newDraft(App.g, b.id))
+		if App.ui.route == "editor" then
+			App.forceRender()
+		else
+			App.go("editor")
+		end
+	end)
 end
 
 -- Borradores de la empresa (para el diálogo de borradores y modelos).

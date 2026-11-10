@@ -331,7 +331,10 @@ end
 
 --[[ Guarda (o crea) un borrador en la partida. Se llama cada pocos segundos mientras se edita y al salir del
 	editor; el guardado en DataStore lo hace el autoguardado de la sesión (no se escribe en cada clic).
-	payload = { draftId, draft = configuración, step, visited, newGenOf? } ]]
+	payload = { draftId, draft = configuración, step, visited, newGenOf?, rev? }
+	rev = revisión del cliente (sube con cada cambio). Si llega una revisión igual o más vieja que la guardada (un
+	reintento o una respuesta atrasada), se responde bien pero no se pisa lo más nuevo. Sin rev (versiones
+	anteriores del cliente) se guarda como antes. ]]
 function Actions.saveDraft(g: any, _ctx: any, payload: any): any
 	-- Los errores vuelven sin aviso emergente: el editor los muestra en el estado del borrador.
 	local function quietFail(msg: string): any
@@ -348,7 +351,11 @@ function Actions.saveDraft(g: any, _ctx: any, payload: any): any
 	end
 	local step = isInt(payload.step, 1, 5) and payload.step or 1
 	local visited = isInt(payload.visited, 1, 5) and payload.visited or step
+	local rev = isInt(payload.rev, 0, 2 ^ 31) and payload.rev or nil
 	local dr = findById(g.drafts, payload.draftId)
+	if dr and rev and dr.rev and rev <= dr.rev then
+		return { ok = true, quiet = true, draftId = dr.id, rev = dr.rev, stale = true }
+	end
 	if not dr then
 		if #g.drafts >= Catalog.RULES.maxDrafts then
 			return quietFail("Tenés " .. Catalog.RULES.maxDrafts .. " borradores: finalizá o eliminá alguno para empezar otro.")
@@ -362,7 +369,10 @@ function Actions.saveDraft(g: any, _ctx: any, payload: any): any
 	dr.step = step
 	dr.visited = math.max(dr.visited or 1, visited, step)
 	dr.updatedDay = g.time.day
-	return { ok = true, quiet = true, draftId = dr.id }
+	if rev then
+		dr.rev = rev
+	end
+	return { ok = true, quiet = true, draftId = dr.id, rev = dr.rev }
 end
 
 function Actions.deleteDraft(g: any, _ctx: any, payload: any): any

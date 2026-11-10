@@ -3752,6 +3752,40 @@ test("[ED] Partidas anteriores: el esquema 15 pasa al 16 con borradores vacíos 
 	check(Actions.createLot(m, ctx, { designId = id, qty = 5 }).ok, "y se puede fabricar")
 end)
 
+
+test("[ED] Revisiones del borrador: una respuesta o un reintento atrasado no pisan cambios más nuevos", function()
+	local g = newCompany("Revisión Motors")
+	local ctx = makeCtx(43)
+	local function named(n: string): any
+		return draftFor(g, "brisa", n)
+	end
+	check(Actions.saveDraft(g, ctx, { draftId = "rev-prueba", draft = named("Versión tres"), rev = 3 }).ok, "revisión 3")
+	local old = Actions.saveDraft(g, ctx, { draftId = "rev-prueba", draft = named("Versión dos"), rev = 2 })
+	check(old.ok and old.stale, "una revisión vieja se responde bien pero no se aplica")
+	eq(g.drafts[1].spec.name, "Versión tres", "lo más nuevo se conserva")
+	local same = Actions.saveDraft(g, ctx, { draftId = "rev-prueba", draft = named("Otra cosa"), rev = 3 })
+	check(same.ok and same.stale, "reenviar la misma revisión no duplica ni pisa")
+	eq(g.drafts[1].spec.name, "Versión tres", "sigue igual")
+	eq(#g.drafts, 1, "sin borradores duplicados")
+	check(Actions.saveDraft(g, ctx, { draftId = "rev-prueba", draft = named("Versión cuatro"), rev = 4 }).ok, "revisión 4")
+	eq(g.drafts[1].spec.name, "Versión cuatro", "la revisión nueva se aplica")
+	eq(g.drafts[1].rev, 4, "y queda registrada")
+	-- Clientes sin revisión (versiones anteriores) siguen guardando como antes.
+	check(Actions.saveDraft(g, ctx, { draftId = "rev-prueba", draft = named("Sin revisión") }).ok, "sin rev")
+	eq(g.drafts[1].spec.name, "Sin revisión", "se guarda")
+	eq(g.drafts[1].rev, 4, "la revisión guardada no cambia")
+	check(Actions.saveDraft(g, ctx, { draftId = "viejo-cliente", draft = named("Viejo") }).ok, "borrador nuevo sin revisión")
+	eq(g.drafts[2].rev, nil, "sin revisión registrada")
+	check(GameState.validate(g), "la partida es válida con y sin revisiones")
+	local bad = jsonCopy(g)
+	bad.drafts[1].rev = -1
+	check(not GameState.validate(bad), "una revisión inválida se detecta")
+	bad.drafts[1].rev = 1.5
+	check(not GameState.validate(bad), "también una no entera")
+	local loaded = jsonCopy(g)
+	check(GameState.validate(loaded) and loaded.drafts[1].rev == 4, "la revisión sobrevive a guardar y cargar")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

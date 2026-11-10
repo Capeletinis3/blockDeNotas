@@ -803,7 +803,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	end
 	return {
 		ok = result.ok, msg = result.msg, quiet = result.quiet, duplicate = result.duplicate,
-		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid, draftId = result.draftId,
+		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid, draftId = result.draftId, rev = result.rev,
 	}
 end
 

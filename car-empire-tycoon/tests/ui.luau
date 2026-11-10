@@ -2144,6 +2144,150 @@ test("Editor definitivo: cinco etapas guiadas, selección inmediata, comparació
 	noErrors("Editor definitivo")
 end)
 
+test("Borrador: si el guardado falla no se sale del editor, se avisa, se reintenta y nada viejo pisa lo nuevo", function()
+	local Actions = require("./.build-ui/server/Actions")
+	local Ed = App.screens.editor
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	App.go("juego")
+	M.task.wait()
+	App.go("editor", { new = true })
+	M.task.wait()
+	local real = Actions.handlers.saveDraft
+	local calls = 0
+	local failing: string? = nil
+	Actions.handlers.saveDraft = function(g: any, ctx: any, p: any): any
+		calls += 1
+		if failing then
+			return { ok = false, msg = failing, quiet = true }
+		end
+		return real(g, ctx, p)
+	end
+	local function serverDraft(id: string): any
+		for _, x in Sessions.instance.list[player].game.drafts do
+			if x.id == id then
+				return x
+			end
+		end
+		return nil
+	end
+	-- 6. Autoguardado diferido: varios clics, un solo envío.
+	for i = 1, 6 do
+		Ed.change(function(d)
+			d.quality = i % 2
+		end)
+	end
+	eq(calls, 0, "ningún envío por clic")
+	M.task.wait(Ed.SYNC_DELAY + 0.3)
+	M.task.wait()
+	eq(calls, 1, "un solo envío después de la pausa")
+	local e = App.ui.editor
+	local id = e.draftId
+	eq(e.ackRev, e.rev, "el servidor confirmó la última revisión")
+	check(not e.pendingSync, "nada pendiente")
+	-- 5. Una revisión vieja (respuesta o reintento atrasado) no pisa lo guardado.
+	local stale = Util.deepCopy(e.draft)
+	stale.name = "Versión vieja"
+	check(App.request("saveDraft", { draftId = id, draft = stale, step = 1, visited = 1, rev = e.rev - 1 }).ok, "el servidor responde sin error")
+	check(serverDraft(id).spec.name ~= "Versión vieja", "pero no aplica la revisión vieja")
+	-- Sin cambios nuevos, salir no envía nada más.
+	calls = 0
+	check(Ed.ensureSaved(), "sin cambios pendientes ya está guardado")
+	eq(calls, 0, "y no hace falta reenviar")
+	-- 1–4. Falla el guardado: no se sale, se avisa y el borrador sigue en memoria.
+	failing = "Servidor ocupado (prueba)."
+	Ed.change(function(d)
+		d.name = "Cambio Importante"
+	end)
+	App.go("juego")
+	M.task.wait()
+	eq(App.ui.route, "editor", "con cambios sin confirmar no sale del editor")
+	eq(topKind(), "unsaved", "muestra el aviso")
+	check(find("Servidor ocupado") ~= nil, "con el motivo")
+	eq(App.ui.editor, e, "el mismo editor")
+	eq(App.ui.editor.draft.name, "Cambio Importante", "con las selecciones intactas")
+	check(e.syncError ~= nil and e.pendingSync, "el cambio queda pendiente")
+	check(serverDraft(id).spec.name ~= "Cambio Importante", "el servidor no lo tiene")
+	clickN("ReintentarGuardado")
+	M.task.wait()
+	eq(App.ui.route, "editor", "reintentar con el servidor fallando tampoco sale")
+	eq(topKind(), "unsaved", "y el aviso sigue")
+	clickN("SeguirEditando")
+	check(not dialogOpen() and App.ui.route == "editor", "seguir editando")
+	App.forceRender()
+	M.task.wait()
+	check(string.find(named("EstadoBorrador").Text, "No se pudo guardar", 1, true) ~= nil, "la barra muestra que no se guardó")
+	-- Volver al menú o abrir otro borrador tampoco descarta lo pendiente.
+	App.leaveToMenu()
+	M.task.wait()
+	check(App.g ~= nil and App.ui.route == "editor" and topKind() == "unsaved", "volver al menú se detiene")
+	App.closeAllDialogs()
+	App.go("editor", { new = true })
+	M.task.wait()
+	eq(App.ui.editor.draftId, id, "otro borrador no reemplaza al pendiente")
+	App.closeAllDialogs()
+	Ed.newProject()
+	M.task.wait()
+	eq(App.ui.editor.draftId, id, "un proyecto nuevo tampoco")
+	App.closeAllDialogs()
+	Ed.goStep(App.ui.editor.visited)
+	Ed.doFinalize()
+	M.task.wait()
+	eq(App.ui.editor.draftId, id, "finalizar no avanza sin el borrador guardado")
+	App.closeAllDialogs()
+	-- 3. Con el servidor sano, reintentar guarda la última versión y recién ahí sale.
+	App.go("juego")
+	M.task.wait()
+	eq(topKind(), "unsaved", "sigue avisando mientras falla")
+	failing = nil
+	clickN("ReintentarGuardado")
+	M.task.wait()
+	eq(App.ui.route, "juego", "guardado confirmado: sale")
+	eq(serverDraft(id).spec.name, "Cambio Importante", "el servidor tiene el último cambio")
+	check(not e.pendingSync and e.syncError == nil and e.ackRev == e.rev, "sin pendientes ni errores")
+	-- «Salir igual» es una elección explícita: el borrador queda en memoria y se sigue protegiendo.
+	App.go("editor", { draftId = id })
+	M.task.wait()
+	failing = "Sin conexión (prueba)."
+	Ed.change(function(d)
+		d.name = "Cambio Dos"
+	end)
+	App.go("juego")
+	M.task.wait()
+	clickN("SalirIgual")
+	M.task.wait()
+	eq(App.ui.route, "juego", "salir igual sale")
+	eq(App.ui.editor and App.ui.editor.draft.name, "Cambio Dos", "el borrador sigue en memoria")
+	App.leaveToMenu()
+	M.task.wait()
+	check(App.g ~= nil and topKind() == "unsaved", "volver al menú vuelve a avisar")
+	failing = nil
+	clickN("ReintentarGuardado")
+	check(waitFor(function()
+		return App.g == nil
+	end), "guardado: vuelve al menú")
+	Actions.handlers.saveDraft = real
+	App.request("selectSlot", { slot = "1" })
+	check(waitFor(function()
+		return App.g ~= nil
+	end), "carga la empresa")
+	local back = nil
+	for _, x in App.g.drafts do
+		if x.id == id then
+			back = x
+		end
+	end
+	check(back ~= nil and back.spec.name == "Cambio Dos", "el último cambio sobrevivió a la falla")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Protección del borrador")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()
