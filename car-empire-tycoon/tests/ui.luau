@@ -4144,6 +4144,739 @@ test("Bonificaciones del mobiliario en la interfaz: tarjetas con aporte real, Be
 	noErrors("Bonificaciones del mobiliario")
 end)
 
+
+-- Etapa 5: empleados visibles en el editor de oficinas -------------------------------------------------------
+do
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Nav = require("./.build-ui/shared/OfficeNavigation")
+	local Rules = require("./.build-ui/shared/Rules")
+	local Act = require("./.build-ui/client/OfficeActivities")
+	local Mgr = require("./.build-ui/client/OfficeNPCManager")
+	local Anim = require("./.build-ui/client/OfficeAnimations")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	local DEPTS = { "administracion", "investigacion", "marketing", "produccion" }
+
+	local function staff(n: number, prefix: string, dept: string?): { any }
+		local out = {}
+		for i = 1, n do
+			local d = dept or DEPTS[(i - 1) % #DEPTS + 1]
+			table.insert(out, { id = prefix .. i, name = "Empleado " .. prefix .. i, spec = d, dept = d, salary = 1000, skills = { organizacion = 40 }, potential = { organizacion = 80 }, months = 1, hiredDay = 0, adapt = {}, status = "activo" })
+		end
+		return out
+	end
+
+	local function put(o: any, item: string, room: string, x: number, y: number, rot: number?): string
+		local req = { room = room, x = x, y = y, rot = rot or 0 }
+		local ok, why = Office.validatePlacement(o, OfficeCatalog.item(item), req)
+		assert(ok, item .. " en (" .. x .. ", " .. y .. "): " .. tostring(why))
+		local id = Office.newInstanceId(o)
+		table.insert(o.placed, { id = id, item = item, room = room, x = x, y = y, rot = req.rot })
+		o.rev = (o.rev or 0) + 1
+		return id
+	end
+
+	-- Copia de la oficina (como la que llega con cada partida nueva del servidor).
+	local function copy(o: any): any
+		local c = table.clone(o)
+		c.placed = {}
+		for _, p in o.placed do
+			table.insert(c.placed, table.clone(p))
+		end
+		return c
+	end
+
+	local function npcModels(): number
+		local f = Scene.folder()
+		local holder = f and f:FindFirstChild("Empleados")
+		local n = 0
+		for _, d in holder and holder:GetChildren() or {} do
+			if d:IsA("Model") and d:GetAttribute("employeeId") then
+				n += 1
+			end
+		end
+		return n
+	end
+
+	local function heartbeatHandlers(): number
+		local sigs = rawget(M.services.RunService, "__signals")
+		local hb = sigs and sigs.Heartbeat
+		local n = 0
+		for _, c in hb and hb.handlers or {} do
+			if c.connected then
+				n += 1
+			end
+		end
+		return n
+	end
+
+	-- Invariantes de un paso: dentro de su habitación, nunca dentro de un mueble (salvo sentado en el suyo),
+	-- reservas sin repetir y nadie parado en el lugar de otro.
+	local function invariants(world: any): (boolean, string?)
+		local owner = {}
+		local list = Act.list(world)
+		for _, npc in list do
+			local rd = world.rooms[npc.room]
+			if not rd then
+				return false, npc.id .. " sin habitación"
+			end
+			local r = rd.room
+			if npc.x < 0 or npc.y < 0 or npc.x > r.w or npc.y > r.d then
+				return false, string.format("%s fuera de %s (%.2f, %.2f)", npc.id, npc.room, npc.x, npc.y)
+			end
+			if not Act.isSeated(npc) and not Nav.clearAt(rd.grid, npc.x, npc.y) then
+				return false, string.format("%s dentro de un mueble o pegado a la pared (%.2f, %.2f) en %s", npc.id, npc.x, npc.y, npc.state)
+			end
+			for _, k in npc.activity and npc.activity.keys or {} do
+				if owner[k] and owner[k] ~= npc.id then
+					return false, "dos empleados con el mismo punto " .. k
+				end
+				owner[k] = npc.id
+			end
+		end
+		for i = 1, #list do
+			for k = i + 1, #list do
+				local a, b = list[i], list[k]
+				if a.room == b.room and a.activity and b.activity and a.state ~= "Walking" and b.state ~= "Walking" and not a.phase and not b.phase then
+					if math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) < 2 * Nav.RADIUS - 1e-6 then
+						return false, a.id .. " y " .. b.id .. " superpuestos"
+					end
+				end
+			end
+		end
+		return true, nil
+	end
+
+	test("Empleados visibles (1–7): solo empleados reales, límite configurable, sin duplicados, despidos y cambio de empresa", function()
+		local o = Office.new(1)
+		Scene.buildRooms(o)
+		Scene.syncFurniture(o)
+		local company = { id = "npc-A" }
+		local g = { company = company, office = o, employees = {} }
+		local hb0 = heartbeatHandlers()
+		Mgr.open(g)
+		eq(#Mgr.world().order, 0, "1. sin empleados contratados no aparece nadie")
+		eq(npcModels(), 0, "1. ningún personaje en la escena")
+		local v, h = Mgr.counts(g)
+		check(v == 0 and h == 0, "1. 0 visibles de 0 contratados")
+		eq(heartbeatHandlers(), hb0 + 1, "una sola conexión a Heartbeat")
+		-- 2 y 4. Tres contratados: tres personajes, cada uno de un empleado real con su nombre.
+		local three = staff(3, "a")
+		local before = serde.encode("json", three)
+		g = { company = company, office = o, employees = three }
+		Mgr.sync(g)
+		eq(#Mgr.world().order, 3, "2. con tres contratados se ven tres")
+		eq(npcModels(), 3, "2. tres personajes")
+		local ids = {}
+		for _, npc in Act.list(Mgr.world()) do
+			local e
+			for _, x in three do
+				if x.id == npc.id then
+					e = x
+				end
+			end
+			local rig = Mgr.rig(npc.id)
+			check(e ~= nil, "4. " .. npc.id .. " es un empleado real")
+			check(e and npc.name == e.name and rig.label.Text == e.name and rig.model:GetAttribute("employeeId") == e.id, "4. nombre igual al de Personal")
+			check(not ids[npc.id], "5. sin ids repetidos")
+			ids[npc.id] = true
+		end
+		eq(serde.encode("json", three), before, "crear los personajes no cambia ningún dato de los empleados")
+		-- Cambio de departamento: se actualiza sin rearmar el personaje.
+		local rigA1 = Mgr.rig("a1")
+		local model = rigA1.model
+		local moved = table.clone(three)
+		moved[1] = table.clone(three[1])
+		moved[1].dept = "marketing"
+		Mgr.sync({ company = company, office = o, employees = moved })
+		check(Mgr.rig("a1").model == model and Mgr.npc("a1").dept == "marketing", "cambio de departamento sin rearmar el personaje")
+		eq(Mgr.info("a1").dept, "Marketing", "el panel muestra el departamento nuevo")
+		-- 5. Datos con el mismo empleado dos veces: un solo personaje.
+		local dup = table.clone(moved)
+		table.insert(dup, moved[2])
+		Mgr.sync({ company = company, office = o, employees = dup })
+		eq(#Mgr.world().order, 3, "5. el mismo empleado repetido no duplica su personaje")
+		eq(npcModels(), 3, "5. tres modelos")
+		-- 7. Despedir: su personaje desaparece y libera lo que tenía reservado.
+		local fired = { moved[1], moved[3] }
+		Mgr.step(5)
+		Mgr.sync({ company = company, office = o, employees = fired })
+		check(Mgr.npc("a2") == nil and Mgr.rig("a2") == nil, "7. el despedido ya no se ve")
+		eq(npcModels(), 2, "7. quedan dos personajes")
+		for _, who in Mgr.world().res do
+			check(who ~= "a2", "7. sin reservas del despedido")
+		end
+		-- Contratar uno nuevo: entra por la puerta.
+		local hired = table.clone(fired)
+		table.insert(hired, staff(1, "n")[1])
+		Mgr.sync({ company = company, office = o, employees = hired })
+		local newbie = Mgr.npc("n1")
+		check(newbie ~= nil, "el contratado nuevo se incorpora")
+		local entry = false
+		local grid = Mgr.world().rooms[newbie.room].grid
+		for _, idx in grid.entries do
+			local x, y = Nav.nodePos(grid, idx)
+			if math.abs(x - newbie.x) < 1e-6 and math.abs(y - newbie.y) < 1e-6 then
+				entry = true
+			end
+		end
+		check(entry, "el nuevo aparece en un acceso de la habitación")
+		-- 6. Otra empresa: los personajes anteriores desaparecen por completo.
+		local oldModels = {}
+		for _, rig in Mgr._state.rigs do
+			table.insert(oldModels, rig.model)
+		end
+		Mgr.sync({ company = { id = "npc-B" }, office = Office.new(1), employees = staff(2, "b") })
+		for _, m in oldModels do
+			check(m.Parent == nil, "6. personaje de la empresa anterior destruido")
+		end
+		for _, npc in Act.list(Mgr.world()) do
+			check(string.sub(npc.id, 1, 1) == "b", "6. solo empleados de la empresa nueva")
+		end
+		eq(npcModels(), 2, "6. dos personajes nuevos")
+		eq(heartbeatHandlers(), hb0 + 1, "6. sigue habiendo una sola conexión")
+		Mgr.close()
+		eq(heartbeatHandlers(), hb0, "al cerrar se desconecta")
+		Scene.destroy()
+		-- 3. Cincuenta contratados en el nivel 5: se respeta el límite configurable, repartidos por habitación.
+		local o5 = Office.new(5)
+		Scene.buildRooms(o5)
+		local fifty = staff(50, "c")
+		Mgr.open({ company = { id = "npc-C" }, office = o5, employees = fifty })
+		local w = Mgr.world()
+		eq(#w.order, Act.MAX_VISIBLE_NPCS, "3. con 50 contratados se ven MAX_VISIBLE_NPCS (" .. Act.MAX_VISIBLE_NPCS .. ")")
+		eq(npcModels(), Act.MAX_VISIBLE_NPCS, "3. igual cantidad de personajes")
+		local per, used = {}, 0
+		for _, npc in Act.list(w) do
+			per[npc.room] = (per[npc.room] or 0) + 1
+		end
+		for id, n in per do
+			used += 1
+			check(n <= w.rooms[id].cap, "3. " .. id .. ": no se amontonan (" .. n .. " de " .. w.rooms[id].cap .. ")")
+		end
+		check(used >= 2, "3. repartidos entre varias habitaciones (" .. used .. ")")
+		local v5, h5 = Mgr.counts({ employees = fifty })
+		check(v5 == 10 and h5 == 50, "3. 10 visibles de 50 contratados")
+		local firstSet = table.concat(w.order, ",")
+		Mgr.close()
+		Mgr.open({ company = { id = "npc-C" }, office = o5, employees = fifty })
+		eq(table.concat(Mgr.world().order, ","), firstSet, "3. elección estable: los mismos al volver a abrir")
+		Mgr.close()
+		Act.MAX_VISIBLE_NPCS = 4
+		Mgr.open({ company = { id = "npc-C" }, office = o5, employees = fifty })
+		eq(#Mgr.world().order, 4, "3. el límite se cambia con una constante")
+		Mgr.close()
+		Act.MAX_VISIBLE_NPCS = 10
+		Scene.destroy()
+		-- Nivel 1 con muchos contratados: no más de lo que entra en la habitación.
+		local o1 = Office.new(1)
+		local w1 = Act.new(o1, { seed = "chica" })
+		Act.setEmployees(w1, fifty, true)
+		eq(#w1.order, Act.totalCapacity(w1), "habitación chica: solo los que entran (" .. Act.totalCapacity(w1) .. ")")
+		check(#w1.order < 10, "no se fuerzan diez empleados en una oficina de 10 × 8")
+		-- Rotación ocasional: de a uno, sin superar nunca el máximo, y todos siguen contratados.
+		local wr = Act.new(Office.new(3), { seed = "rotar", max = 5, rotateEvery = 20 })
+		local list = staff(12, "r")
+		Act.setEmployees(wr, list, true)
+		local seen, maxVis, prev = {}, 0, table.concat(wr.order, ",")
+		local changes = 0
+		for _ = 1, 3000 do
+			Act.step(wr, 0.1)
+			maxVis = math.max(maxVis, #wr.order)
+			for _, id in wr.order do
+				seen[id] = true
+			end
+			local now = table.concat(wr.order, ",")
+			if now ~= prev then
+				changes += 1
+				prev = now
+			end
+		end
+		local nSeen = 0
+		for _ in seen do
+			nSeen += 1
+		end
+		check(maxVis <= 5, "rotación: nunca más de 5 visibles (" .. maxVis .. ")")
+		check(wr.rotations >= 5 and nSeen > 5, "rotación: con el tiempo se ven otros empleados (" .. nSeen .. " distintos, " .. wr.rotations .. " rotaciones)")
+		check(changes <= wr.rotations * 2 + 2, "rotación sin cambios constantes (" .. changes .. " cambios)")
+		eq(#list, 12, "los 12 siguen contratados")
+		noErrors("Empleados visibles: generación")
+	end)
+
+	test("Actividades (16–24): caminar, sentarse, trabajar, consultar, descansar, reuniones, reservas, retiros e interrupciones", function()
+		local o = Office.new(2)
+		local MAIN, SALA = "oficina_principal", "sala_reuniones"
+		local desk1 = put(o, "escritorio_metal_1970", MAIN, 4, 2.5)
+		local chair1 = put(o, "silla_oficina_1970", MAIN, 4.5, 3.5)
+		local desk2 = put(o, "escritorio_metal_1970", MAIN, 9, 2.5)
+		local chairSolo = put(o, "silla_oficina_1970", MAIN, 10.5, 6.5, 270)
+		local shelf = put(o, "estanteria_madera_1970", MAIN, 6, 0.5)
+		local sofa = put(o, "sofa_cuero_1970", MAIN, 6.5, 8.5)
+		local mesa = put(o, "mesa_reuniones_1970", SALA, 4.5, 3)
+		local emps = staff(8, "x")
+		local world = Act.new(o, { seed = "actividades" })
+		Act.setEmployees(world, emps, true)
+		eq(#world.order, 8, "ocho visibles")
+		local stats = { walkThenStop = false, sit = false, work = false, workSeated = false, workStand = false, browse = false, rest = false, sofaTogether = 0, meeting = 0, offSpot = 0, badFacing = 0 }
+		local okAll, firstBad = true, nil
+		local jump = 0
+		local last = {}
+		local wasWalking = {}
+		for step = 1, 12000 do
+			Act.step(world, 0.1)
+			local ok, why = invariants(world)
+			if not ok and okAll then
+				okAll, firstBad = false, "paso " .. step .. ": " .. tostring(why)
+			end
+			local sofaN, meetN = 0, 0
+			for _, npc in Act.list(world) do
+				local p = last[npc.id]
+				if p and not npc.phase then
+					local d = math.sqrt((npc.x - p[1]) ^ 2 + (npc.y - p[2]) ^ 2)
+					jump = math.max(jump, d)
+				end
+				last[npc.id] = { npc.x, npc.y }
+				if wasWalking[npc.id] and npc.state ~= "Walking" then
+					stats.walkThenStop = true
+				end
+				wasWalking[npc.id] = npc.state == "Walking"
+				local a = npc.activity
+				if a and npc.state ~= "Walking" and not npc.phase then
+					local sp = a.spot
+					if not (math.abs(npc.x - sp.x) < 1e-6 and math.abs(npc.y - sp.y) < 1e-6) then
+						stats.offSpot += 1
+					end
+					if npc.state == "Sitting" and sp.instance == chairSolo then
+						stats.sit = true
+						if math.abs((npc.heading - sp.facing + 540) % 360 - 180) > 1 and npc.timer < 30 then
+							stats.badFacing += 1
+						end
+					elseif npc.state == "Working" then
+						stats.work = true
+						if sp.instance == desk1 and sp.chair then
+							stats.workSeated = true
+						elseif sp.instance == desk2 then
+							stats.workStand = true
+						end
+					elseif npc.state == "Browsing" and sp.instance == shelf then
+						stats.browse = true
+					elseif npc.state == "Resting" and sp.instance == sofa then
+						stats.rest = true
+						sofaN += 1
+					elseif npc.state == "Meeting" and sp.instance == mesa then
+						meetN += 1
+					end
+				end
+			end
+			stats.sofaTogether = math.max(stats.sofaTogether, sofaN)
+			stats.meeting = math.max(stats.meeting, meetN)
+		end
+		eq(stats.offSpot, 0, "en su actividad, cada uno está en el lugar exacto de su punto de uso")
+		eq(stats.badFacing, 0, "sentado mirando hacia donde mira la silla")
+		check(okAll, "8, 11, 12 y 22: nadie atraviesa muebles ni paredes, sale de su habitación ni comparte un punto (" .. tostring(firstBad) .. ")")
+		check(jump <= Act.WALK_SPEED * 1.1 * 0.1 + 1e-3, string.format("sin teletransportes: máximo %.3f casillas por paso de 0,1 s", jump))
+		check(stats.walkThenStop, "16. caminan y se detienen")
+		check(stats.sit, "17. usan una silla (sentados en el asiento)")
+		check(stats.work and stats.workSeated and stats.workStand, "18. trabajan en escritorios: sentados en la silla de al lado y de pie")
+		check(stats.browse, "19. consultan la estantería")
+		check(stats.rest, "20. descansan en el sofá")
+		check(stats.meeting >= 2, "21. reunión de " .. stats.meeting .. " personas en la mesa")
+		check(world.plans < 12000 / 5, "las rutas no se calculan por cuadro (" .. world.plans .. " en 1200 s)")
+		-- 22. Reservas: un asiento, un empleado.
+		local a, b = Act.list(world)[1], Act.list(world)[2]
+		Act.interrupt(world, a, "prueba")
+		Act.interrupt(world, b, "prueba")
+		check(Act._reserve(world, a, { "silla-prueba#1" }), "22. el primero reserva")
+		check(not Act._reserve(world, b, { "silla-prueba#1" }), "22. el segundo no puede reservar el mismo asiento")
+		world.res["silla-prueba#1"] = nil
+		-- 23. Retirar un mueble con reserva: se libera y el empleado se interrumpe.
+		local victim
+		for _ = 1, 3000 do
+			Act.step(world, 0.1)
+			for _, npc in Act.list(world) do
+				if npc.activity and npc.state ~= "Walking" and not npc.phase and npc.activity.spot.instance ~= mesa then
+					victim = npc
+				end
+			end
+			if victim then
+				break
+			end
+		end
+		check(victim ~= nil, "alguien usa un mueble")
+		local inst = victim.activity.spot.instance
+		local count0 = victim.interrupts
+		local o2 = copy(o)
+		Office.removePlaced(o2, inst)
+		o2.rev += 1
+		Act.setOffice(world, o2)
+		check(victim.activity == nil and victim.interrupts == count0 + 1, "23. retirar el mueble interrumpe la actividad")
+		for k in world.res do
+			check(string.sub(k, 1, #inst + 1) ~= inst .. "#", "23. sin reservas del mueble retirado")
+		end
+		check(string.find(victim.nav, "Interrumpido", 1, true) ~= nil, "23. el panel lo informa (" .. victim.nav .. ")")
+		check(Nav.clearAt(world.rooms[victim.room].grid, victim.x, victim.y), "23. no queda dentro de otro mueble")
+		-- 24. Se recupera: vuelve a elegir actividades.
+		local busy = false
+		for _ = 1, 1500 do
+			Act.step(world, 0.1)
+			if victim.state ~= "Idle" then
+				busy = true
+			end
+		end
+		check(busy and victim.interrupts == count0 + 1, "24. retoma sus actividades después de la interrupción")
+		-- 14 y 12. Un mueble nuevo sobre alguien en reposo o sobre una ruta en curso.
+		local idle, walker
+		for _ = 1, 2000 do
+			Act.step(world, 0.1)
+			for _, npc in Act.list(world) do
+				if npc.room == MAIN and npc.state == "Idle" and not idle then
+					idle = npc
+				end
+			end
+			if idle then
+				break
+			end
+		end
+		check(idle ~= nil, "alguien en reposo")
+		local o3 = copy(o2)
+		local px, py = math.floor(idle.x) + 0.5, math.floor(idle.y) + 0.5
+		local okPut = Office.validatePlacement(o3, OfficeCatalog.item("planta_interior_1970"), { room = idle.room, x = px, y = py, rot = 0 })
+		if okPut then
+			put(o3, "planta_interior_1970", idle.room, px, py)
+			Act.setOffice(world, o3)
+			check(Nav.clearAt(world.rooms[idle.room].grid, idle.x, idle.y), "un mueble puesto encima de alguien lo corre a un lugar libre")
+		end
+		for _ = 1, 3000 do
+			Act.step(world, 0.1)
+			for _, npc in Act.list(world) do
+				if npc.state == "Walking" and npc.path and npc.pi < #npc.path and npc.room == MAIN then
+					walker = npc
+				end
+			end
+			if walker then
+				break
+			end
+		end
+		check(walker ~= nil, "alguien camina")
+		local wp = walker.path[walker.pi]
+		local mx, my = (walker.x + wp[1]) / 2, (walker.y + wp[2]) / 2
+		local o4 = copy(world.office)
+		local placedBlock = false
+		for _, c in { { math.floor(mx) + 0.5, math.floor(my) + 0.5 }, { math.floor(mx) + 1.5, math.floor(my) + 0.5 }, { math.floor(mx) - 0.5, math.floor(my) + 0.5 } } do
+			if not placedBlock and Office.validatePlacement(o4, OfficeCatalog.item("planta_interior_1970"), { room = MAIN, x = c[1], y = c[2], rot = 0 }) then
+				put(o4, "planta_interior_1970", MAIN, c[1], c[2])
+				placedBlock = true
+			end
+		end
+		if placedBlock then
+			local re0, it0 = world.replans, walker.interrupts
+			Act.setOffice(world, o4)
+			local rd = world.rooms[MAIN]
+			local clear = true
+			local qx, qy = walker.x, walker.y
+			for i = walker.pi, walker.path and #walker.path or 0 do
+				local q = walker.path[i]
+				if not Nav.segmentClear(rd.grid, qx, qy, q[1], q[2]) then
+					clear = false
+				end
+				qx, qy = q[1], q[2]
+			end
+			check(clear, "14. después del cambio la ruta restante no cruza el mueble nuevo")
+			check(world.replans > re0 or walker.interrupts > it0 or walker.state ~= "Walking" or clear, "14. la ruta afectada se recalculó o se interrumpió")
+		end
+		for _ = 1, 600 do
+			Act.step(world, 0.1)
+			local ok, why = invariants(world)
+			if not ok then
+				check(false, "invariantes después de los cambios: " .. tostring(why))
+				break
+			end
+		end
+		-- Destino imposible: se evita sin bloquear (punto al que no se llega).
+		local o5 = Office.new(1)
+		for _, y in { 1, 3, 5, 7 } do
+			put(o5, "estanteria_madera_1970", "oficina_principal", 6.5, y, 90)
+		end
+		put(o5, "escritorio_metal_1970", "oficina_principal", 8.5, 4, 90)
+		local w5 = Act.new(o5, { seed = "muro" })
+		Act.setEmployees(w5, staff(2, "m", "administracion"), true)
+		for _ = 1, 3000 do
+			Act.step(w5, 0.1)
+		end
+		for _, npc in Act.list(w5) do
+			check(npc.x < 6, "13. nadie cruza al lado sin acceso")
+			check(not (npc.activity and npc.activity.spot.item == "escritorio_metal_1970"), "13. el escritorio inalcanzable no se usa")
+		end
+		-- Animaciones: cada estado tiene su pose y al salir de una pose no quedan restos.
+		local NPCm = require("./.build-ui/client/OfficeNPC")
+		local rig = NPCm.build("anim1", "Ana", "administracion")
+		local fake = { state = "Idle", pose = "idle", seed = 3 }
+		local cf = M.CFrame.new(0, 100, 0)
+		for _, pose in { "idle", "walk", "sit", "sitwork", "work", "browse", "rest", "meet", "sitmeet" } do
+			check(Anim.POSES[pose] ~= nil, "pose " .. pose)
+			fake.pose = pose
+			fake.state = pose == "walk" and "Walking" or "Working"
+			fake.activity = { spot = { seatH = 1.5 } }
+			for _ = 1, 20 do
+				Anim.update(rig, fake, cf, 1, 0.05)
+			end
+			eq(Anim.baseName(rig), pose, "pose actual " .. pose)
+			check(rig.from == nil, "la mezcla con la pose anterior terminó (" .. pose .. ")")
+		end
+		fake.pose, fake.state, fake.phase, fake.phaseT = "sit", "Sitting", "down", 0.4
+		Anim.update(rig, fake, cf, 1, 0.05)
+		local midHip = rig.current.hipH
+		check(midHip < NPCm.DIM.hipH and midHip > 1.5, "sentarse: transición entre de pie y sentado")
+		fake.phase, fake.phaseT = "up", Act.SIT_TIME
+		Anim.update(rig, fake, cf, 1, 0.05)
+		fake.phase, fake.pose, fake.state = nil, "idle", "Idle"
+		for _ = 1, 20 do
+			Anim.update(rig, fake, cf, 1, 0.05)
+		end
+		check(math.abs(rig.current.hipH - NPCm.DIM.hipH) < 1e-6 and math.abs(rig.current.thighL) < 0.05, "levantarse: vuelve a la postura de pie sin restos")
+		local headY = rig.parts.head.CFrame.Position.Y - 100
+		check(headY > 4.5 and headY < 5.6, string.format("altura de la cabeza acorde a los muebles (%.2f studs)", headY))
+		NPCm.destroy(rig)
+		noErrors("Actividades de los empleados")
+	end)
+
+	test("Niveles 1 a 5: oficinas amuebladas al azar, cambios de muebles en plena actividad y costo por paso", function()
+		local items = { "escritorio_metal_1970", "silla_oficina_1970", "sofa_cuero_1970", "estanteria_madera_1970", "mesa_reuniones_1970", "planta_interior_1970", "lampara_pie_1970", "maquina_escribir_1970" }
+		local seed = 777
+		local function rnd(): number
+			seed = (seed * 16807) % 2147483647
+			return seed / 2147483647
+		end
+		local function randomPlace(o: any, r: any): boolean
+			for _ = 1, 25 do
+				local it = OfficeCatalog.item(items[math.floor(rnd() * #items) + 1])
+				local req = { room = r.id, x = math.floor(rnd() * r.w * 2) / 2, y = math.floor(rnd() * r.d * 2) / 2, rot = math.floor(rnd() * 8) * 45 }
+				if Office.validatePlacement(o, it, req) then
+					table.insert(o.placed, { id = Office.newInstanceId(o), item = it.id, room = r.id, x = req.x, y = req.y, rot = req.rot })
+					return true
+				end
+			end
+			return false
+		end
+		local violations, steps, worst = 0, 0, 0
+		local firstBad = nil
+		for level = 1, 5 do
+			for k = 1, 3 do
+				local o = Office.new(level)
+				for _, r in OfficeCatalog.plan(level).rooms do
+					for _ = 1, math.floor(r.w * r.d / 8) do
+						randomPlace(o, r)
+					end
+				end
+				local w = Act.new(o, { seed = "nivel" .. level .. "-" .. k })
+				Act.setEmployees(w, staff(30, "z"), true)
+				check(#w.order == math.min(10, Act.totalCapacity(w)), "nivel " .. level .. ": visibles según el lugar (" .. #w.order .. ")")
+				for step = 1, 1500 do
+					if step % 250 == 0 then
+						local c = copy(o)
+						if rnd() < 0.5 and #c.placed > 0 then
+							table.remove(c.placed, math.floor(rnd() * #c.placed) + 1)
+						else
+							local rooms = OfficeCatalog.plan(level).rooms
+							randomPlace(c, rooms[math.floor(rnd() * #rooms) + 1])
+						end
+						o = c
+						Act.setOffice(w, o)
+					end
+					local t0 = os.clock()
+					Act.step(w, 0.1)
+					worst = math.max(worst, os.clock() - t0)
+					steps += 1
+					local ok, why = invariants(w)
+					if not ok then
+						violations += 1
+						firstBad = firstBad or ("nivel " .. level .. ": " .. tostring(why))
+					end
+				end
+			end
+		end
+		eq(violations, 0, "en " .. steps .. " pasos nadie atraviesa muebles ni paredes ni comparte un punto (" .. tostring(firstBad) .. ")")
+		check(worst < 0.05, string.format("paso más caro de la simulación visual: %.2f ms (10 empleados)", worst * 1000))
+		noErrors("Niveles 1 a 5")
+	end)
+
+	test("Empleados visibles en el editor (25–30): herramientas intactas, abrir y cerrar sin duplicar, ocultar sin tocar la economía, pausa y partidas guardadas", function()
+		local Editor = require("./.build-ui/client/OfficeEditor")
+		local OfficeCamera = require("./.build-ui/client/OfficeCamera")
+		local GameState = require("./.build-ui/server/GameState")
+		App.closeAllDialogs()
+		if App.g then
+			App.request("leaveCompany", {})
+			waitFor(function()
+				return App.g == nil
+			end)
+		end
+		local slot
+		for _, k in { "1", "2", "3", "4" } do
+			if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+				slot = k
+				break
+			end
+		end
+		if not slot then
+			for k, v in App.profile.slots do
+				if v and v.name ~= nil then
+					App.request("deleteCompany", { slot = k, confirm = v.name })
+					slot = k
+					break
+				end
+			end
+		end
+		check(App.request("createCompany", { slot = slot, name = "Empleados Editor", color = "#FF8A3D", logo = "pico" }).ok, "empresa creada")
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+		local sess = Sessions.instance.list[player]
+		sess.game.money = 1e6
+		for _, e in staff(6, "ed") do
+			table.insert(sess.game.employees, e)
+		end
+		Sessions.instance:push(sess)
+		waitFor(function()
+			return App.g.money == 1e6 and #App.g.employees == 6
+		end)
+		local hb0 = heartbeatHandlers()
+		App.go("oficina")
+		M.task.wait()
+		check(Mgr.isOpen(), "los empleados aparecen al abrir el editor")
+		eq(#Mgr.world().order, 6, "seis visibles")
+		eq(npcModels(), 6, "seis personajes")
+		check(named("ZonaEmpleados") ~= nil and named("MostrarEmpleados") ~= nil, "interruptor «Mostrar empleados»")
+		check(find("Empleados visibles: 6 / 6 contratados") ~= nil, "«Empleados visibles: 6 / 6 contratados»")
+		-- 28. La empresa sigue en pausa: los empleados se mueven pero el tiempo y el dinero no.
+		check(App.menuPaused(), "28. el editor pausa la empresa (setUiPause)")
+		local day0, min0, money0 = sess.game.time.day, sess.game.time.minute, sess.game.money
+		local t0 = Mgr.world().t
+		local inv0 = M.stats.invokes
+		advance(20)
+		check(Mgr.world().t > t0 + 10, "28. los empleados siguen con sus actividades visuales")
+		check(sess.game.time.day == day0 and sess.game.time.minute == min0, "28. el tiempo de la empresa no avanza")
+		eq(sess.game.money, money0, "28. el dinero no cambia")
+		eq(M.stats.invokes, inv0, "los empleados no envían solicitudes al servidor")
+		-- 25. Herramientas del editor intactas, aunque haya un empleado en el lugar.
+		local npc = Act.list(Mgr.world())[1]
+		local R = npc.room
+		local px, py = math.floor(npc.x) + 0.5, math.floor(npc.y) + 0.5
+		Editor.startPlace("planta_interior_1970")
+		Editor.hover(R, px, py)
+		local hv = Editor.state().hover
+		if hv and hv.valid then
+			local r = Editor.confirm()
+			check(r and r.ok, "25. se coloca un mueble donde estaba parado un empleado")
+			Mgr.step(0.2)
+			check(Nav.clearAt(Mgr.world().rooms[R].grid, npc.x, npc.y), "25. el empleado se corre: no queda dentro del mueble")
+		end
+		Editor.cancel()
+		-- Ubicaciones libres (las valida igual que el editor) para colocar y después mover el escritorio.
+		local desk = OfficeCatalog.item("escritorio_metal_1970")
+		local spots = {}
+		for _, c in { { 5, 2.5 }, { 7, 2.5 }, { 5, 5.5 }, { 7, 5.5 }, { 3, 6.5 }, { 8, 6.5 }, { 4, 1.5 } } do
+			local gx, gy = Editor.snap(desk, c[1], c[2], 45)
+			if Office.validatePlacement(App.g.office, desk, { room = "oficina_principal", x = c[1], y = c[2], rot = 0 }) and Office.validatePlacement(App.g.office, desk, { room = "oficina_principal", x = gx, y = gy, rot = 45 }) then
+				table.insert(spots, c)
+			end
+		end
+		check(#spots >= 2, "hay lugar para el escritorio")
+		local a1, a2 = spots[1], spots[#spots]
+		Editor.startPlace("escritorio_metal_1970")
+		Editor.hover("oficina_principal", a1[1], a1[2])
+		local pr = Editor.confirm()
+		check(pr and pr.ok, "25. colocar: " .. tostring(pr and pr.msg))
+		Editor.cancel()
+		check(Editor.selectAt("oficina_principal", a1[1], a1[2]) ~= nil, "25. elegir un mueble")
+		local rr = Editor.rotateSelected(1)
+		check(rr and rr.ok, "25. girar: " .. tostring(rr and rr.msg))
+		Editor.startMove()
+		Editor.hover("oficina_principal", a2[1], a2[2])
+		while Editor.state().rot ~= 0 do
+			Editor.rotate(1)
+		end
+		Editor.hover("oficina_principal", a2[1], a2[2])
+		local mv = Editor.confirm()
+		check(mv and mv.ok, "25. mover: " .. tostring(mv and mv.msg))
+		check(Editor.selectAt("oficina_principal", a2[1], a2[2]) ~= nil and Editor.removeSelected().ok, "25. guardar en el inventario")
+		check(named("SeccionMobiliario") ~= nil and named("SeccionRemodelacion") ~= nil and named("TabCatalogo") ~= nil, "25. secciones y catálogo")
+		Mgr.step(0.2)
+		-- Panel del empleado elegido (clic sobre el personaje).
+		local target = Act.list(Mgr.world())[2]
+		local pos = Mgr.position(target.id)
+		eq(Mgr.pickRay(pos + M.Vector3.new(0, 60, 0), M.Vector3.new(0, -1, 0)), target.id, "un clic sobre el personaje lo elige")
+		Editor.selectEmployee(target.id)
+		M.task.wait()
+		local panel = named("PanelEmpleado")
+		check(panel ~= nil and M.find(panel, target.name) ~= nil, "panel con el nombre")
+		check(named("EmpleadoDepartamento") ~= nil and named("EmpleadoActividad") ~= nil and named("EmpleadoNavegacion") ~= nil, "departamento, actividad y navegación")
+		check(M.button(panel, "Contratar") == nil and M.button(panel, "Despedir") == nil, "sin contratar ni despedir en el panel")
+		clickN("EnfocarEmpleado")
+		local fp = OfficeCamera.state().tFocus
+		check(math.abs(fp.X - pos.X) < 4 and math.abs(fp.Z - pos.Z) < 4, "«Enfocar» centra la cámara en el empleado")
+		clickN("CerrarEmpleado")
+		M.task.wait()
+		check(named("PanelEmpleado") == nil, "cerrar el panel")
+		-- 27 y 29. Ocultar: no cambia la cantidad real, los beneficios, la oficina ni la economía.
+		local org0, rev0, emp0 = Rules.staff(App.g, "organizacion"), App.g.office.rev, #App.g.employees
+		local serverOrg = Rules.staff(sess.game, "organizacion")
+		inv0 = M.stats.invokes
+		clickN("MostrarEmpleados")
+		M.task.wait()
+		check(not Mgr.shown(), "27. ocultos")
+		local f = Scene.folder()
+		check(f:FindFirstChild("Empleados") == nil, "27. sin personajes en la escena")
+		check(find("(ocultos)") ~= nil, "27. el contador lo indica")
+		local tHidden = Mgr.world().t
+		advance(5)
+		eq(Mgr.world().t, tHidden, "27. actividades suspendidas")
+		eq(M.stats.invokes, inv0, "27. ocultar no envía nada al servidor")
+		eq(#App.g.employees, emp0, "27. mismo número de empleados")
+		eq(App.g.office.rev, rev0, "27. la oficina guardada no cambia")
+		eq(Rules.staff(App.g, "organizacion"), org0, "29. los beneficios del mobiliario siguen igual")
+		eq(Rules.staff(sess.game, "organizacion"), serverOrg, "29. también en el servidor")
+		clickN("MostrarEmpleados")
+		M.task.wait()
+		check(Mgr.shown() and f:FindFirstChild("Empleados") ~= nil and npcModels() == 6, "27. al mostrarlos vuelven los seis")
+		-- 26. Abrir y cerrar varias veces: sin personajes ni conexiones de más.
+		for i = 1, 5 do
+			App.ui.facSel = "offices"
+			App.go("compania")
+			M.task.wait()
+			check(not Mgr.isOpen() and Mgr.connections() == 0, "26. cerrar #" .. i .. ": sin conexión")
+			eq(heartbeatHandlers(), hb0, "26. cerrar #" .. i .. ": Heartbeat como al principio")
+			check(M.services.Workspace:FindFirstChild("EditorOficina") == nil, "26. cerrar #" .. i .. ": nada en el Workspace")
+			App.go("oficina")
+			M.task.wait()
+			eq(npcModels(), 6, "26. abrir #" .. i .. ": seis personajes, sin duplicados")
+			eq(heartbeatHandlers(), hb0 + 1, "26. abrir #" .. i .. ": una sola conexión")
+			eq(Mgr.world().res and #Mgr.world().gone or 0, 0, "26. sin restos de la vez anterior")
+		end
+		-- 30. Partidas: ningún dato de los empleados visibles en el guardado y el esquema sigue igual.
+		eq(GameState.SCHEMA, 19, "30. esquema de guardado sin cambios (sin migraciones)")
+		local saved = serde.encode("json", sess.game)
+		for _, word in { "heading", "Walking", "reserv", "npc", "OfficeNPC", "pose" } do
+			check(string.find(saved, word, 1, true) == nil, "30. el guardado no lleva «" .. word .. "»")
+		end
+		local probe = sess.game.office
+		for k in probe do
+			check(table.find({ "version", "level", "seq", "rev", "inventory", "placed", "finishes", "storedFinishes", "starter", "ops" }, k) ~= nil, "30. g.office solo con sus campos de siempre (" .. k .. ")")
+		end
+		-- Cambiar de empresa: el editor se cierra y no queda ningún empleado de esta.
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+		M.task.wait()
+		check(not Mgr.isOpen() and Mgr.connections() == 0, "al salir de la empresa no quedan empleados ni conexiones")
+		noErrors("Empleados visibles en el editor")
+	end)
+end
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

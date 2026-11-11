@@ -5121,6 +5121,198 @@ test("[OF6] Puntos de interacción: catálogo válido, giros de 45°, posición 
 	check(math.abs(Rules.staff(w, "conocimiento") - 0.008) < 1e-9, "la estantería sigue aportando")
 end)
 
+
+-- Etapa 5: navegación de los empleados visibles (pura, sin Roblox) ---------------------------------------------
+do
+	local Office = require("./.build/shared/Office")
+	local OfficeCatalog = require("./.build/shared/OfficeCatalog")
+	local OfficeService = require("./.build/server/OfficeService")
+	local Nav = require("./.build/shared/OfficeNavigation")
+	local Geometry = require("./.build/shared/OfficeGeometry")
+
+	-- Comprobación independiente de una ruta: cada 0,05 casillas el cuerpo (radio RADIUS) queda dentro de la
+	-- habitación y lejos de todos los muebles (rectángulos girados reales).
+	local function routeOk(o: any, roomId: string, fx: number, fy: number, path: { { number } }): (boolean, string?)
+		local r = OfficeCatalog.room(o.level, roomId)
+		local R = Nav.RADIUS - 1e-6
+		local polys = {}
+		for _, p in o.placed do
+			if p.room == roomId then
+				table.insert(polys, Office.corners(OfficeCatalog.item(p.item), p.x, p.y, p.rot))
+			end
+		end
+		local px, py = fx, fy
+		for _, wp in path do
+			local dx, dy = wp[1] - px, wp[2] - py
+			local n = math.max(1, math.ceil(math.sqrt(dx * dx + dy * dy) / 0.05))
+			for k = 0, n do
+				local x, y = px + dx * k / n, py + dy * k / n
+				if x < R or y < R or x > r.w - R or y > r.d - R then
+					return false, string.format("atraviesa la pared en (%.2f, %.2f)", x, y)
+				end
+				for _, poly in polys do
+					if Geometry.distance(poly, x, y) < R then
+						return false, string.format("atraviesa un mueble en (%.2f, %.2f)", x, y)
+					end
+				end
+			end
+			px, py = wp[1], wp[2]
+		end
+		return true, nil
+	end
+
+	local function company(name: string): any
+		local g = newCompany(name)
+		g.money = 1e7
+		return g
+	end
+
+	test("[NV1] Navegación: rodea muebles, respeta los giros de 45°, no corta esquinas ni atraviesa paredes", function()
+		local g = company("Rutas SA")
+		local R = "oficina_principal"
+		-- 8. Una fila de escritorios en el medio: la ruta los rodea.
+		for _, x in { 3, 5, 7 } do
+			check(OfficeService.place(g, { item = "escritorio_metal_1970", room = R, x = x, y = 4.5, rot = 0 }).ok, "escritorio en " .. x)
+		end
+		local grid = Nav.grid(g.office, R)
+		local path, why = Nav.findPath(grid, 5, 2.5, 5, 6.5)
+		check(path ~= nil, "hay ruta alrededor de la fila: " .. tostring(why))
+		local ok, bad = routeOk(g.office, R, 5, 2.5, path)
+		check(ok, "8. no atraviesa muebles: " .. tostring(bad))
+		check(Nav.pathLength(5, 2.5, path) > 4.5, "la ruta rodea (más larga que la línea recta)")
+		-- 9. Muebles girados 45°: la ruta respeta el rectángulo girado real.
+		local d = company("Diagonal SA")
+		check(OfficeService.place(d, { item = "mesa_reuniones_1970", room = R, x = 5, y = 4, rot = 45 }).ok, "mesa a 45°")
+		check(OfficeService.place(d, { item = "estanteria_madera_1970", room = R, x = 8, y = 2, rot = 135 }).ok, "estantería a 135°")
+		local dg = Nav.grid(d.office, R)
+		for _, pair in { { { 2.5, 4 }, { 8.5, 4 } }, { { 5, 0.75 }, { 5, 7.25 } }, { { 2, 1.5 }, { 9, 6.5 } } } do
+			local a, b = pair[1], pair[2]
+			local pth, w2 = Nav.findPath(dg, a[1], a[2], b[1], b[2])
+			check(pth ~= nil, "ruta con muebles diagonales: " .. tostring(w2))
+			local ok2, bad2 = routeOk(d.office, R, a[1], a[2], pth)
+			check(ok2, "9. respeta los giros de 45°: " .. tostring(bad2))
+		end
+		-- 10. Esquinas: ningún paso diagonal entre dos nodos si alguno de los dos vecinos rectos está ocupado.
+		local cut = 0
+		for _, gr in { grid, dg } do
+			for idx = 1, gr.cols * gr.rows do
+				if gr.free[idx] then
+					local x, y = Nav.nodePos(gr, idx)
+					for _, n in Nav.neighbors(gr, idx) do
+						local nx, ny = Nav.nodePos(gr, n)
+						if nx ~= x and ny ~= y then
+							local i1 = idx + (nx > x and 1 or -1)
+							local j1 = idx + (ny > y and gr.cols or -gr.cols)
+							if not (gr.free[i1] and gr.free[j1]) then
+								cut += 1
+							end
+						end
+					end
+				end
+			end
+		end
+		eq(cut, 0, "10. no hay pasos diagonales que corten esquinas ocupadas")
+		-- Dos plantas que se tocan en una esquina: no se pasa entre ellas en diagonal.
+		local c = company("Esquinas SA")
+		check(OfficeService.place(c, { item = "planta_interior_1970", room = R, x = 4.5, y = 4.5, rot = 0 }).ok, "planta 1")
+		check(OfficeService.place(c, { item = "planta_interior_1970", room = R, x = 5.5, y = 5.5, rot = 0 }).ok, "planta 2")
+		local cg = Nav.grid(c.office, R)
+		check(not Nav.segmentClear(cg, 4.4, 5.6, 5.6, 4.4), "el hueco de la esquina no deja pasar el cuerpo")
+		local cp = Nav.findPath(cg, 4.3, 5.9, 5.7, 4.1)
+		check(cp ~= nil and routeOk(c.office, R, 4.3, 5.9, cp), "la ruta da la vuelta por fuera")
+		-- 11. Paredes: ningún nodo transitable a menos del radio de una pared; destino fuera de la habitación.
+		local r = OfficeCatalog.room(1, R)
+		local near = 0
+		for idx = 1, grid.cols * grid.rows do
+			local x, y = Nav.nodePos(grid, idx)
+			if grid.free[idx] and (x < Nav.RADIUS or y < Nav.RADIUS or x > r.w - Nav.RADIUS or y > r.d - Nav.RADIUS) then
+				near += 1
+			end
+		end
+		eq(near, 0, "11. ningún lugar transitable pegado a la pared")
+		local out, whyOut = Nav.findPath(grid, 5, 2.5, r.w + 3, 4)
+		check(out == nil and whyOut ~= nil, "11. no hay ruta hacia afuera de la habitación (" .. tostring(whyOut) .. ")")
+	end)
+
+	test("[NV2] Navegación: habitaciones separadas, rutas imposibles, cambios de muebles y acceso desde la entrada", function()
+		-- 12. Cada habitación es independiente (sin pasillos inventados entre ellas).
+		local g2 = company("Dos Salas SA")
+		g2.office = Office.new(2)
+		for _, rr in OfficeCatalog.plan(2).rooms do
+			eq(#Nav.links(2, rr.id), 0, "12. " .. rr.id .. ": sin conexiones inventadas con otras habitaciones")
+			local gr = Nav.grid(g2.office, rr.id)
+			local mx, my = 0, 0
+			for idx = 1, gr.cols * gr.rows do
+				local x, y = Nav.nodePos(gr, idx)
+				mx, my = math.max(mx, x), math.max(my, y)
+			end
+			check(mx < rr.w and my < rr.d and #gr.entries > 0, "12. " .. rr.id .. ": la zona transitable queda dentro de la habitación y tiene entrada")
+		end
+		-- 13. Una pared de estanterías parte la habitación: la mitad derecha queda inalcanzable.
+		local g = company("Muro SA")
+		local R = "oficina_principal"
+		for _, y in { 1, 3, 5, 7 } do
+			check(OfficeService.place(g, { item = "estanteria_madera_1970", room = R, x = 6.5, y = y, rot = 90 }).ok, "estantería del muro en y=" .. y)
+		end
+		local grid = Nav.grid(g.office, R)
+		local t0 = os.clock()
+		local path, why = Nav.findPath(grid, 2, 4, 8.5, 4)
+		local elapsed = os.clock() - t0
+		check(path == nil and why ~= nil, "13. ruta imposible detectada: " .. tostring(why))
+		check(elapsed < 0.05, string.format("13. sin bloquear el sistema (%.4f s)", elapsed))
+		-- 15. Un escritorio del otro lado del muro: su punto está libre pero no hay recorrido desde la puerta.
+		check(OfficeService.place(g, { item = "escritorio_metal_1970", room = R, x = 8.5, y = 4, rot = 90 }).ok, "escritorio detrás del muro")
+		local behind
+		for _, sp in Office.interactionSpots(g.office) do
+			if sp.item == "escritorio_metal_1970" then
+				behind = sp
+			end
+		end
+		check(behind and not behind.accessible and behind.reason == "sin recorrido desde la entrada", "15. punto libre pero sin recorrido desde la entrada: inaccesible (" .. tostring(behind and behind.reason) .. ")")
+		check(math.abs(Rules.staff(g, "organizacion") - 0.01) < 1e-9, "15. el escritorio inaccesible conserva su beneficio pasivo")
+		-- 14. Quitar una estantería abre el paso: la grilla se rearma (solo esa habitación) y la ruta aparece.
+		local builds = Nav.builds
+		local same = Nav.grid(g.office, R)
+		eq(Nav.builds, builds, "14. sin cambios no se rearma la grilla")
+		check(same == Nav.grid(g.office, R), "14. misma grilla en caché")
+		local sh = g.office.placed[3]
+		check(OfficeService.remove(g, { instance = sh.id }).ok, "quitar una estantería del muro")
+		local fresh = Nav.grid(g.office, R)
+		check(fresh ~= grid and Nav.builds == builds + 1, "14. el cambio de muebles rearma la grilla")
+		local p2, w2 = Nav.findPath(fresh, 2, 4, 8.5, 6.5)
+		check(p2 ~= nil, "14. con el paso abierto hay ruta: " .. tostring(w2))
+		check(routeOk(g.office, R, 2, 4, p2), "14. la ruta nueva tampoco atraviesa muebles")
+		for _, sp in Office.interactionSpots(g.office) do
+			if sp.item == "escritorio_metal_1970" then
+				check(sp.accessible, "15. con recorrido desde la entrada, el punto es accesible")
+			end
+		end
+		-- Una ruta vieja que ahora cruza un mueble nuevo deja de ser válida.
+		local open = Nav.findPath(Nav.grid(g.office, R), 1, 1, 4, 1)
+		check(open ~= nil and Nav.segmentClear(Nav.grid(g.office, R), 1, 1, 4, 1), "camino libre por arriba")
+		check(OfficeService.place(g, { item = "planta_interior_1970", room = R, x = 2.5, y = 1.5, rot = 0 }).ok, "planta en el camino")
+		check(not Nav.segmentClear(Nav.grid(g.office, R), 1, 1, 4, 1), "14. el tramo viejo queda bloqueado por el mueble nuevo")
+		-- Lugares de uso de varias personas: separados y girando con el mueble.
+		check(OfficeService.place(g, { item = "mesa_reuniones_1970", room = R, x = 3.5, y = 6, rot = 0 }).ok, "mesa de reuniones")
+		local meet = {}
+		for _, sp in Office.interactionSpots(g.office) do
+			if sp.kind == "meet" then
+				table.insert(meet, sp)
+			end
+		end
+		eq(#meet, 6, "la mesa de reuniones tiene seis lugares")
+		for i = 1, #meet do
+			for k = i + 1, #meet do
+				check(math.sqrt((meet[i].x - meet[k].x) ^ 2 + (meet[i].y - meet[k].y) ^ 2) >= 2 * Nav.RADIUS, "lugares de reunión separados")
+			end
+		end
+		for id, f in OfficeCatalog.FURNITURE do
+			local okc, whyc = Office.checkInteraction(f)
+			check(okc, id .. ": puntos de uso válidos (" .. tostring(whyc) .. ")")
+		end
+	end)
+end
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

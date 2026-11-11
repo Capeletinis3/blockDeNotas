@@ -12,7 +12,9 @@
 	  (avatar o empleados, etapa posterior) o nil. Convención: dx, dy en casillas desde el centro del mueble sin
 	  girar; facing = hacia dónde mira quien lo usa, en grados del plano de la habitación (0 = +x, 90 = +y);
 	  el frente de los modelos mira a −y (270). Todo gira con el mueble.
-	  ({ kind = "work" | "sit" | "rest" | "browse", dx, dy, facing } relativo al centro del mueble, en casillas),
+	  ({ kind = "work" | "sit" | "rest" | "browse", dx, dy, facing, seatH? } relativo al centro del mueble, en
+	  casillas; seatH = alto del asiento en studs para sentarse), spots = lista de puntos cuando el mueble admite
+	  varias personas (sofá: un asiento por cuerpo; mesa de reuniones: "meet" alrededor) o nil (= interaction),
 	  bonus = { skill = id de Catalog.STAFF.skills, value } o nil (comparte el tope de esa habilidad con el
 	  personal), model = nombre del futuro modelo en ServerStorage.CarEmpireAssets.Muebles (aún no existe).
 
@@ -53,13 +55,20 @@ OfficeCatalog.FURNITURE = {
 		name = "Silla de oficina tapizada", category = "asientos", year = 1970, price = 300,
 		desc = "Silla giratoria con tapizado de vinilo.",
 		size = { 2, 3, 2 }, cells = { 1, 1 }, rotations = ALL,
-		interaction = { kind = "sit", dx = 0, dy = 0, facing = 270 }, model = "SillaOficina1970",
+		interaction = { kind = "sit", dx = 0, dy = 0, facing = 270, seatH = 1.5 }, model = "SillaOficina1970",
 	},
 	sofa_cuero_1970 = {
 		name = "Sofá de cuero", category = "asientos", year = 1970, price = 2200,
 		desc = "Sofá de tres cuerpos para la recepción o la dirección.",
 		size = { 6, 2.8, 2 }, cells = { 3, 1 }, rotations = ALL,
-		interaction = { kind = "rest", dx = 0, dy = 0, facing = 270 }, model = "SofaCuero1970",
+		interaction = { kind = "rest", dx = 0, dy = 0, facing = 270, seatH = 1.25 },
+		-- Tres asientos separados (uno por cuerpo): hasta tres empleados a la vez, sin superponerse.
+		spots = {
+			{ kind = "rest", dx = -1, dy = 0, facing = 270, seatH = 1.25 },
+			{ kind = "rest", dx = 0, dy = 0, facing = 270, seatH = 1.25 },
+			{ kind = "rest", dx = 1, dy = 0, facing = 270, seatH = 1.25 },
+		},
+		model = "SofaCuero1970",
 	},
 	maquina_escribir_1970 = {
 		name = "Máquina de escribir eléctrica", category = "tecnologia", year = 1970, price = 900,
@@ -78,6 +87,13 @@ OfficeCatalog.FURNITURE = {
 		name = "Mesa de reuniones", category = "reuniones", year = 1970, price = 2600,
 		desc = "Mesa rectangular para seis personas.",
 		size = { 6, 2.6, 4 }, cells = { 3, 2 }, rotations = ALL,
+		-- Seis lugares de reunión alrededor de la mesa (dos por lado largo y uno en cada cabecera), a media
+		-- casilla del borde y mirando a la mesa. Giran con ella. Si hay una silla en ese lugar, se usa.
+		spots = {
+			{ kind = "meet", dx = -0.9, dy = 1.5, facing = 270 }, { kind = "meet", dx = 0.9, dy = 1.5, facing = 270 },
+			{ kind = "meet", dx = -0.9, dy = -1.5, facing = 90 }, { kind = "meet", dx = 0.9, dy = -1.5, facing = 90 },
+			{ kind = "meet", dx = -2, dy = 0, facing = 0 }, { kind = "meet", dx = 2, dy = 0, facing = 180 },
+		},
 		bonus = { skill = "gestion", value = 0.008 }, model = "MesaReuniones1970",
 	},
 	lampara_pie_1970 = {

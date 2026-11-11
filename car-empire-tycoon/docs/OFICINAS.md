@@ -131,3 +131,65 @@ Sin cambios de esquema (19) ni datos guardados nuevos: todo se calcula desde `g.
   - `Office.interactionSpots` devuelve el punto girado con el mueble (también a 45°), si es accesible, el motivo y el lugar de llegada.
   - `Office.toWorld` pasa coordenadas de la habitación al mundo.
   - Un punto inaccesible no cambia el beneficio.
+
+## Etapa 5: empleados visibles, navegación e interacciones (sin probar en Roblox Studio)
+
+Los empleados visibles son **representaciones** de `g.employees`: solo existen en el cliente mientras el editor
+está abierto, no son entidades económicas y no guardan nada (posiciones, rutas, reservas ni actividades).
+
+### Módulos
+
+| Módulo | Lado | Qué hace |
+| --- | --- | --- |
+| `shared/OfficeGeometry` | compartido | Geometría del plano (antes dentro de `Office`, que la reexporta con los mismos nombres) + distancia exacta punto–mueble. |
+| `shared/OfficeNavigation` | compartido | Zona transitable por habitación, A*, rutas, accesibilidad desde la entrada. |
+| `client/OfficeActivities` | cliente | Máquina de estados, elección de actividades, reservas, visibles y rotación (lógica pura). |
+| `client/OfficeNPC` | cliente | Personaje provisional (rig de Parts) o modelo definitivo de `CarEmpireAssets.Empleados`. |
+| `client/OfficeAnimations` | cliente | Poses procedurales con mezcla; `AnimationTrack` si el modelo definitivo trae `Animator` y `Animaciones`. |
+| `client/OfficeNPCManager` | cliente | Ciclo de vida: abrir, sincronizar, ocultar, seleccionar, cerrar. Una sola conexión a `Heartbeat`. |
+
+Modificados: `Office` (puntos múltiples, accesibilidad por ruta), `OfficeCatalog` (asientos del sofá, lugares de
+la mesa de reuniones, `seatH`), `OfficeEditor` (abrir/cerrar empleados, selección, «Mostrar empleados»),
+`OfficeScene` (`Scene.folder`), `OfficeCamera` (`focusOn`), `ScreenOffice` (interruptor, contador y panel).
+
+### Navegación
+
+- **Por qué no `PathfindingService`**: las piezas del editor no tienen colisión; la navegación se calcula sobre el
+  plano (`OfficeCatalog.PLANS` + `g.office.placed`) con la misma geometría que valida la colocación.
+- Nodos cada media casilla; un nodo es transitable si un disco de radio `RADIUS` = 0,35 casillas (0,7 studs) cabe
+  sin tocar paredes ni muebles (rectángulos girados reales, también a 45°). Un pasillo de una casilla es
+  transitable; uno de media casilla, no.
+- 8 vecinos; en diagonal solo si los dos vecinos rectos están libres (no se cortan esquinas). Cada paso entre nodos
+  y cada tramo suavizado se comprueba **en todo su recorrido** (distancia exacta, partiendo el tramo hasta poder
+  asegurarlo), no con muestras sueltas.
+- Entradas = nodos dentro de las casillas de acceso. Componentes conexos: un destino en otro componente se informa
+  al instante como imposible (sin búsqueda).
+- La grilla se guarda en caché por firma de los muebles de cada habitación: se rearma solo cuando cambian.
+- Cada empleado se queda en su habitación: no hay pasillos entre ellas. `OfficeNavigation.LINKS` queda vacío y
+  preparado para una escena futura con puertas reales.
+- `Office.interactionAccess` exige un recorrido completo desde una entrada. No afecta `Office.furnitureRaw`: un
+  mueble inaccesible conserva su beneficio pasivo.
+
+### Actividades
+
+Estados: `Idle`, `Walking`, `Working`, `Sitting`, `Browsing`, `Resting`, `Meeting`. Cada actividad reserva sus
+puntos (instancia#slot); escritorio o mesa con una silla a ≤ 0,75 casillas de su punto = se usa sentado (reserva los
+dos). Duraciones, pausas, velocidad, preferencias por departamento (solo pesos visuales), límite visible
+(`MAX_VISIBLE_NPCS = 10`), rotación (`ROTATE_EVERY = 150` s) y lugar por habitación (`AREA_PER_NPC`) están al
+principio de `OfficeActivities`. Las reuniones necesitan al menos dos personas en la habitación. Quien está
+detenido se rodea al calcular rutas (si así no hay ruta, se calcula sin rodearlo).
+
+Cambios de muebles: solo con la oficina **confirmada** por el servidor. Se rearman las habitaciones afectadas,
+se liberan las reservas de puntos que desaparecieron o se movieron, nadie queda dentro de un mueble y las rutas
+tapadas se recalculan (o se interrumpe la actividad). Los empleados nunca bloquean una operación del editor.
+
+### Cómo verlos
+
+Compañía › Instalaciones › Oficinas centrales › Personalizar oficina. Arriba a la izquierda: «Mostrar empleados»
+y «Empleados visibles: N / M contratados». Clic sobre un personaje (modo normal, sin mueble en la mano) abre su
+panel: nombre, departamento y habitación, actividad, navegación, «Enfocar». Esc lo cierra.
+
+### Pendiente de verificar en Roblox Studio
+
+Aspecto de los personajes y de las poses, fluidez del movimiento a 30 pasos por segundo, la selección con el
+mouse sobre el personaje, el nombre sobre la cabeza y el rendimiento real con 10 empleados en el nivel 5.

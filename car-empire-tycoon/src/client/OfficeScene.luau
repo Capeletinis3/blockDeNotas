@@ -592,6 +592,11 @@ function Scene.show(on: boolean)
 	end
 end
 
+-- Carpeta de la escena (la usan los empleados visibles: viven dentro del editor y se van con él).
+function Scene.folder(): Folder?
+	return state.folder
+end
+
 function Scene.isBuilt(): boolean
 	return state.folder ~= nil
 end

@@ -36,6 +36,7 @@ local Util = require(Shared.Util)
 local App = require(script.Parent.App)
 local Scene = require(script.Parent.OfficeScene)
 local Camera = require(script.Parent.OfficeCamera)
+local Npcs = require(script.Parent.OfficeNPCManager)
 
 local Editor = {}
 
@@ -108,6 +109,8 @@ function Editor.enter()
 	Scene.syncFurniture(o)
 	Scene.setGrid(st.section == "remodelacion" and (st.gridHidden and "oculta" or "tenue") or "normal")
 	Scene.show(true)
+	-- Empleados visibles: después de las habitaciones y los muebles (la navegación usa la oficina confirmada).
+	Npcs.open(App.g)
 	local plan = OfficeCatalog.plan(o.level)
 	if not st.room or not OfficeCatalog.room(o.level, st.room) then
 		st.room = plan.rooms[1].id
@@ -135,6 +138,7 @@ function Editor.sync()
 	end
 	Scene.buildRooms(o)
 	Scene.syncFurniture(o)
+	Npcs.sync(App.g)
 	if st.instance and not Office.find(o, st.instance) then
 		st.instance = nil
 		if st.mode == "move" then
@@ -160,8 +164,57 @@ function Editor.leave()
 	if st.company then
 		pendingByCompany[st.company] = st.pending
 	end
+	Npcs.close() -- primero los empleados (reservas, rutas, conexión), después la escena
 	Scene.destroy()
 	Camera.release()
+end
+
+-- Empleados visibles ----------------------------------------------------------------------------------------
+
+-- Elige un empleado visible (panel compacto); deselecciona el mueble elegido. nil = ninguno.
+function Editor.selectEmployee(employeeId: string?)
+	if not st.active then
+		return
+	end
+	if employeeId then
+		st.instance = nil
+		Scene.select(nil)
+	end
+	Npcs.select(employeeId)
+	changed()
+end
+
+-- «Mostrar empleados»: solo visual (no cambia la cantidad real, los beneficios ni la oficina guardada).
+function Editor.setStaffShown(on: boolean)
+	Npcs.setShown(on)
+	changed()
+end
+
+-- Centra la cámara en el empleado elegido.
+function Editor.focusEmployee(): boolean
+	local id = Npcs.selected()
+	local pos = id and Npcs.position(id)
+	if not pos then
+		return false
+	end
+	Camera.focusOn(pos, 28)
+	return true
+end
+
+-- Empleado bajo el cursor (o nil).
+function Editor.pointerEmployee(): string?
+	local cam = Workspace.CurrentCamera
+	if not cam then
+		return nil
+	end
+	local ok, ray = pcall(function()
+		local m = UserInputService:GetMouseLocation()
+		return cam:ViewportPointToRay(m.X, m.Y)
+	end)
+	if not ok or not ray then
+		return nil
+	end
+	return Npcs.pickRay(ray.Origin, ray.Direction)
 end
 
 -- Remodelación ----------------------------------------------------------------------------------------------
@@ -348,6 +401,10 @@ function Editor.cancel(): boolean
 	elseif st.instance then
 		st.instance = nil
 		Scene.select(nil)
+		changed()
+		return true
+	elseif Npcs.selected() then
+		Npcs.select(nil) -- cierra el panel del empleado
 		changed()
 		return true
 	end
@@ -708,7 +765,15 @@ function Editor.start()
 				Editor.setRoom(room)
 			end
 		elseif st.mode == "idle" then
-			Editor.selectAt(Editor.pointerRoom())
+			-- Primero un empleado (si el clic cae sobre uno); si no, un mueble. En colocar o mover, los empleados
+			-- no interfieren: la distribución de muebles tiene prioridad.
+			local who = Editor.pointerEmployee()
+			if who then
+				Editor.selectEmployee(who)
+			else
+				Npcs.select(nil)
+				Editor.selectAt(Editor.pointerRoom())
+			end
 		else
 			Editor.hover(Editor.pointerRoom())
 			task.spawn(Editor.confirm)

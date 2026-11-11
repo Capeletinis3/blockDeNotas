@@ -18,6 +18,7 @@ local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
 local Editor = require(script.Parent.OfficeEditor)
 local Camera = require(script.Parent.OfficeCamera)
+local Npcs = require(script.Parent.OfficeNPCManager)
 local T = Ui.T
 local W = Ui.W
 
@@ -25,6 +26,8 @@ local Screen = {}
 
 local ui = { tab = "catalogo", cat = "todas" }
 local bar: Frame? = nil
+local staffZone: Frame? = nil
+local staffLabels: { [string]: TextLabel } = {}
 local remodelBar: (any, { Instance? }, { Instance? }) -> ()
 
 local function itemName(id: string?): string
@@ -201,6 +204,79 @@ function Screen.updateBar()
 			(r :: any).LayoutOrder = i;
 			(r :: any).Parent = b
 		end
+	end
+end
+
+--[[ Empleados visibles (arriba a la izquierda, sobre la vista 3D): interruptor «Mostrar empleados», cuántos se
+	ven de cuántos contratados (datos reales de g.employees) y, si se eligió uno (clic sobre el personaje), un
+	panel compacto con nombre, departamento, actividad y navegación, más «Enfocar». Contratar, despedir y los
+	salarios siguen en Personal: acá no hay nada de eso. ]]
+function Screen.updateStaff()
+	local z = staffZone
+	if not z or not z.Parent then
+		return
+	end
+	for _, c in z:GetChildren() do
+		if c:IsA("GuiObject") then
+			c:Destroy()
+		end
+	end
+	table.clear(staffLabels)
+	local shown = Npcs.shown()
+	local visible, hired = Npcs.counts(App.g)
+	local toggle = Ui.toggle(shown, function()
+		Editor.setStaffShown(not Npcs.shown())
+	end)
+	toggle.Name = "MostrarEmpleados"
+	local count = Ui.text("Empleados visibles: " .. visible .. " / " .. hired .. " contratados" .. (shown and "" or " (ocultos)"), { size = Ui.S.xs, color = T.mut, name = "EmpleadosVisibles" })
+	local head = Ui.row({
+		toggle,
+		Ui.inline("Mostrar empleados", { size = Ui.S.sm, weight = W.semi }),
+		Ui.grow(count),
+	}, 8)
+	head.LayoutOrder = 1
+	head.Parent = z
+	if hired == 0 then
+		local t = Ui.text("Sin empleados contratados: la oficina queda vacía. Se contratan en Compañía › Personal.", { size = Ui.S.xs, color = T.mut, name = "SinEmpleados" })
+		t.LayoutOrder = 2
+		t.Parent = z
+	end
+	local info = Npcs.info(Npcs.selected())
+	if info and shown then
+		local name = Ui.text(info.name, { size = Ui.S.base, weight = W.bold, name = "EmpleadoNombre" })
+		local dept = Ui.text(info.dept .. " · " .. info.room, { size = Ui.S.xs, color = T.tx2, name = "EmpleadoDepartamento" })
+		local act = Ui.text(info.activity, { size = Ui.S.sm, name = "EmpleadoActividad" })
+		local nav = Ui.text("Navegación: " .. info.nav, { size = Ui.S.xs, color = T.mut, name = "EmpleadoNavegacion" })
+		staffLabels.activity, staffLabels.nav = act, nav
+		local card = Ui.card({
+			name,
+			dept,
+			act,
+			nav,
+			Ui.row({
+				Ui.button("Enfocar", "default", function()
+					Editor.focusEmployee()
+				end, { small = true, name = "EnfocarEmpleado" }),
+				Ui.button("Cerrar", "q", function()
+					Editor.selectEmployee(nil)
+				end, { small = true, name = "CerrarEmpleado", kbd = "Esc" }),
+			}, 8),
+		}, { name = "PanelEmpleado" })
+		card.LayoutOrder = 3
+		card.Parent = z
+	end
+end
+
+-- Solo cambió la actividad del elegido: se actualizan los textos, sin rearmar nada.
+local function updateStaffText()
+	local info = Npcs.info(Npcs.selected())
+	local act, nav = staffLabels.activity, staffLabels.nav
+	if not info or not act or not act.Parent then
+		return
+	end
+	act.Text = info.activity
+	if nav and nav.Parent then
+		nav.Text = "Navegación: " .. info.nav
 	end
 end
 
@@ -543,14 +619,42 @@ function Screen.build(content: Frame)
 	help.AnchorPoint = Vector2.new(0, 0)
 	help.Position = UDim2.fromOffset(20, 80)
 	help.Size = UDim2.new(0, math.max(240, App.vw - 420), 0, 0)
-	Editor.onChange = Screen.updateBar
+	staffZone = Ui.new("Frame", {
+		Name = "ZonaEmpleados",
+		Active = true,
+		BackgroundColor3 = T.panel,
+		BackgroundTransparency = 0.1,
+		Corner = 12,
+		Stroke = T.line,
+		Position = UDim2.fromOffset(16, 104),
+		Size = UDim2.new(0, math.clamp(App.vw - (phone and 32 or 420), 240, 380), 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Pad = { 10, 12 },
+		List = { dir = "V", gap = 8 },
+		Parent = root,
+	})
+	Editor.onChange = function()
+		Screen.updateBar()
+		Screen.updateStaff()
+	end
+	Npcs.onChange = function(kind: string)
+		if kind == "texto" then
+			updateStaffText()
+		else
+			Screen.updateStaff()
+		end
+	end
 	Screen.updateBar()
+	Screen.updateStaff()
 end
 
 function Screen.leave()
 	Editor.leave()
 	Editor.onChange = nil
+	Npcs.onChange = nil
 	bar = nil
+	staffZone = nil
+	table.clear(staffLabels)
 end
 
 function Screen.isActive(): boolean

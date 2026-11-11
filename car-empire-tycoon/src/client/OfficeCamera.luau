@@ -75,6 +75,12 @@ function Camera.frame(roomId: string?, instant: boolean?)
 	end
 end
 
+-- Enfoca un punto del piso (por ejemplo, un empleado) con un zoom cercano.
+function Camera.focusOn(pos: Vector3, dist: number?)
+	view.tFocus = Vector3.new(pos.X, Scene.ORIGIN.Y, pos.Z)
+	view.tDist = math.clamp(dist or 30, Camera.MIN_DIST, Camera.MAX_DIST)
+end
+
 local function damp(a: any, b: any, k: number, dt: number): any
 	local t = 1 - math.exp(-k * dt)
 	return a + (b - a) * t

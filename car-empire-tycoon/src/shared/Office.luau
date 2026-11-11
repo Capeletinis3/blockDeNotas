@@ -16,6 +16,8 @@
 	Un mueble propio está guardado (cuenta en inventory) o colocado (una entrada en placed), nunca en ambos. ]]
 
 local OfficeCatalog = require(script.Parent.OfficeCatalog)
+local Geometry = require(script.Parent.OfficeGeometry)
+local Nav = require(script.Parent.OfficeNavigation) -- rutas de los empleados (no depende de Office)
 
 local Office = {}
 
@@ -331,100 +333,14 @@ function Office.isDiagonal(rot: number): boolean
 end
 
 -- Geometría ----------------------------------------------------------------------------------------------
--- Cada mueble es un rectángulo girado (centro x, y; lados w × d en casillas; giro rot). Las colisiones se
--- calculan con la intersección real de polígonos convexos (teorema del eje separador), no con muestras.
-
-local GEO_EPS = 1e-4 -- tolerancia: tocarse por un borde no es superponerse
-
--- Esquinas del rectángulo de un mueble, en casillas de la habitación.
-function Office.corners(item: any, x: number, y: number, rot: number): { { number } }
-	local hw, hd = item.cells[1] / 2, item.cells[2] / 2
-	local a = math.rad(rot)
-	local c, s = math.cos(a), math.sin(a)
-	local out = {}
-	for _, k in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
-		local u, v = k[1] * hw, k[2] * hd
-		table.insert(out, { x + u * c - v * s, y + u * s + v * c })
-	end
-	return out
-end
-
-local function square(cx: number, cy: number): { { number } }
-	return { { cx, cy }, { cx + 1, cy }, { cx + 1, cy + 1 }, { cx, cy + 1 } }
-end
-Office.cellPolygon = square
-
-local function project(poly: { { number } }, ax: number, ay: number): (number, number)
-	local lo, hi = math.huge, -math.huge
-	for _, p in poly do
-		local d = p[1] * ax + p[2] * ay
-		lo, hi = math.min(lo, d), math.max(hi, d)
-	end
-	return lo, hi
-end
-
--- ¿Se superponen dos polígonos convexos con área (más que tocarse)?
-function Office.overlaps(a: { { number } }, b: { { number } }): boolean
-	for _, poly in { a, b } do
-		local n = #poly
-		for i = 1, n do
-			local p, q = poly[i], poly[i % n + 1]
-			local ax, ay = q[2] - p[2], p[1] - q[1]
-			local len = math.sqrt(ax * ax + ay * ay)
-			if len > 0 then
-				ax, ay = ax / len, ay / len
-				local a1, a2 = project(a, ax, ay)
-				local b1, b2 = project(b, ax, ay)
-				if a2 <= b1 + GEO_EPS or b2 <= a1 + GEO_EPS then
-					return false -- eje separador
-				end
-			end
-		end
-	end
-	return true
-end
-
--- ¿El polígono queda dentro de la habitación (0..w × 0..d)?
-function Office.insideRoom(poly: { { number } }, r: any): boolean
-	for _, p in poly do
-		if p[1] < -GEO_EPS or p[2] < -GEO_EPS or p[1] > r.w + GEO_EPS or p[2] > r.d + GEO_EPS then
-			return false
-		end
-	end
-	return true
-end
-
---[[ Casillas que toca un mueble (con área en común, también en diagonal): para la cuadrícula del editor y
-	para mostrar qué ocupa. Devuelve { { cx, cy } }. ]]
-function Office.footprint(item: any, x: number, y: number, rot: number): { { number } }
-	local poly = Office.corners(item, x, y, rot)
-	local lx, ly, hx, hy = math.huge, math.huge, -math.huge, -math.huge
-	for _, p in poly do
-		lx, ly, hx, hy = math.min(lx, p[1]), math.min(ly, p[2]), math.max(hx, p[1]), math.max(hy, p[2])
-	end
-	local out = {}
-	for cx = math.floor(lx), math.ceil(hx) - 1 do
-		for cy = math.floor(ly), math.ceil(hy) - 1 do
-			if Office.overlaps(poly, square(cx, cy)) then
-				table.insert(out, { cx, cy })
-			end
-		end
-	end
-	return out
-end
-
--- ¿El punto (x, y) de la habitación cae sobre este mueble colocado? (selección en el editor)
-function Office.hits(p: any, x: number, y: number): boolean
-	local item = OfficeCatalog.item(p.item)
-	if not item then
-		return false
-	end
-	local a = math.rad(p.rot)
-	local c, s = math.cos(a), math.sin(a)
-	local dx, dy = x - p.x, y - p.y
-	local u, v = dx * c + dy * s, -dx * s + dy * c
-	return math.abs(u) <= item.cells[1] / 2 and math.abs(v) <= item.cells[2] / 2
-end
+-- Cada mueble es un rectángulo girado; el cálculo vive en OfficeGeometry (mismas funciones, mismos nombres).
+Office.corners = Geometry.corners
+Office.cellPolygon = Geometry.cellPolygon
+Office.overlaps = Geometry.overlaps
+Office.insideRoom = Geometry.insideRoom
+Office.footprint = Geometry.footprint
+Office.hits = Geometry.hits
+local square = Geometry.cellPolygon
 
 --[[ Alineación con la cuadrícula: con giros rectos el borde del mueble cae sobre líneas de la cuadrícula
 	(un lado par se centra en una línea; uno impar, en el medio de una casilla). En diagonal basta con medias
@@ -453,7 +369,35 @@ function Office.interactionPoint(item: any, p: any): any
 		x = p.x + it.dx * c - it.dy * s,
 		y = p.y + it.dx * s + it.dy * c,
 		facing = (it.facing + p.rot) % 360,
+		seatH = it.seatH,
 	}
+end
+
+-- Puntos de definición de un mueble: spots (varias personas) o el punto único `interaction`.
+function Office.pointDefs(item: any): { any }
+	if item.spots then
+		return item.spots
+	end
+	return item.interaction and { item.interaction } or {}
+end
+
+-- Todos los puntos de uso de un mueble colocado, en coordenadas de la habitación (giran con el mueble).
+-- Cada uno lleva slot (1, 2, …): un sofá tiene un asiento por cuerpo y la mesa de reuniones seis lugares.
+function Office.interactionPoints(item: any, p: any): { any }
+	local out = {}
+	local a = math.rad(p.rot)
+	local c, s = math.cos(a), math.sin(a)
+	for slot, it in Office.pointDefs(item) do
+		table.insert(out, {
+			kind = it.kind,
+			slot = slot,
+			x = p.x + it.dx * c - it.dy * s,
+			y = p.y + it.dx * s + it.dy * c,
+			facing = (it.facing + p.rot) % 360,
+			seatH = it.seatH,
+		})
+	end
+	return out
 end
 
 -- Validación adicional opcional (etapa 2: colisiones 3D con el modelo del edificio). fn(o, room, item,
@@ -801,16 +745,15 @@ end
 
 -- Avatar autónomo (metadatos; OwnerAvatar los usará en una etapa posterior) ------------------------------
 
---[[ Puntos de interacción de los muebles colocados: { { instance, item, room, kind, x, y, facing } } en
-	coordenadas de la habitación. kinds: "work" (escritorio), "sit" (silla), "rest" (sofá), "browse"
-	(estantería). ]]
+--[[ Puntos de interacción de los muebles colocados: { { instance, item, room, kind, slot, x, y, facing, seatH,
+	accessible, reason, approach } } en coordenadas de la habitación. kinds: "work" (escritorio), "sit" (silla),
+	"rest" (sofá, un punto por asiento), "browse" (estantería), "meet" (alrededor de la mesa de reuniones). ]]
 function Office.interactionSpots(o: any, roomId: string?): { any }
 	local out = {}
 	for _, p in (o and o.placed) or {} do
 		if roomId == nil or p.room == roomId then
 			local item = OfficeCatalog.item(p.item)
-			local pt = item and Office.interactionPoint(item, p)
-			if pt then
+			for _, pt in item and Office.interactionPoints(item, p) or {} do
 				pt.instance, pt.item, pt.room = p.id, p.item, p.room
 				local ok, why, approach = Office.interactionAccess(o, p, pt)
 				pt.accessible, pt.reason, pt.approach = ok, why, approach
@@ -821,52 +764,31 @@ function Office.interactionSpots(o: any, roomId: string?): { any }
 	return out
 end
 
--- Tipos de interacción: "work" y "browse" se usan de pie frente al mueble; "sit" y "rest" sobre el mueble.
-Office.INTERACTION_KINDS = { work = "stand", browse = "stand", sit = "seat", rest = "seat" }
-
--- ¿El punto (x, y) de la habitación está libre (dentro de la habitación y sin otro mueble encima)?
-local function freeSpot(o: any, r: any, x: number, y: number, ignore: string?): (boolean, string?)
-	if x < 0.25 or y < 0.25 or x > r.w - 0.25 or y > r.d - 0.25 then
-		return false, "fuera de la habitación"
-	end
-	for _, q in o.placed do
-		if q.room == r.id and q.id ~= ignore and Office.hits(q, x, y) then
-			return false, "tapado por otro mueble"
-		end
-	end
-	return true, nil
-end
+-- Tipos de interacción: "work", "browse" y "meet" se usan de pie frente al mueble; "sit" y "rest" sobre el
+-- mueble (asiento).
+Office.INTERACTION_KINDS = { work = "stand", browse = "stand", meet = "stand", sit = "seat", rest = "seat" }
 
 --[[ ¿Se puede usar el punto de un mueble colocado? Devuelve (accesible, motivo, punto de llegada {x, y}).
-	- De pie ("work", "browse"): el punto mismo debe estar libre (dentro de la habitación y sin otro mueble,
-	  tampoco el propio).
-	- Sentado ("sit", "rest"): el punto está sobre el mueble; hace falta un lugar libre al lado para llegar
-	  (adelante, a los costados o atrás, a media casilla del borde).
-	Solo informa: un punto inaccesible no cambia la bonificación pasiva del mueble. ]]
+	Accesible = existe un recorrido completo para el cuerpo de un empleado desde una entrada de la habitación
+	(puertas y paso) hasta el lugar de llegada (OfficeNavigation): no alcanza con que el punto esté libre.
+	- De pie ("work", "browse", "meet"): el punto mismo debe estar libre (dentro de la habitación, sin otro mueble
+	  encima y con lugar para el cuerpo).
+	- Sentado ("sit", "rest"): el punto está sobre el mueble; hace falta un lugar libre a su lado (adelante, a
+	  los costados o atrás) desde donde llegar al asiento sin cruzar otro mueble.
+	Solo informa a los comportamientos visuales: un punto inaccesible no cambia la bonificación pasiva del
+	mueble (Office.furnitureRaw no lo consulta). ]]
 function Office.interactionAccess(o: any, p: any, pt: any): (boolean, string?, any)
-	local r = OfficeCatalog.room(o.level, p.room)
 	local item = OfficeCatalog.item(p.item)
-	if not r or not item or not pt then
+	local mode = pt and Office.INTERACTION_KINDS[pt.kind]
+	local grid = item and mode and Nav.grid(o, p.room)
+	if not grid then
 		return false, "mueble fuera del plano", nil
 	end
-	local mode = Office.INTERACTION_KINDS[pt.kind]
-	if mode == "stand" then
-		local ok, why = freeSpot(o, r, pt.x, pt.y, nil)
-		return ok, why, ok and { x = pt.x, y = pt.y } or nil
+	local at, why = Nav.approach(grid, item, p, pt, mode)
+	if not at then
+		return false, why, nil
 	end
-	-- Lugar de llegada: a media casilla del borde del mueble, empezando por el frente (hacia donde mira).
-	local f = math.rad(pt.facing)
-	local fx, fy = math.cos(f), math.sin(f)
-	local reach = math.max(item.cells[1], item.cells[2]) / 2 + 0.5
-	for _, turn in { 0, 90, -90, 180 } do
-		local a = math.rad(turn)
-		local dx, dy = fx * math.cos(a) - fy * math.sin(a), fx * math.sin(a) + fy * math.cos(a)
-		local x, y = pt.x + dx * reach, pt.y + dy * reach
-		if freeSpot(o, r, x, y, nil) then
-			return true, nil, { x = x, y = y }
-		end
-	end
-	return false, "sin lugar libre para llegar", nil
+	return true, nil, { x = at.x, y = at.y }
 end
 
 --[[ Posición en el mundo de un punto de la habitación: anchor = { x, y, z } esquina (0, 0) de la habitación
@@ -879,11 +801,7 @@ function Office.toWorld(anchor: any, x: number, y: number, facing: number?): (nu
 end
 
 -- Valida los puntos de interacción del catálogo (lo usan las pruebas y una futura carga de assets).
-function Office.checkInteraction(item: any): (boolean, string?)
-	local it = item.interaction
-	if it == nil then
-		return true, nil
-	end
+local function checkPoint(item: any, it: any): (boolean, string?)
 	local mode = Office.INTERACTION_KINDS[it.kind]
 	if not mode then
 		return false, "tipo de interacción desconocido"
@@ -896,6 +814,29 @@ function Office.checkInteraction(item: any): (boolean, string?)
 		return false, "el asiento debe estar sobre el mueble"
 	elseif mode == "stand" and inside then
 		return false, "el lugar de trabajo debe estar fuera del mueble"
+	end
+	if mode == "seat" and (type(it.seatH) ~= "number" or it.seatH <= 0) then
+		return false, "falta el alto del asiento"
+	end
+	return true, nil
+end
+
+function Office.checkInteraction(item: any): (boolean, string?)
+	local defs = Office.pointDefs(item)
+	for _, it in defs do
+		local ok, why = checkPoint(item, it)
+		if not ok then
+			return false, why
+		end
+	end
+	-- Varios puntos del mismo mueble: separados al menos un cuerpo (dos empleados nunca en el mismo lugar).
+	for i = 1, #defs do
+		for k = i + 1, #defs do
+			local a, b = defs[i], defs[k]
+			if math.sqrt((a.dx - b.dx) ^ 2 + (a.dy - b.dy) ^ 2) < 2 * Nav.RADIUS then
+				return false, "dos puntos de uso superpuestos"
+			end
+		end
 	end
 	return true, nil
 end
