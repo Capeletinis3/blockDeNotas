@@ -51,55 +51,113 @@ local function bodyParts(m: Model): { BasePart }
 	return out
 end
 
-local JOINTS = { Motor6D = true, Weld = true, ManualWeld = true, WeldConstraint = true, RigidConstraint = true }
+-- Lectura segura de una propiedad (en Roblox leer una propiedad que la clase no tiene da error).
+local function prop(inst: Instance, name: string): any
+	local ok, v = pcall(function()
+		return (inst :: any)[name]
+	end)
+	return ok and v or nil
+end
 
---[[ Árbol de articulaciones desde la raíz: lista ordenada de { part, parent, joint (nombre), c0, c1, rel,
-	inverse } para ubicar cada pieza a partir de su padre. Las soldaduras sin C0/C1 (WeldConstraint) guardan
-	la posición relativa de la plantilla. ]]
+local function isPart(v: any): boolean
+	return typeof(v) == "Instance" and v:IsA("BasePart")
+end
+
+local function isCFrame(v: any): boolean
+	return typeof(v) == "CFrame"
+end
+
+-- Clases que unen dos piezas con C0/C1 (JointInstance): pieza1 = pieza0 · C0 · giro · C1⁻¹.
+local MOTOR_LIKE = { Motor6D = true, Motor = true, Weld = true, ManualWeld = true, Snap = true, Glue = true }
+-- Restricciones rígidas por Attachment (RigidConstraint): los dos Attachment coinciden en el mundo.
+local ATTACH_RIGID = { RigidConstraint = true }
+
+--[[ Une dos piezas según la clase de la unión. Devuelve { a, b, kind, c0, c1 } o nil si la unión no sirve
+	(desconocida, incompleta o que no une piezas de este modelo). Nunca da error. ]]
+local function readJoint(d: Instance, m: Model): any
+	local cls = d.ClassName
+	local a, b, kind, c0, c1
+	if MOTOR_LIKE[cls] then
+		a, b = prop(d, "Part0"), prop(d, "Part1")
+		c0, c1 = prop(d, "C0"), prop(d, "C1")
+		if not (isCFrame(c0) and isCFrame(c1)) then
+			return nil
+		end
+		kind = "motor"
+	elseif cls == "WeldConstraint" then
+		a, b = prop(d, "Part0"), prop(d, "Part1")
+		kind = "rel"
+	elseif ATTACH_RIGID[cls] then
+		local a0, a1 = prop(d, "Attachment0"), prop(d, "Attachment1")
+		if not (typeof(a0) == "Instance" and a0:IsA("Attachment") and typeof(a1) == "Instance" and a1:IsA("Attachment")) then
+			return nil
+		end
+		a, b = a0.Parent, a1.Parent
+		c0, c1 = prop(a0, "CFrame"), prop(a1, "CFrame")
+		if not (isCFrame(c0) and isCFrame(c1)) then
+			return nil
+		end
+		kind = "motor" -- mismo cálculo: el Attachment0 de la pieza0 coincide con el Attachment1 de la pieza1
+	else
+		return nil -- otras restricciones (bisagras, resortes, alineaciones…): no fijan la pose; se ignoran
+	end
+	if not (isPart(a) and isPart(b)) or a == b or not a:IsDescendantOf(m) or not b:IsDescendantOf(m) then
+		return nil
+	end
+	return { a = a, b = b, kind = kind, c0 = c0, c1 = c1, name = d.Name, joint = d }
+end
+NPC._readJoint = readJoint
+
+--[[ Árbol de uniones desde la raíz: lista ordenada de { part, parent, name, c0, c1 | rel, inverse } para ubicar
+	cada pieza a partir de su padre. Las WeldConstraint guardan la posición relativa de la plantilla. Las piezas
+	que no cuelgan de ninguna unión válida siguen a la raíz con su posición relativa original (no se quedan
+	atrás ni rompen el armado). ]]
 local function jointTree(m: Model, root: BasePart): { any }
 	local edges = {}
 	for _, d in m:GetDescendants() do
-		if JOINTS[d.ClassName] then
-			local a, b = (d :: any).Part0, (d :: any).Part1
-			if a and b and a:IsDescendantOf(m) and b:IsDescendantOf(m) then
-				table.insert(edges, { joint = d, a = a, b = b })
-			end
+		local ok, e = pcall(readJoint, d, m)
+		if ok and e then
+			table.insert(edges, e)
 		end
 	end
 	local out, placed = {}, { [root] = true }
+	local function add(e: any, inverse: boolean)
+		local part, parent = (inverse and e.a or e.b), (inverse and e.b or e.a)
+		local rec = { part = part, parent = parent, name = e.name, inverse = inverse }
+		if e.kind == "motor" then
+			rec.c0, rec.c1 = e.c0, e.c1
+		else
+			rec.rel = parent.CFrame:Inverse() * part.CFrame
+		end
+		table.insert(out, rec)
+		placed[part] = true
+	end
 	local progress = true
 	while progress do
 		progress = false
 		for _, e in edges do
 			if not e.done then
-				local j = e.joint :: any
-				local isMotor = j.ClassName == "Motor6D" or j.ClassName == "Weld" or j.ClassName == "ManualWeld"
 				if placed[e.a] and not placed[e.b] then
-					local rec = { part = e.b, parent = e.a, name = j.Name, inverse = false }
-					if isMotor then
-						rec.c0, rec.c1 = j.C0, j.C1
-					else
-						rec.rel = e.a.CFrame:Inverse() * e.b.CFrame
-					end
-					table.insert(out, rec)
-					placed[e.b], e.done, progress = true, true, true
+					add(e, false)
+					e.done, progress = true, true
 				elseif placed[e.b] and not placed[e.a] then
-					local rec = { part = e.a, parent = e.b, name = j.Name, inverse = true }
-					if isMotor then
-						rec.c0, rec.c1 = j.C0, j.C1
-					else
-						rec.rel = e.b.CFrame:Inverse() * e.a.CFrame
-					end
-					table.insert(out, rec)
-					placed[e.a], e.done, progress = true, true, true
+					add(e, true)
+					e.done, progress = true, true
 				elseif placed[e.a] and placed[e.b] then
 					e.done = true
 				end
 			end
 		end
 	end
+	for _, d in m:GetDescendants() do
+		if d:IsA("BasePart") and not placed[d] then
+			table.insert(out, { part = d, parent = root, name = "Suelta_" .. d.Name, rel = root.CFrame:Inverse() * d.CFrame, inverse = false })
+			placed[d] = true
+		end
+	end
 	return out
 end
+NPC._jointTree = jointTree
 
 --[[ Arma el personaje de un empleado a partir de la plantilla del avatar de su amigo. Devuelve el rig:
 	{ model, employeeId, userId, kind = "avatar", root, chain, joints = { [nombre] = registro }, rootToFloor,
@@ -142,7 +200,7 @@ function NPC.build(employeeId: string, name: string, dept: any, template: Model)
 	local rig = {
 		model = m,
 		employeeId = employeeId,
-		userId = template:GetAttribute("userId"),
+		userId = template:GetAttribute("userId") or tonumber(string.match(template.Name, "^Avatar_(%d+)$")),
 		builtAt = template:GetAttribute("builtAt"),
 		kind = "avatar",
 		root = root,

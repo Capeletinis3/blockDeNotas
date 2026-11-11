@@ -194,7 +194,7 @@ function Anim.apply(rig: any, rootCF: CFrame, p: any, seatH: number?)
 		if parentCF then
 			local at
 			if rec.rel then
-				at = rec.inverse and parentCF * rec.rel or parentCF * rec.rel
+				at = parentCF * rec.rel
 			elseif rec.inverse then
 				at = parentCF * rec.c1 * (T[rec.name] or CFrame.new()):Inverse() * rec.c0:Inverse()
 			else

@@ -236,6 +236,22 @@ Compañía › Instalaciones › Oficinas centrales › Personalizar oficina. Ar
 y «Empleados visibles: N / M contratados». Clic sobre un personaje (modo normal, sin mueble en la mano) abre su
 panel: nombre, departamento y habitación, actividad, navegación, «Enfocar». Esc lo cierra.
 
+### Correcciones de estabilidad
+
+- **Habitaciones**: la ocupación de un punto de uso solo mira personajes de su misma habitación (las
+  coordenadas son locales) y las claves de reserva son `habitación/instancia#slot`.
+- **Cambio de amigo de un puesto**: si `rig.userId` no coincide con el amigo actual, el avatar anterior se
+  destruye en el acto y se pide el nuevo; mientras tanto no se muestra nada (ni el avatar anterior con el nombre
+  nuevo ni un genérico). Una plantilla que declara otro UserId no se usa.
+- **Uniones del avatar**: Motor6D, Weld, ManualWeld, Snap y Glue por C0/C1; WeldConstraint por sus piezas;
+  RigidConstraint por Attachment0/Attachment1. Las demás restricciones se ignoran y cada lectura está protegida:
+  una unión rara o rota no impide armar el personaje. Las piezas sin unión válida siguen a la raíz.
+- **Pedidos de avatares**: `FriendIdentity.avatarRequest` exige una lista de 1 a 12 ids de texto (≤ 64
+  caracteres) de empleados con amigo de la empresa activa; cualquier otra cosa invalida el pedido entero. Como
+  mucho 4 eventos cada 2 s por jugador. Cada pedido lleva la empresa abierta: si al empezar o al terminar de
+  armarse el avatar ya no corresponde (cambio de empresa, despido, reasignación o el jugador se fue), se
+  descarta y no se entrega.
+
 ### Pendiente de verificar en Roblox Studio
 
 La lista real de amigos (`GetFriendsAsync`) y la creación de avatares en un servidor de Roblox; el aspecto de

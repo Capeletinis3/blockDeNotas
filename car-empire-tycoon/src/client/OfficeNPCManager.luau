@@ -57,6 +57,7 @@ local st = {
 	opens = 0,
 	friendOf = {} :: { [string]: number }, -- id de empleado → userId de su amigo
 	requested = {} :: { [number]: number }, -- userId → cuándo se pidió
+	badTemplate = setmetatable({}, { __mode = "v" }) :: { [number]: any }, -- userId → plantilla que no sirvió
 	queue = {} :: { string },
 	lastRequest = -math.huge,
 	clock = 0,
@@ -186,7 +187,23 @@ local function reconcile()
 	for _, id in world.order do
 		local npc = world.npcs[id]
 		local rig = st.rigs[id]
-		local template = templateFor(st.friendOf[id])
+		local userId = st.friendOf[id]
+		if rig and rig.userId ~= userId then
+			-- El puesto cambió de amigo (reasignación, amistad terminada): el avatar anterior se va YA, aunque el
+			-- nuevo todavía no haya llegado. Nunca se muestra el avatar de otro con el nombre del nuevo.
+			NPC.destroy(rig)
+			st.rigs[id] = nil
+			rig = nil
+			if st.selected == id then
+				st.lastText = ""
+			end
+			want(id, true)
+			changed = true
+		end
+		local template = templateFor(userId)
+		if template and st.badTemplate[userId] == template then
+			template = nil -- plantilla que no se pudo armar: se espera una nueva (sin reintentar cada paso)
+		end
 		if rig and template and rig.builtAt ~= template:GetAttribute("builtAt") then
 			-- Llegó el avatar actualizado del amigo: se rearma solo el personaje (la actividad sigue igual).
 			NPC.destroy(rig)
@@ -196,11 +213,19 @@ local function reconcile()
 		end
 		if not rig then
 			if template then
-				rig = NPC.build(id, npc.name, npc.dept, template)
-				if rig then
+				local ok, built = pcall(NPC.build, id, npc.name, npc.dept, template)
+				rig = ok and built or nil
+				if rig and rig.userId == userId then
 					rig.model.Parent = st.folder
 					st.rigs[id] = rig
 					changed = true
+				else
+					if rig then
+						NPC.destroy(rig) -- plantilla de otro amigo: no se usa
+					end
+					rig = nil
+					st.badTemplate[userId :: number] = template
+					want(id, true)
 				end
 			else
 				want(id) -- todavía no llegó: se pide (y se reintenta), sin personaje genérico mientras tanto

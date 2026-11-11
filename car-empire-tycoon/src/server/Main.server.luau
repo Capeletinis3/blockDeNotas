@@ -73,6 +73,7 @@ local DataService = require(script.Parent.DataService)
 local Sessions = require(script.Parent.Sessions)
 local Garage = require(script.Parent.Garage)
 local EmployeeAvatars = require(script.Parent.EmployeeAvatars)
+local FriendIdentity = require(script.Parent.FriendIdentity)
 
 local STORE_NAME = "CarEmpireTycoon_v1"
 
@@ -248,32 +249,32 @@ sessions = Sessions.new({
 	},
 })
 
--- Pedido de avatares: solo de empleados de la empresa activa de ese jugador que tienen un amigo asignado.
-AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any)
+-- Pedido de avatares: formato estricto y solo de empleados (con amigo) de la empresa activa de ese jugador
+-- (FriendIdentity.avatarRequest). Como mucho AVATAR_EVENTS pedidos cada 2 s por jugador; lo demás se ignora.
+local AVATAR_EVENTS = 4
+local avatarWindow: { [Player]: { at: number, n: number } } = {}
+local function avatarToken(s: any): any
+	return s and s.game and (tostring(s.activeKey) .. ":" .. tostring(s.game.company and s.game.company.id)) or nil
+end
+EmployeeAvatars.stillWanted = function(player: any, userId: number, token: any): boolean
 	local s = sessions.list[player]
-	local g = s and s.game
-	if not g or type(ids) ~= "table" then
+	return s ~= nil and s.game ~= nil and not s.leaving and avatarToken(s) == token and FriendIdentity.isAssigned(s.game, userId)
+end
+AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any)
+	local w = avatarWindow[player]
+	local now = os.clock()
+	if not w or now - w.at >= 2 then
+		w = { at = now, n = 0 }
+		avatarWindow[player] = w
+	end
+	w.n += 1
+	if w.n > AVATAR_EVENTS then
 		return
 	end
-	local byEmployee = {}
-	for _, e in g.employees do
-		if e.friend then
-			byEmployee[e.id] = e.friend.userId
-		end
-	end
-	local want, seen = {}, {}
-	for i, id in ids do
-		if i > 12 then
-			break -- nunca más de lo que se ve a la vez (con margen)
-		end
-		local userId = type(id) == "string" and byEmployee[id] or nil
-		if userId and not seen[userId] then
-			seen[userId] = true
-			table.insert(want, userId)
-		end
-	end
-	if #want > 0 then
-		EmployeeAvatars.request(player, want)
+	local s = sessions.list[player]
+	local want = s and s.game and FriendIdentity.avatarRequest(s.game, ids)
+	if want then
+		EmployeeAvatars.request(player, want, avatarToken(s))
 	end
 end)
 
@@ -311,6 +312,7 @@ end
 
 Players.PlayerRemoving:Connect(function(player: Player)
 	EmployeeAvatars.forget(player)
+	avatarWindow[player] = nil
 	sessions:remove(player)
 end)
 

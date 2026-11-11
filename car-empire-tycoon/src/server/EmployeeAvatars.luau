@@ -30,11 +30,25 @@ Avatars.PER_MINUTE = 20
 Avatars.MAX_MODELS = 30
 Avatars.RETRY_AFTER = 60 -- segundos antes de reintentar un avatar que falló
 
+--[[ Comprobación de vigencia (la asigna Main.server): (player, userId, token) → ¿sigue siendo un empleado de la
+	empresa activa con la que se pidió? token identifica esa empresa abierta. Se consulta antes de empezar a
+	armar y al terminar: un avatar que llega tarde (se cambió de empresa, se despidió al empleado, se reasignó
+	el amigo o el jugador se fue) se descarta y no se entrega. ]]
+Avatars.stillWanted = nil :: ((any, number, any) -> boolean)?
+
+local function wanted(job: any): boolean
+	if not job.player.Parent then
+		return false
+	end
+	local fn = Avatars.stillWanted
+	return fn == nil or fn(job.player, job.userId, job.token) == true
+end
+
 local descCache: { [number]: { desc: any, at: number } } = {}
 local queue: { any } = {}
 local active = 0
 local perPlayer: { [any]: any } = {}
-Avatars._stats = { built = 0, failed = 0, descFetched = 0 }
+Avatars._stats = { built = 0, failed = 0, descFetched = 0, discarded = 0, skipped = 0 }
 
 -- Llama al primer nombre de método que exista (las APIs con y sin sufijo Async según la versión del motor).
 local function callFirst(names: { string }, ...: any): (boolean, any)
@@ -118,6 +132,11 @@ end
 local function build(job: any)
 	local player, userId = job.player, job.userId
 	local st = stateOf(player)
+	if not wanted(job) then
+		st.building[userId] = nil
+		Avatars._stats.skipped += 1
+		return -- ya no hace falta (cambio de empresa, despido o reasignación mientras esperaba)
+	end
 	local ok, desc = description(userId)
 	local model: any = nil
 	if ok then
@@ -128,10 +147,12 @@ local function build(job: any)
 	end
 	st.building[userId] = nil
 	local folder = player.Parent and Avatars.folderFor(player)
-	if not folder then
+	if not folder or not wanted(job) then
+		-- Resultado obsoleto: no se entrega.
 		if model then
 			model:Destroy()
 		end
+		Avatars._stats.discarded += 1
 		return
 	end
 	if not model then
@@ -185,7 +206,7 @@ end
 
 --[[ Pide los avatares de estos userId (ya validados por Main.server). Ignora los que ya están entregados y
 	vigentes, los que se están armando, los que fallaron hace poco y los que exceden el límite por minuto. ]]
-function Avatars.request(player: any, userIds: { number })
+function Avatars.request(player: any, userIds: { number }, token: any?)
 	local folder = Avatars.folderFor(player)
 	if not folder then
 		return
@@ -199,12 +220,14 @@ function Avatars.request(player: any, userIds: { number })
 		if not fresh and not st.building[userId] and not recentFail and st.count < Avatars.PER_MINUTE then
 			st.count += 1
 			st.building[userId] = true
-			table.insert(queue, { player = player, userId = userId })
+			table.insert(queue, { player = player, userId = userId, token = token })
 		end
 	end
 	pump()
 end
 
+-- Descarta los pedidos en cola de un jugador (al irse del servidor). Los que ya se están armando se descartan
+-- solos al terminar (wanted).
 function Avatars.forget(player: any)
 	perPlayer[player] = nil
 	for i = #queue, 1, -1 do
@@ -212,6 +235,11 @@ function Avatars.forget(player: any)
 			table.remove(queue, i)
 		end
 	end
+end
+
+-- Cuántos pedidos esperan (para las pruebas).
+function Avatars.pending(): number
+	return #queue
 end
 
 return Avatars

@@ -195,6 +195,9 @@ function Screen.nextFriendNote(): Instance
 	elseif f.next then
 		return Ui.note("g", "Cada empleado es uno de tus amigos de Roblox, asignado solo al contratar. La próxima contratación se incorpora como " .. tostring(f.next.displayName) .. " (@" .. tostring(f.next.username) .. "). Amigos libres: " .. f.available .. " de " .. f.total .. ".")
 	end
+	if (f.total or 0) == 0 then
+		return Ui.note("y", "Tu lista de amigos de Roblox está vacía. Podés contratar igual: cada puesto trabaja, pero no tiene identidad ni aparece en la oficina hasta que agregues amigos (se asignan solos).")
+	end
 	return Ui.note("y", "Todos tus amigos de Roblox ya trabajan en esta empresa (" .. f.total .. "). Podés contratar igual: el puesto trabaja, pero no tiene identidad ni aparece en la oficina hasta que haya un amigo libre.")
 end
 

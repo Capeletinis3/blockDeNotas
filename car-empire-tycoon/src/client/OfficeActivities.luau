@@ -120,6 +120,13 @@ local function spotSig(sp: any): string
 	return string.format("%.3f:%.3f:%d:%s:%s", sp.x, sp.y, sp.facing, tostring(sp.seated), ap and string.format("%.3f:%.3f", ap.x, ap.y) or "-")
 end
 
+--[[ Clave de reserva de un punto de uso: habitación/instancia#slot. Las coordenadas de cada habitación son
+	locales (dos habitaciones pueden tener un punto en el mismo x, y): la clave nunca depende de ellas y lleva la
+	habitación, así una reserva de una habitación no puede tapar a otra. ]]
+function Act.spotKey(roomId: string, instance: any, slot: any): string
+	return roomId .. "/" .. tostring(instance) .. "#" .. tostring(slot)
+end
+
 --[[ Puntos utilizables de una habitación. Escritorio o mesa con una silla al lado (a COMBO_DIST o menos de su
 	punto de uso) = se trabaja o se reúne sentado en esa silla (reserva los dos puntos). ]]
 local function buildSpots(o: any, roomId: string): ({ any }, { [string]: any })
@@ -132,13 +139,14 @@ local function buildSpots(o: any, roomId: string): ({ any }, { [string]: any })
 	end
 	local list, byKey = {}, {}
 	for _, pt in raw do
-		local key = tostring(pt.instance) .. "#" .. tostring(pt.slot)
+		local key = Act.spotKey(roomId, pt.instance, pt.slot)
 		local seated = Office.INTERACTION_KINDS[pt.kind] == "seat"
 		local sp = {
 			key = key,
 			keys = { key },
 			kind = pt.kind,
 			instance = pt.instance,
+			room = roomId,
 			item = pt.item,
 			x = pt.x,
 			y = pt.y,
@@ -161,7 +169,7 @@ local function buildSpots(o: any, roomId: string): ({ any }, { [string]: any })
 			if best then
 				sp.seated = true
 				sp.x, sp.y, sp.seatH, sp.approach = best.x, best.y, best.seatH, best.approach
-				sp.chair = tostring(best.instance) .. "#" .. tostring(best.slot)
+				sp.chair = Act.spotKey(roomId, best.instance, best.slot)
 				sp.keys = { key, sp.chair :: string }
 				sp.usable = true
 			end
@@ -193,7 +201,9 @@ function Act.reservedBy(world: any, key: string): string?
 	return world.res[key]
 end
 
--- ¿Están libres todas las claves de un punto (o son de este mismo empleado) y no hay nadie parado ahí?
+--[[ ¿Están libres todas las claves de un punto (o son de este mismo empleado) y no hay nadie parado ahí? La
+	cercanía se mide solo con quienes están en la MISMA habitación que el punto (las coordenadas son locales de
+	cada habitación: el mismo x, y en otra habitación es otro lugar). ]]
 local function spotFree(world: any, sp: any, npcId: string): boolean
 	for _, k in sp.keys do
 		local who = world.res[k]
@@ -202,9 +212,9 @@ local function spotFree(world: any, sp: any, npcId: string): boolean
 		end
 	end
 	for id, other in world.npcs do
-		if id ~= npcId and other.room ~= nil then
+		if id ~= npcId and other.room ~= nil and other.room == sp.room then
 			local busy = other.activity and other.activity.spot
-			if busy and dist(busy.x, busy.y, sp.x, sp.y) < Act.PERSONAL_SPACE then
+			if busy and busy.room == sp.room and dist(busy.x, busy.y, sp.x, sp.y) < Act.PERSONAL_SPACE then
 				return false
 			end
 			if not other.activity and other.state ~= "Walking" and dist(other.x, other.y, sp.x, sp.y) < Act.PERSONAL_SPACE then
@@ -214,6 +224,7 @@ local function spotFree(world: any, sp: any, npcId: string): boolean
 	end
 	return true
 end
+Act._spotFree = spotFree
 
 local function reserve(world: any, npc: any, keys: { string }): boolean
 	for _, k in keys do

@@ -4056,6 +4056,10 @@ test("Bonificaciones del mobiliario en la interfaz: tarjetas con aporte real, Be
 		check(Editor.confirm().ok, "escritorio colocado")
 	end
 	Editor.cancel()
+	if not named("TabCatalogo") then
+		local d = App.topDialog()
+		print("DIAG TabCatalogo ausente: ruta=" .. tostring(App.ui.route) .. " diálogo=" .. tostring(d and d.kind) .. " seccion=" .. tostring(Editor.state().section) .. " lateral=" .. tostring(named("LateralOficina") ~= nil) .. " intro=" .. tostring(App.ui.intro ~= nil))
+	end
 	clickN("TabCatalogo")
 	M.task.wait()
 	clickN("Cat_todas")
@@ -4574,7 +4578,7 @@ do
 		Act.setOffice(world, o2)
 		check(victim.activity == nil and victim.interrupts == count0 + 1, "23. retirar el mueble interrumpe la actividad")
 		for k in world.res do
-			check(string.sub(k, 1, #inst + 1) ~= inst .. "#", "23. sin reservas del mueble retirado")
+			check(string.find(k, "/" .. inst .. "#", 1, true) == nil, "23. sin reservas del mueble retirado")
 		end
 		check(string.find(victim.nav, "Interrumpido", 1, true) ~= nil, "23. el panel lo informa (" .. victim.nav .. ")")
 		check(Nav.clearAt(world.rooms[victim.room].grid, victim.x, victim.y), "23. no queda dentro de otro mueble")
@@ -4709,7 +4713,13 @@ do
 		local pelo = rig.model:FindFirstChild("Pelo")
 		local handle = pelo and pelo:FindFirstChild("Handle")
 		local head = rig.model:FindFirstChild("Head")
-		check(handle and (handle.CFrame.Position - (head.CFrame * M.CFrame.new(0, 0.65, 0)).Position).Magnitude < 1e-3, "los accesorios siguen a la cabeza")
+		local hrec
+		for _, rec in rig.chain do
+			if rec.part == handle then
+				hrec = rec
+			end
+		end
+		check(handle and hrec and (handle.CFrame.Position - (head.CFrame * hrec.c0 * hrec.c1:Inverse()).Position).Magnitude < 1e-3, "los accesorios siguen a la cabeza")
 		fake.phase, fake.phaseT = "up", Act.SIT_TIME
 		Anim.update(rig, fake, cf, 1, 0.05)
 		fake.phase, fake.pose, fake.state = nil, "idle", "Idle"
@@ -5099,6 +5109,420 @@ do
 		M.task.wait()
 		check(not Mgr.isOpen() and Mgr.connections() == 0, "al salir de la empresa no quedan empleados ni conexiones")
 		noErrors("Empleados visibles en el editor")
+	end)
+
+	-- Correcciones de la etapa 5 ------------------------------------------------------------------------------
+
+	-- Empresa nueva y limpia para las pruebas con el servidor real (borra otra de prueba si no hay ranura).
+	local function freshCompany(name: string): any
+		App.closeAllDialogs()
+		if App.g then
+			App.request("leaveCompany", {})
+			waitFor(function()
+				return App.g == nil
+			end)
+		end
+		local slot
+		for _, k in { "1", "2", "3", "4" } do
+			if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+				slot = k
+				break
+			end
+		end
+		if not slot then
+			for k, v in App.profile.slots do
+				if v and v.name ~= nil then
+					App.request("deleteCompany", { slot = k, confirm = v.name })
+					slot = k
+					break
+				end
+			end
+		end
+		local r = App.request("createCompany", { slot = slot, name = name, color = "#FF8A3D", logo = "pico" })
+		assert(r.ok, r.msg)
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+		local sess = Sessions.instance.list[player]
+		sess.game.money = 1e6
+		sess.game.sede = 3
+		Sessions.instance:push(sess)
+		waitFor(function()
+			return App.g.money == 1e6
+		end)
+		return sess
+	end
+
+	local function setFriends(sess: any, list: { any })
+		M.friendsOf[player.UserId] = list
+		Sessions.instance:fetchFriends(sess)
+		waitFor(function()
+			return App.payload.friends ~= nil and App.payload.friends.status == "ok" and App.payload.friends.total == #list
+		end)
+	end
+
+	local function hireUi(n: number)
+		for _ = 1, n do
+			if #App.g.candidates == 0 then
+				App.request("searchCandidates", { kind = "general" })
+				waitFor(function()
+					return #App.g.candidates > 0
+				end)
+			end
+			local before = #App.g.employees
+			local r = App.request("hire", { candidateId = App.g.candidates[1].id })
+			assert(r.ok, r.msg)
+			waitFor(function()
+				return #App.g.employees == before + 1
+			end)
+		end
+	end
+
+	-- Espera en tiempo real (los límites del servidor son por segundo real) avanzando la oficina.
+	local function waitReal(cond: () -> boolean, seconds: number): boolean
+		local t0 = os.clock()
+		while os.clock() - t0 < seconds do
+			Mgr.step(0.5)
+			if cond() then
+				return true
+			end
+			M.task.wait(0.05)
+		end
+		return cond()
+	end
+
+	local function friendList(n: number, base: number, online: boolean?): { any }
+		local out = {}
+		for i = 1, n do
+			table.insert(out, { userId = base + i, username = "amigo" .. (base + i), displayName = "Amigo " .. (base + i), isOnline = online == true and i % 2 == 0 })
+		end
+		return out
+	end
+
+	test("Correcciones etapa 5: habitaciones distintas con coordenadas iguales no se estorban", function()
+		local o = Office.new(2)
+		local cMain = put(o, "silla_oficina_1970", "oficina_principal", 2.5, 2.5)
+		local cSala = put(o, "silla_oficina_1970", "sala_reuniones", 2.5, 2.5)
+		local world = Act.new(o, { seed = "salas" })
+		Act.setEmployees(world, staff(2, "h"), true)
+		local a, b = Act.list(world)[1], Act.list(world)[2]
+		local spMain = world.rooms.oficina_principal.byKey[Act.spotKey("oficina_principal", cMain, 1)]
+		local spSala = world.rooms.sala_reuniones.byKey[Act.spotKey("sala_reuniones", cSala, 1)]
+		check(spMain and spSala and spMain.x == spSala.x and spMain.y == spSala.y, "dos sillas en el mismo x, y local de habitaciones distintas")
+		check(spMain.key ~= spSala.key and string.find(spMain.key, "oficina_principal/", 1, true) == 1 and string.find(spSala.key, "sala_reuniones/", 1, true) == 1, "las reservas llevan la habitación")
+		-- A sentado en la silla de la oficina principal; B, en la sala de reuniones.
+		a.room, b.room = "oficina_principal", "sala_reuniones"
+		Act.interrupt(world, a, "prueba")
+		Act.interrupt(world, b, "prueba")
+		check(Act._reserve(world, a, spMain.keys), "A reserva su silla")
+		a.activity = { kind = "sit", spot = spMain, key = spMain.key, keys = spMain.keys }
+		a.state, a.x, a.y = "Sitting", spMain.x, spMain.y
+		check(Act._spotFree(world, spSala, b.id), "1. la silla de la sala sigue libre para B (otra habitación)")
+		check(not Act._spotFree(world, spMain, b.id), "la de la oficina principal está ocupada")
+		-- Alguien parado en el mismo x, y de otra habitación tampoco estorba.
+		Act.interrupt(world, a, "prueba")
+		a.x, a.y = spSala.x, spSala.y
+		check(Act._spotFree(world, spSala, b.id), "1. alguien parado en otra habitación no ocupa el punto")
+		a.room = "sala_reuniones"
+		check(not Act._spotFree(world, spSala, b.id), "en la misma habitación sí lo ocupa")
+		-- Con la simulación: cada uno usa su silla al mismo tiempo, sin bloquearse.
+		local o2 = Office.new(2)
+		put(o2, "silla_oficina_1970", "oficina_principal", 2.5, 2.5)
+		put(o2, "silla_oficina_1970", "sala_reuniones", 2.5, 2.5)
+		local w2 = Act.new(o2, { seed = "salas2" })
+		Act.setEmployees(w2, staff(2, "hh"), true)
+		local l2 = Act.list(w2)
+		l2[1].room, l2[2].room = "oficina_principal", "sala_reuniones"
+		local both = false
+		for _ = 1, 6000 do
+			Act.step(w2, 0.1)
+			if l2[1].state == "Sitting" and l2[2].state == "Sitting" and not l2[1].phase and not l2[2].phase then
+				both = true
+				break
+			end
+		end
+		check(both, "los dos se sientan a la vez, cada uno en su habitación")
+		noErrors("Habitaciones distintas")
+	end)
+
+	test("Correcciones etapa 5: un empleado que cambia de amigo nunca muestra el avatar anterior", function()
+		local o = Office.new(1)
+		Scene.buildRooms(o)
+		local list = staff(2, "ra")
+		provideAvatars(list)
+		local company = { id = "reasig" }
+		Mgr.open({ company = company, office = o, employees = list })
+		Mgr.step(0.1)
+		local rig = Mgr.rig("ra1")
+		check(rig and rig.userId == list[1].friend.userId, "avatar del primer amigo")
+		local oldModel = rig.model
+		local oldUser = rig.userId
+		-- Reasignación: el puesto pasa a otro amigo (su avatar todavía no llegó).
+		local moved = { table.clone(list[1]), list[2] }
+		moved[1].friend = { userId = 987654, username = "nuevo_amigo", displayName = "Nuevo Amigo", since = 1 }
+		moved[1].name = "Nuevo Amigo"
+		Mgr._state.lastRequest = -math.huge
+		local req0 = Mgr._state.requests
+		Mgr.sync({ company = company, office = o, employees = moved })
+		check(oldModel.Parent == nil, "2. el avatar anterior se destruye en el acto")
+		check(Mgr.rig("ra1") == nil, "2. sin referencias al personaje anterior")
+		check(Mgr.npc("ra1") ~= nil and Mgr.npc("ra1").name == "Nuevo Amigo", "el empleado sigue (misma actividad), con el nombre nuevo")
+		local shown = false
+		for _, d in (Scene.folder():FindFirstChild("Empleados") or M.Instance.new("Folder")):GetDescendants() do
+			if d.Name == "Nombre" and d.Text == "Nuevo Amigo" then
+				shown = true
+			end
+		end
+		check(not shown, "2. el nombre nuevo no aparece sobre ningún avatar mientras carga")
+		check(Mgr._state.requests > req0, "2. se pide la apariencia nueva")
+		eq(npcModels(), 1, "2. ningún personaje genérico mientras tanto")
+		-- Una plantilla que dice ser de otro amigo no se usa.
+		local fake = M.fakeR15(111)
+		fake.Name = "Avatar_987654"
+		fake:SetAttribute("userId", 111)
+		fake:SetAttribute("builtAt", os.time())
+		fake.Parent = M.services.Players.LocalPlayer.PlayerGui.AvataresEmpleados
+		Mgr.step(0.1)
+		check(Mgr.rig("ra1") == nil, "una plantilla de otro UserId no se muestra")
+		fake:Destroy()
+		-- Llega la apariencia correcta.
+		provideAvatars({ moved[1] })
+		Mgr.step(0.1)
+		local nr = Mgr.rig("ra1")
+		check(nr and nr.userId == 987654 and nr.userId ~= oldUser and nr.label.Text == "Nuevo Amigo", "2. el avatar nuevo con su nombre")
+		-- Pierde el amigo (amistad terminada sin reemplazo): su personaje desaparece.
+		local released = { table.clone(moved[1]), list[2] }
+		released[1].friend = nil
+		released[1].name = "Puesto sin amigo asignado"
+		local nm = nr.model
+		Mgr.sync({ company = company, office = o, employees = released })
+		check(nm.Parent == nil and Mgr.npc("ra1") == nil, "sin amigo: sin personaje")
+		Mgr.close()
+		Scene.destroy()
+		noErrors("Reasignación de avatar")
+	end)
+
+	test("Correcciones etapa 5: avatares R15 con accesorios, ropa en capas, uniones raras y distintas escalas", function()
+		local NPCm = require("./.build-ui/client/OfficeNPC")
+		local extras = { "weldconstraint", "rigid", "unknown", "broken", "orphan", "layered" }
+		for _, scale in { 0.6, 1, 1.6 } do
+			local tpl = M.fakeR15(5150, { extras = extras })
+			tpl:SetAttribute("userId", 5150)
+			tpl:ScaleTo(scale)
+			local tlo, thi = math.huge, -math.huge
+			for _, d in tpl:GetDescendants() do
+				if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+					tlo = math.min(tlo, d.CFrame.Position.Y - d.Size.Y / 2)
+					thi = math.max(thi, d.CFrame.Position.Y + d.Size.Y / 2)
+				end
+			end
+			local h0 = thi - tlo
+			local okB, rig = pcall(NPCm.build, "var" .. scale, "Variante", "produccion", tpl)
+			check(okB and rig ~= nil, "escala " .. scale .. ": se arma aunque haya uniones desconocidas o rotas (" .. tostring(rig) .. ")")
+			if okB and rig then
+				local m = rig.model
+				-- Relaciones de la plantilla (antes de animar) para comparar después.
+				local head = m:FindFirstChild("Head")
+				local hat = m:FindFirstChild("Sombrero")
+				local glasses = m:FindFirstChild("Anteojos") and m.Anteojos:FindFirstChild("Handle")
+				local broken = m:FindFirstChild("AccesorioRoto") and m.AccesorioRoto:FindFirstChild("Handle")
+				local tail, loose = m:FindFirstChild("Cola"), m:FindFirstChild("Suelta")
+				local jacket = m:FindFirstChild("Campera") and m.Campera:FindFirstChild("Handle")
+				local upper = m:FindFirstChild("UpperTorso")
+				local relHat = head.CFrame:Inverse() * hat.CFrame
+				local relGl = head.CFrame:Inverse() * glasses.CFrame
+				local relJk = upper.CFrame:Inverse() * jacket.CFrame
+				local lo, hi = math.huge, -math.huge
+				for _, d in m:GetDescendants() do
+					if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+						lo = math.min(lo, d.CFrame.Position.Y - d.Size.Y / 2)
+						hi = math.max(hi, d.CFrame.Position.Y + d.Size.Y / 2)
+					end
+				end
+				local h = hi - lo
+				local expect = h0 * math.clamp(NPCm.DIM.height / h0, NPCm.MIN_SCALE, NPCm.MAX_SCALE)
+				check(math.abs(h - expect) < 0.05, string.format("escala %.1f: altura normalizada %.2f (esperada ≈ %.2f)", scale, h, expect))
+				-- Animar sentado y de pie: cada accesorio sigue a su pieza.
+				local npc = { state = "Sitting", pose = "sitwork", seed = 1, activity = { spot = { seatH = 1.5 } } }
+				local cf = M.CFrame.new(10, 50, 10) * M.CFrame.Angles(0, 1, 0)
+				local okA = pcall(function()
+					for _ = 1, 20 do
+						Anim.update(rig, npc, cf, 2, 0.05)
+					end
+				end)
+				check(okA, "escala " .. scale .. ": se anima sin errores")
+				local function near(a: any, b: any): boolean
+					return (a.Position - b.Position).Magnitude < 1e-3
+				end
+				check(near(head.CFrame * relHat, hat.CFrame), "WeldConstraint: el sombrero sigue a la cabeza")
+				check(near(head.CFrame * relGl, glasses.CFrame), "RigidConstraint (por Attachment): los anteojos siguen a la cabeza")
+				check(near(upper.CFrame * relJk, jacket.CFrame), "ropa en capas soldada al revés: sigue al torso")
+				check(broken and broken.CFrame.Position.Y > 50 and tail and tail.CFrame.Position.Y > 50 and loose and loose.CFrame.Position.Y > 50, "unión rota, desconocida o pieza suelta: acompañan al personaje (no quedan atrás)")
+				local hipY = (m.LowerTorso.CFrame * rig.joints.LeftHip.c0).Position.Y - 50
+				check(math.abs(hipY - 1.5) < 0.08, string.format("escala %.1f: sentado a la altura del asiento (%.2f)", scale, hipY))
+				NPCm.destroy(rig)
+			end
+		end
+		-- Lectura de uniones: tipos sin Part0/Part1 (RigidConstraint) y desconocidos nunca dan error.
+		local m = M.fakeR15(1, { extras = extras })
+		local n, okAll = 0, true
+		for _, d in m:GetDescendants() do
+			local ok, e = pcall(NPCm._readJoint, d, m)
+			okAll = okAll and ok
+			if ok and e then
+				n += 1
+			end
+		end
+		check(okAll and n >= 18, "3. todas las uniones se leen sin error (" .. n .. " válidas)")
+		check(NPCm.build("x", "x", "produccion", M.Instance.new("Model")) == nil, "plantilla sin HumanoidRootPart: no se arma (sin error)")
+		noErrors("Avatares R15")
+	end)
+
+	test("Correcciones etapa 5: con el servidor real — sin conexión, sin amigos, más empleados que amigos, pedidos inválidos, cambio de empresa durante la carga y reapertura", function()
+		local EA = require("./.build-ui/server/EmployeeAvatars")
+		local remote = M.services.ReplicatedStorage.CarEmpireRemotes.Avatares
+		M.avatarsEnabled = true
+		-- Amigos sin conexión: cuentan igual (la mitad desconectados).
+		local sess = freshCompany("Amigos Lejos")
+		setFriends(sess, friendList(4, 810000, true))
+		hireUi(4)
+		local offline = 0
+		for _, e in App.g.employees do
+			check(e.friend ~= nil, "amigo asignado aunque esté desconectado")
+			local f = M.friendsOf[player.UserId]
+			for _, x in f do
+				if x.userId == e.friend.userId and not x.isOnline then
+					offline += 1
+				end
+			end
+		end
+		check(offline >= 2, "amigos desconectados también son empleados (" .. offline .. ")")
+		-- Más empleados que amigos.
+		hireUi(2)
+		local vac = 0
+		for _, e in App.g.employees do
+			if not e.friend then
+				vac += 1
+			end
+		end
+		eq(vac, 2, "13. dos puestos sin amigo")
+		App.go("oficina")
+		M.task.wait()
+		check(waitReal(function()
+			return npcModels() == 4 and EA.pending() == 0
+		end, 10), "solo los 4 con amigo tienen personaje")
+		-- Pedidos inválidos o duplicados al servidor: no arman nada ni rompen nada.
+		local built = M.avatarCalls.model
+		M.task.wait(2.1) -- ventana del límite de eventos
+		for _, payload in { nil, 5, "e1", {}, { x = "e1" }, { { "e1" } }, { 1, 2, 3 }, (function()
+			local t = {}
+			for i = 1, 40 do
+				t[i] = "e1"
+			end
+			return t
+		end)() } do
+			remote:FireServer(payload)
+		end
+		M.task.wait()
+		eq(M.avatarCalls.model, built, "4. pedidos con formato inválido: nada")
+		M.task.wait(2.1)
+		local vacId
+		for _, e in App.g.employees do
+			if not e.friend then
+				vacId = e.id
+			end
+		end
+		remote:FireServer({ vacId })
+		remote:FireServer({ "e-inexistente" })
+		local one = App.g.employees[1].id
+		remote:FireServer({ one, one, one })
+		M.task.wait()
+		eq(M.avatarCalls.model, built, "4. sin amigo, inexistentes o repetidos de uno vigente: nada nuevo")
+		-- Límite de eventos: muchos seguidos, solo los primeros se procesan.
+		M.task.wait(2.1)
+		local gui = player:FindFirstChild("PlayerGui")
+		local folder = gui:FindFirstChild("AvataresEmpleados")
+		local tplOne = folder:FindFirstChild("Avatar_" .. App.g.employees[1].friend.userId)
+		if tplOne then
+			tplOne:Destroy() -- obliga a rearmar ese
+		end
+		local b0 = M.avatarCalls.model
+		for _ = 1, 10 do
+			remote:FireServer({ one })
+		end
+		M.task.wait(0.2)
+		check(M.avatarCalls.model - b0 <= 1, "4. pedidos duplicados en ráfaga: un solo armado (" .. (M.avatarCalls.model - b0) .. ")")
+		check(waitFor(function()
+			return folder:FindFirstChild("Avatar_" .. App.g.employees[1].friend.userId) ~= nil
+		end), "el avatar pedido llega")
+		M.task.wait(2.1)
+		-- Cerrar y reabrir el editor: sin personajes duplicados.
+		for i = 1, 3 do
+			App.go("compania")
+			M.task.wait()
+			App.go("oficina")
+			M.task.wait()
+			waitReal(function()
+				return npcModels() == 4
+			end, 10)
+			local seen, dup = {}, false
+			for _, mdl in Scene.folder():FindFirstChild("Empleados"):GetChildren() do
+				local id = mdl:GetAttribute("employeeId")
+				dup = dup or seen[id] == true
+				seen[id] = true
+			end
+			check(npcModels() == 4 and not dup, "reabrir #" .. i .. ": 4 personajes, ninguno repetido")
+		end
+		-- Cambio de empresa mientras los avatares se arman: los resultados viejos se descartan.
+		local sessA = freshCompany("Carga A")
+		setFriends(sessA, friendList(3, 820000))
+		hireUi(3)
+		local aIds = {}
+		for _, e in App.g.employees do
+			aIds[e.friend.userId] = true
+		end
+		M.avatarDelay = 0.4
+		local disc0, skip0 = EA._stats.discarded, EA._stats.skipped
+		App.go("oficina")
+		M.task.wait()
+		Mgr.step(0.1) -- pide los avatares (quedan en curso)
+		local sessB = freshCompany("Carga B") -- se cambia de empresa antes de que terminen
+		setFriends(sessB, friendList(2, 830000))
+		M.task.wait(1.5)
+		M.avatarDelay = nil
+		check(EA._stats.discarded + EA._stats.skipped > disc0 + skip0, "4. los avatares que llegaron tarde se descartan (" .. (EA._stats.discarded - disc0) .. " + " .. (EA._stats.skipped - skip0) .. ")")
+		local leaked = 0
+		for _, mdl in folder:GetChildren() do
+			local uid = mdl:GetAttribute("userId")
+			if uid and aIds[uid] then
+				leaked += 1
+			end
+		end
+		eq(leaked, 0, "4. ningún avatar de la empresa anterior se entrega")
+		check(not Mgr.isOpen() or #Mgr.world().order == 0, "la empresa nueva no muestra empleados de la anterior")
+		-- Jugador sin amigos.
+		setFriends(sessB, {})
+		hireUi(2)
+		for _, e in App.g.employees do
+			check(e.friend == nil and e.name == "Puesto sin amigo asignado", "sin amigos: puesto sin identidad")
+		end
+		App.go("personal")
+		M.task.wait()
+		App.ui.staff.view = "mercado"
+		App.forceRender()
+		M.task.wait()
+		check(find("Tu lista de amigos de Roblox está vacía") ~= nil, "Personal lo explica")
+		App.go("oficina")
+		M.task.wait()
+		Mgr.step(0.5)
+		eq(npcModels(), 0, "sin amigos: oficina sin personajes (ni genéricos)")
+		check(find("2 puestos sin amigo") ~= nil, "el contador muestra los puestos sin amigo")
+		App.go("juego")
+		M.avatarsEnabled = false
+		noErrors("Servidor real")
 	end)
 end
 

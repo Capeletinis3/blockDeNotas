@@ -5496,6 +5496,63 @@ do
 		eq(#g3.employees, 3, "8. ningún empleado eliminado")
 	end)
 
+	test("[AM4] Pedidos de avatares: formato estricto, solo empleados autorizados, sin repetidos; jugador sin amigos", function()
+		local g = newCompany("Pedidos SA")
+		g.sede = 3
+		local ctx = makeCtx(9)
+		ctx.friends = FI.roster({ status = "ok", complete = true, list = friends(3, 3000) })
+		local hired = hireN(g, ctx, 4) -- 3 con amigo, 1 sin amigo
+		local a, b, vac = hired[1].e, hired[2].e, hired[4].e
+		check(vac.friend == nil, "cuarto puesto sin amigo")
+		local ok = FI.avatarRequest(g, { a.id, b.id })
+		check(ok and #ok == 2 and ok[1] == a.friend.userId and ok[2] == b.friend.userId, "pedido válido: los UserId de sus amigos")
+		local dup = FI.avatarRequest(g, { a.id, a.id, a.id })
+		check(dup and #dup == 1, "pedidos repetidos: un solo avatar")
+		local big = {}
+		for i = 1, FI.MAX_AVATAR_REQUEST + 1 do
+			big[i] = a.id
+		end
+		local bad = {
+			{ nil, "nil" }, { 5, "número" }, { "e1", "texto suelto" }, { {}, "lista vacía" },
+			{ { x = a.id }, "diccionario" }, { { [1] = a.id, [3] = b.id }, "lista con huecos" },
+			{ { [1] = a.id, extra = true }, "lista con claves extra" }, { { [0] = a.id }, "índice 0" },
+			{ { [1.5] = a.id }, "índice fraccionario" }, { big, "demasiados" }, { { { a.id } }, "tabla anidada" },
+			{ { 123 }, "número como id" }, { { string.rep("x", 65) }, "id demasiado largo" }, { { "" }, "id vacío" },
+			{ { vac.id }, "empleado sin amigo" }, { { "e-otro" }, "empleado inexistente" }, { { a.id, "e-otro" }, "uno válido y uno ajeno" },
+		}
+		for _, case in bad do
+			local res, why = FI.avatarRequest(g, case[1])
+			check(res == nil and why ~= nil, "rechazado: " .. case[2])
+		end
+		check(FI.avatarRequest(nil, { a.id }) == nil, "sin empresa activa: rechazado")
+		-- Un empleado de OTRA empresa del mismo jugador no se puede pedir desde esta.
+		local other = newCompany("Otra SA")
+		other.sede = 3
+		local ctx2 = makeCtx(10)
+		ctx2.friends = ctx.friends
+		local h2 = hireN(other, ctx2, 1)[1].e
+		-- Los ids de empleado son de cada empresa: un pedido se resuelve SIEMPRE contra la empresa activa, nunca
+		-- devuelve el amigo de un empleado de otra empresa.
+		local cross = FI.avatarRequest(g, { h2.id })
+		check(cross == nil or (FI.isAssigned(g, cross[1]) and (cross[1] ~= h2.friend.userId or FI.isAssigned(g, h2.friend.userId))), "otra empresa: solo se resuelven amigos de la empresa activa")
+		check(FI.isAssigned(g, a.friend.userId) and not FI.isAssigned(g, 424242), "vigencia: solo amigos asignados en la empresa")
+		local fu = a.friend.userId
+		check(Actions.fire(g, ctx, { employeeId = a.id }).ok, "despedir")
+		check(not FI.isAssigned(g, fu), "despedido: su amigo deja de estar vigente")
+		check(FI.avatarRequest(g, { a.id }) == nil, "despedido: ya no se puede pedir su avatar")
+		-- Jugador sin amigos: la lista llega vacía (válida) y todos los puestos quedan sin identidad.
+		local lonely = newCompany("Solo SA")
+		lonely.sede = 3
+		local ctx3 = makeCtx(11)
+		ctx3.friends = FI.roster({ status = "ok", complete = true, list = {} })
+		local hs = hireN(lonely, ctx3, 2)
+		check(hs[1].e.friend == nil and hs[2].e.friend == nil, "sin amigos: puestos sin identidad")
+		local sum = FI.summary(lonely, ctx3.friends)
+		check(sum.status == "ok" and sum.total == 0 and sum.vacant == 2 and sum.next == nil, "resumen: 0 amigos, 2 puestos sin amigo")
+		local r = FI.reconcile(lonely, ctx3.friends, 100, 1)
+		check(r.assigned == 0 and r.released == 0, "nada que reasignar")
+	end)
+
 	test("[AM3] Sesión: la lista se pide al entrar, se reintenta, se guarda el UserId y las partidas viejas se completan", function()
 		local store = newStore()
 		local clock = { t = 1000, c = 0 }

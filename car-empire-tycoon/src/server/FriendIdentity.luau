@@ -263,6 +263,62 @@ function FI.reconcile(g: any, rawRoster: any, now: number, day: number?): any
 	return res
 end
 
+--[[ Pedido de avatares del cliente (evento Avatares). Formato estricto: una lista (claves 1..n, sin huecos ni
+	otras claves) de 1 a MAX_AVATAR_REQUEST textos de hasta 64 caracteres, cada uno el id de un empleado de la
+	empresa ACTIVA que tiene un amigo asignado. Cualquier otra cosa invalida el pedido entero (no se arma nada).
+	Devuelve (userIds sin repetir, nil) o (nil, motivo). ]]
+FI.MAX_AVATAR_REQUEST = 12
+function FI.avatarRequest(g: any, ids: any): ({ number }?, string?)
+	if type(g) ~= "table" or type(g.employees) ~= "table" then
+		return nil, "sin empresa activa"
+	end
+	if type(ids) ~= "table" then
+		return nil, "formato inválido"
+	end
+	local n = 0
+	for k in ids do
+		n += 1
+		if type(k) ~= "number" or k ~= math.floor(k) or k < 1 or n > FI.MAX_AVATAR_REQUEST then
+			return nil, "formato inválido"
+		end
+	end
+	if n == 0 or n ~= #ids then
+		return nil, "formato inválido"
+	end
+	local byEmployee = {}
+	for _, e in g.employees do
+		if type(e) == "table" and type(e.id) == "string" and type(e.friend) == "table" and validId(e.friend.userId) then
+			byEmployee[e.id] = e.friend.userId
+		end
+	end
+	local out, seen = {}, {}
+	for i = 1, n do
+		local id = ids[i]
+		if type(id) ~= "string" or #id == 0 or #id > 64 then
+			return nil, "formato inválido"
+		end
+		local userId = byEmployee[id]
+		if not userId then
+			return nil, "empleado no autorizado"
+		end
+		if not seen[userId] then
+			seen[userId] = true
+			table.insert(out, userId)
+		end
+	end
+	return out, nil
+end
+
+-- ¿Este userId sigue siendo un empleado de la empresa activa? (para descartar avatares que llegan tarde)
+function FI.isAssigned(g: any, userId: number): boolean
+	for _, e in (type(g) == "table" and type(g.employees) == "table") and g.employees or {} do
+		if type(e) == "table" and type(e.friend) == "table" and e.friend.userId == userId then
+			return true
+		end
+	end
+	return false
+end
+
 -- Resumen para la interfaz (cuántos amigos, cuántos libres, a quién se contrataría ahora).
 function FI.summary(g: any, rawRoster: any): any
 	local roster = ensureRoster(rawRoster)

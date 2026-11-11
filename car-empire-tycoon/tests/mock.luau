@@ -925,6 +925,36 @@ function methods:GetPivot()
 	end
 	return props.WorldPivot or CFrame.new()
 end
+-- Escala uniforme de un modelo (como Model:ScaleTo): tamaños, posiciones respecto del pivote, C0/C1 de las
+-- uniones y posiciones de los Attachment.
+function methods:GetScale()
+	return rawget(self, "__attrs").__scale or 1
+end
+function methods:ScaleTo(k)
+	local cur = self:GetScale()
+	local f = k / cur
+	local pivot = self:GetPivot().Position
+	for _, d in self:GetDescendants() do
+		if d:IsA("BasePart") then
+			local cf = d.CFrame
+			local pos = cf.Position
+			d.Size = d.Size * f
+			d.CFrame = CFrame.new(pivot + (pos - pivot) * f) * (CFrame.new(-pos.X, -pos.Y, -pos.Z) * cf)
+		elseif d.ClassName == "Motor6D" or d.ClassName == "Weld" then
+			for _, k2 in { "C0", "C1" } do
+				local c = d[k2]
+				local p = c.Position
+				d[k2] = CFrame.new(p * f) * (CFrame.new(-p.X, -p.Y, -p.Z) * c)
+			end
+		elseif d.ClassName == "Attachment" then
+			local c = d.CFrame
+			local p = c.Position
+			d.CFrame = CFrame.new(p * f) * (CFrame.new(-p.X, -p.Y, -p.Z) * c)
+		end
+	end
+	rawget(self, "__attrs").__scale = k
+end
+
 function methods:GetBoundingBox()
 	return self:GetPivot(), v3(8, 4, 14)
 end
@@ -1054,7 +1084,7 @@ function M.reset(opts: any?)
 			local out = {}
 			for i = (page - 1) * size + 1, math.min(#all, page * size) do
 				local f = all[i]
-				table.insert(out, { Id = f.userId, Username = f.username, DisplayName = f.displayName, IsOnline = false })
+				table.insert(out, { Id = f.userId, Username = f.username, DisplayName = f.displayName, IsOnline = f.isOnline == true })
 			end
 			return out
 		end
@@ -1086,12 +1116,18 @@ function M.reset(opts: any?)
 		d:SetAttribute("userId", userId)
 		return d
 	end
+	-- M.avatarDelay = segundos de espera simulada de la web; M.avatarVariant(userId) = opciones del modelo.
+	M.avatarDelay, M.avatarVariant = nil, nil
 	S.Players.CreateHumanoidModelFromDescription = function(_, desc, _rigType)
 		if not M.avatarsEnabled then
 			error("Servicio de avatares no simulado")
 		end
 		M.avatarCalls.model += 1
-		return M.fakeR15(desc:GetAttribute("userId"))
+		if M.avatarDelay then
+			ltask.wait(M.avatarDelay)
+		end
+		local uid = desc:GetAttribute("userId")
+		return M.fakeR15(uid, M.avatarVariant and M.avatarVariant(uid) or nil)
 	end
 	S.RunService = service("RunService")
 	S.RunService.IsStudio = function()
@@ -1192,7 +1228,10 @@ function M.reset(opts: any?)
 end
 
 -- Modelo R15 aproximado (medidas de un avatar normal, ~5,8 studs) con Motor6D como los de Roblox.
-function M.fakeR15(userId: any): any
+--[[ opts.extras = lista de piezas extra: "weldconstraint" (sombrero con WeldConstraint), "rigid" (anteojos con
+	RigidConstraint por Attachment), "unknown" (pieza con una restricción que no fija la pose), "broken"
+	(RigidConstraint sin Attachment1), "orphan" (pieza sin unión), "layered" (campera MeshPart con WrapLayer). ]]
+function M.fakeR15(userId: any, opts: any?): any
 	local m = Instance.new("Model")
 	m.Name = "Avatar"
 	local P = {}
@@ -1254,6 +1293,72 @@ function M.fakeR15(userId: any): any
 	w.C0 = CFrame.new(0, 0.65, 0)
 	w.C1 = CFrame.new()
 	w.Parent = handle
+	local function attach(partName, parent, cf)
+		local a = Instance.new("Attachment")
+		a.Name = partName
+		a.CFrame = cf
+		a.Parent = parent
+		return a
+	end
+	for _, extra in (opts and opts.extras) or {} do
+		if extra == "weldconstraint" then
+			local hat = Instance.new("Part")
+			hat.Name = "Sombrero"
+			hat.Size = v3(1.4, 0.4, 1.4)
+			hat.CFrame = P.Head.CFrame * CFrame.new(0, 0.9, 0)
+			hat.Parent = m
+			local wc = Instance.new("WeldConstraint")
+			wc.Part0, wc.Part1 = P.Head, hat
+			wc.Parent = hat
+		elseif extra == "rigid" or extra == "broken" then
+			local acc2 = Instance.new("Accessory")
+			acc2.Name = extra == "rigid" and "Anteojos" or "AccesorioRoto"
+			acc2.Parent = m
+			local g = Instance.new("Part")
+			g.Name = "Handle"
+			g.Size = v3(1, 0.2, 0.2)
+			local att0 = attach("FaceFrontAttachment", P.Head, CFrame.new(0, 0.1, -0.6))
+			g.CFrame = P.Head.CFrame * att0.CFrame
+			g.Parent = acc2
+			local att1 = attach("FaceFrontAttachment", g, CFrame.new())
+			local rc = Instance.new("RigidConstraint")
+			rc.Attachment0 = att0
+			rc.Attachment1 = extra == "rigid" and att1 or nil
+			rc.Parent = g
+		elseif extra == "unknown" then
+			local tail = Instance.new("Part")
+			tail.Name = "Cola"
+			tail.Size = v3(0.3, 0.3, 1)
+			tail.CFrame = P.LowerTorso.CFrame * CFrame.new(0, 0, 0.8)
+			tail.Parent = m
+			local bs = Instance.new("BallSocketConstraint")
+			bs.Attachment0 = attach("ColaRaiz", P.LowerTorso, CFrame.new(0, 0, 0.5))
+			bs.Attachment1 = attach("ColaPunta", tail, CFrame.new(0, 0, -0.3))
+			bs.Parent = tail
+		elseif extra == "orphan" then
+			local o = Instance.new("Part")
+			o.Name = "Suelta"
+			o.Size = v3(0.2, 0.2, 0.2)
+			o.CFrame = P.UpperTorso.CFrame * CFrame.new(0, 0, -0.6)
+			o.Parent = m
+		elseif extra == "layered" then
+			local acc3 = Instance.new("Accessory")
+			acc3.Name = "Campera"
+			acc3.Parent = m
+			local jacket = Instance.new("MeshPart")
+			jacket.Name = "Handle"
+			jacket.Size = v3(2.2, 1.8, 1.2)
+			jacket.CFrame = P.UpperTorso.CFrame
+			jacket.Parent = acc3
+			local wrap = Instance.new("WrapLayer")
+			wrap.Parent = jacket
+			local w2 = Instance.new("Weld")
+			w2.Name = "AccessoryWeld"
+			w2.Part0, w2.Part1 = jacket, P.UpperTorso -- al revés, como suelen venir
+			w2.C0, w2.C1 = CFrame.new(), CFrame.new()
+			w2.Parent = jacket
+		end
+	end
 	local hum = Instance.new("Humanoid")
 	hum.Parent = m
 	local animate = Instance.new("LocalScript")
