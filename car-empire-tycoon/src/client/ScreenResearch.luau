@@ -183,7 +183,7 @@ end
 local function illustration(n: any, cat: string, st: string): GuiObject
 	local img = Screen.IMAGES[n.id] or Screen.IMAGES[cat]
 	if img then
-		return Ui.new("ImageLabel", { Name = "Ilustracion", Image = img, ScaleType = Enum.ScaleType.Fit, BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 64), Corner = 8 })
+		return Ui.new("ImageLabel", { Name = "Ilustracion", Image = img, ScaleType = Enum.ScaleType.Fit, BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 48), Corner = 8 })
 	end
 	local icon = "flask"
 	for _, c in Screen.CATEGORIES do
@@ -193,12 +193,12 @@ local function illustration(n: any, cat: string, st: string): GuiObject
 	end
 	local done = st == "completada" or st == "incluida"
 	local color = (st == "bloqueada" and T.mut2) or (done and T.gr) or STYLE.accent2
-	local box = Ui.new("Frame", { Name = "Ilustracion", BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 64), Corner = 8 })
+	local box = Ui.new("Frame", { Name = "Ilustracion", BackgroundColor3 = Ui.hex("#16223A"), BackgroundTransparency = 0, Size = UDim2.new(1, 0, 0, 48), Corner = 8 })
 	local g = Instance.new("UIGradient")
 	g.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(150, 160, 185))
 	g.Rotation = 90
 	g.Parent = box
-	local ic = Ui.icon(st == "bloqueada" and "lock" or icon, 26, color)
+	local ic = Ui.icon(st == "bloqueada" and "lock" or icon, 22, color)
 	ic.AnchorPoint = Vector2.new(0.5, 0.5)
 	ic.Position = UDim2.fromScale(0.5, 0.5)
 	ic.Parent = box
@@ -215,23 +215,34 @@ function Screen.card(g: any, n: any, cat: string): Frame
 			Ui.chip(chip[1], chip[2]),
 			(ahead > 0 and st ~= "completada") and Ui.chip("Adelantada " .. ahead .. (ahead == 1 and " año" or " años"), "cy") or nil,
 		}, 4, { wrap = true }),
-		Ui.text(n.name, { size = Ui.S.base, weight = W.bold, name = "Nombre" }),
+		Ui.text(n.name, { size = 16, weight = W.bold, name = "Nombre" }),
 		Ui.text(n.desc or ((Catalog.RESEARCH[cat] and Catalog.RESEARCH[cat].label or "") .. " · aparece en " .. tostring(n.year)), { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
-		Ui.text("Beneficio: " .. tostring(n.gain), { size = Ui.S.xs, color = T.tx2, lineHeight = 1.3, name = "Beneficio" }),
+		-- Beneficio destacado (es lo que se compra): etiqueta verde y texto claro.
+		Ui.col({
+			Ui.lbl("Beneficio", T.gr, 11),
+			Ui.text(tostring(n.gain), { size = Ui.S.sm, color = T.tx, weight = W.semi, lineHeight = 1.3 }),
+		}, 2, { Name = "Beneficio" }),
 	}
 	if not n.builtin then
 		local pi, cost, days, info = Rules.researchCost(g, n)
 		if st ~= "completada" then
-			table.insert(items, Ui.text(Util.money(cost) .. " · " .. Util.num(pi) .. " PI · " .. daysText(days), { size = Ui.S.xs, weight = W.semi, color = T.or_, name = "Costo" }))
+			-- Costos en píldoras: dinero, PI y días, cada uno con su color.
+			table.insert(items, Ui.row({
+				Ui.chip(Util.money(cost), "co", { height = 22 }),
+				Ui.chip(Util.num(pi) .. " PI", "cb", { height = 22 }),
+				Ui.chip(daysText(days), "cn", { height = 22 }),
+			}, 4, { wrap = true, Name = "Costo" }))
 		end
-		table.insert(items, Ui.text("Año: " .. n.year .. ((ahead > 0 and st ~= "completada") and (" · recargo +" .. Util.round(info.penalty.money * 100) .. " % dinero, +" .. Util.round(info.penalty.pi * 100) .. " % PI, +" .. Util.round(info.penalty.days * 100) .. " % días") or ""), { size = Ui.S.xs, color = (ahead > 0 and st ~= "completada") and T.ye or T.mut, name = "Anio" }))
+		local late = ahead > 0 and st ~= "completada"
+		table.insert(items, Ui.text("Año " .. n.year .. (late and (" · recargo +" .. Util.round(info.penalty.money * 100) .. " % dinero, +" .. Util.round(info.penalty.pi * 100) .. " % PI, +" .. Util.round(info.penalty.days * 100) .. " % días") or ""), { size = Ui.S.xs, color = late and T.ye or T.mut, name = "Anio" }))
 		if #n.req > 0 then
-			local names = {}
+			local reqs: { Instance? } = {}
 			for _, r in n.req do
 				local rn = Catalog.researchNode(r)
-				table.insert(names, (Rules.has(g, r) and "✓ " or "✕ ") .. (rn and rn.name or r))
+				local ok = Rules.has(g, r)
+				table.insert(reqs, Ui.text((ok and "✓ " or "✕ ") .. (rn and rn.name or r), { size = Ui.S.xs, color = ok and T.gr or T.re2, weight = ok and W.med or W.semi }))
 			end
-			table.insert(items, Ui.text("Requisitos: " .. table.concat(names, ", "), { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }))
+			table.insert(items, Ui.col({ Ui.lbl("Requisitos", T.mut, 11), Ui.col(reqs, 2) }, 3, { Name = "Requisitos" }))
 		end
 	end
 	if st == "curso" then

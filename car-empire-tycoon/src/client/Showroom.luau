@@ -53,6 +53,10 @@ Showroom.CONFIG = {
 	fadeOut = 0.4,
 	fadeIn = 0.5,
 	colorTime = 0.8,
+	keyLight = 1.5, -- luz principal (antes 2,4)
+	fillLight = 0.5, -- relleno (antes 0,7)
+	rimLight = 1.0, -- contorno (antes 1,6)
+	exposure = -0.35, -- compensación de exposición mientras se ve el showroom (se restaura al salir)
 }
 local C = Showroom.CONFIG
 
@@ -188,9 +192,10 @@ local function buildStage()
 		table.insert(state.accentLights, accent)
 	end
 	-- Luces cinematográficas blancas sobre el auto (se ubican según su tamaño en placeLights).
-	spot("LuzPrincipal", Color3.fromRGB(255, 247, 238), 2.4, 55, true)
-	spot("LuzRelleno", Color3.fromRGB(220, 230, 255), 0.7, 80, false)
-	spot("LuzContorno", Color3.fromRGB(255, 255, 255), 1.6, 50, false)
+	-- Intensidades moderadas: con 2,4 / 1,6 la pintura clara y el cromo del Pioneer 70 se veían quemados.
+	spot("LuzPrincipal", Color3.fromRGB(255, 247, 238), C.keyLight, 55, true)
+	spot("LuzRelleno", Color3.fromRGB(220, 230, 255), C.fillLight, 80, false)
+	spot("LuzContorno", Color3.fromRGB(255, 255, 255), C.rimLight, 50, false)
 end
 
 -- Ubica las luces según el radio del auto: principal arriba a un costado del frente, relleno bajo del otro
@@ -497,10 +502,13 @@ local LIGHTING_SHOWROOM: { [string]: any } = {
 	OutdoorAmbient = Color3.fromRGB(18, 19, 23),
 	Brightness = 0, -- intensidad del sol y la luna
 	EnvironmentDiffuseScale = 0, -- luz difusa del cielo
-	EnvironmentSpecularScale = 0.25, -- reflejos del cielo (un poco, para que la pintura no se vea plana)
+	EnvironmentSpecularScale = 0.15, -- reflejos del cielo (un poco, para que la pintura no se vea plana)
 	FogEnd = 100000, -- sin niebla del lugar dentro de la sala
+	ExposureCompensation = C.exposure, -- evita que la carrocería clara se queme
 }
 local ATMOSPHERE_SHOWROOM: { [string]: any } = { Density = 0, Haze = 0, Glare = 0 }
+-- Si el lugar tiene un Bloom fuerte, se suaviza solo dentro del showroom (los brillos del cromo saturaban).
+local BLOOM_SHOWROOM: { [string]: any } = { Intensity = 0.25, Threshold = 1.6 }
 
 local function swap(target: Instance, values: { [string]: any }, saved: { any })
 	for k, v in values do
@@ -525,6 +533,8 @@ local function overrideLighting(on: boolean)
 		for _, c in Lighting:GetChildren() do
 			if c:IsA("Atmosphere") then
 				swap(c, ATMOSPHERE_SHOWROOM, saved)
+			elseif c:IsA("BloomEffect") then
+				swap(c, BLOOM_SHOWROOM, saved)
 			end
 		end
 		state.savedLighting = saved

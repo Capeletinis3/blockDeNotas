@@ -92,13 +92,13 @@ backdrop.Size = UDim2.fromScale(1, 1)
 backdrop.BackgroundColor3 = Color3.new(1, 1, 1)
 backdrop.BorderSizePixel = 0
 backdrop.Parent = view3d
--- Fondo de la V3: arriba casi negro y, desde el horizonte, luz lavanda.
+-- Fondo: arriba casi negro y, desde el horizonte, un azul acero apagado (antes lavanda: dominaba la vista).
 local grad = Instance.new("UIGradient")
 grad.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0, Color3.fromHex("#0A0D18")),
-	ColorSequenceKeypoint.new(0.2, Color3.fromHex("#0C0F1D")),
-	ColorSequenceKeypoint.new(0.42, Color3.fromHex("#4E5294")),
-	ColorSequenceKeypoint.new(1, Color3.fromHex("#5F63AE")),
+	ColorSequenceKeypoint.new(0, Color3.fromHex("#070B14")),
+	ColorSequenceKeypoint.new(0.2, Color3.fromHex("#0A1020")),
+	ColorSequenceKeypoint.new(0.45, Color3.fromHex("#1B2A45")),
+	ColorSequenceKeypoint.new(1, Color3.fromHex("#25385A")),
 })
 grad.Rotation = 90
 grad.Parent = backdrop
@@ -107,7 +107,7 @@ local function makeViewport(name: string): (ViewportFrame, Camera, WorldModel)
 	local vp = Instance.new("ViewportFrame")
 	vp.Name = name
 	vp.BackgroundTransparency = 1
-	vp.Ambient = Color3.fromHex("#A6A9D6")
+	vp.Ambient = Color3.fromHex("#A3ADC2")
 	vp.LightColor = Color3.fromHex("#FFFFFF")
 	vp.LightDirection = Vector3.new(-0.6, -1, -0.4)
 	vp.Parent = view3d
@@ -122,14 +122,14 @@ local function makeViewport(name: string): (ViewportFrame, Camera, WorldModel)
 	floor.Shape = Enum.PartType.Cylinder
 	floor.Size = Vector3.new(0.3, 30, 30)
 	floor.CFrame = CFrame.new(0, -0.15, 0) * CFrame.Angles(0, 0, math.pi / 2)
-	floor.Color = Color3.fromHex("#6266B8")
+	floor.Color = Color3.fromHex("#2C3D5E")
 	floor.Material = Enum.Material.SmoothPlastic
 	floor.Parent = world
 	-- Borde blanco del disco giratorio.
 	local rim = floor:Clone()
 	rim.Size = Vector3.new(0.26, 30.8, 30.8)
 	rim.CFrame = CFrame.new(0, -0.18, 0) * CFrame.Angles(0, 0, math.pi / 2)
-	rim.Color = Color3.fromHex("#F2F3FF")
+	rim.Color = Color3.fromHex("#8DB8FF")
 	rim.Parent = world
 	return vp, camera, world
 end
@@ -1824,14 +1824,15 @@ local function hotspots(e: any, d: any)
 	hotspotLayer.Visible = e.hotspots and not e.hideUI and view.cam ~= "interior" and e.step < LAST
 	for _, h in CarModel.hotspots(d) do
 		local tip = Ui.new("TextLabel", {
-			Name = "Rotulo", Text = h.label, TextSize = 12, Weight = W.bold, Position = UDim2.fromOffset(40, 6), Size = UDim2.fromOffset(0, 22),
+			Name = "Rotulo", Text = h.label, TextSize = 12, Weight = W.bold, Position = UDim2.fromOffset(28, 0), Size = UDim2.fromOffset(0, 22),
 			AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = Color3.fromHex("#080A0F"), BackgroundTransparency = 0.15, Corner = 6, Pad = { 0, 8 }, Visible = false,
 		})
+		-- Puntos discretos: 22 px, vidrio translúcido y borde fino (zona de clic de 30 px con el margen).
 		local b = Ui.new("TextButton", {
-			Name = "Punto_" .. h.label, Text = "", Size = UDim2.fromOffset(34, 34), AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = GLASS, BackgroundTransparency = 0.15, Corner = 17, Stroke = { T.tx, 2, 0.15 },
+			Name = "Punto_" .. h.label, Text = "", Size = UDim2.fromOffset(22, 22), AnchorPoint = Vector2.new(0.5, 0.5),
+			BackgroundColor3 = GLASS, BackgroundTransparency = 0.45, Corner = 11, Stroke = { T.tx, 1.5, 0.45 },
 		}, {
-			Ui.new("Frame", { Size = UDim2.fromOffset(9, 9), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = T.tx, BackgroundTransparency = 0, Corner = 5 }),
+			Ui.new("Frame", { Size = UDim2.fromOffset(6, 6), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = T.tx, BackgroundTransparency = 0.1, Corner = 3 }),
 			tip,
 		})
 		b.Parent = hotspotLayer

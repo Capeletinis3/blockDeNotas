@@ -498,14 +498,15 @@ local function hud2(g: any): Frame
 			Pad = { 0, compact and 8 or 10, 0, compact and 4 or 6 },
 			List = { dir = "H", gap = compact and 6 or 8, v = "C" },
 		}, {
-			-- «Sede» usa el color del texto (currentColor en la V3): oscuro cuando está elegida.
-			Ui.ico(icon, (id == "juego" and on) and T.dark or col, bg, 28, { alpha = a, radius = 8, iconSize = 16 }),
+			-- Elegida (fondo blanco): ícono oscuro sobre un cuadro gris tenue; los colores pastel no se leían.
+			Ui.ico(icon, on and T.dark or col, on and T.dark or bg, 28, { alpha = on and 0.08 or a, radius = 8, iconSize = 16 }),
 			Ui.inline(label, { size = compact and 13 or 14, weight = W.semi, color = on and T.dark or hex("#E4E7EC") }),
 		})
 		local cnt = counts[id]
 		if cnt then
 			Ui.new("TextLabel", {
-				Name = "Contador", Text = cnt[1], TextSize = 11, Weight = W.heavy, TextColor3 = cnt[4], BackgroundColor3 = cnt[2], BackgroundTransparency = cnt[3],
+				-- En la pestaña elegida (fondo blanco) el contador va oscuro para que se lea.
+				Name = "Contador", Text = cnt[1], TextSize = 11, Weight = W.heavy, TextColor3 = on and T.dark or cnt[4], BackgroundColor3 = on and T.dark or cnt[2], BackgroundTransparency = on and 0.88 or cnt[3],
 				Size = UDim2.fromOffset(0, 20), AutomaticSize = Enum.AutomaticSize.X, Corner = 10, Pad = { 0, compact and 5 or 7 }, TextXAlignment = Enum.TextXAlignment.Center, Parent = b,
 			})
 		end
