@@ -625,11 +625,12 @@ function Showroom.setVisible(v: boolean, opts: { reduce: boolean?, phone: boolea
 			state.stage.Parent = nil
 		end
 		overrideLighting(false)
-		-- La cámara vuelve a como estaba (campo de visión y tipo); la del escenario la toma SceneCamera.
+		-- Vuelve el campo de visión original. El tipo queda Scriptable: el juego no tiene personaje, así que la
+		-- cámara la maneja siempre un script (la de gestión, SceneCamera). Volver a Custom dejaba un cuadro a
+		-- cargo del script de cámara de Roblox, sin sujeto, antes de que la tomara la cámara de gestión.
 		local cam = Workspace.CurrentCamera
 		if cam and state.savedCamera then
 			cam.FieldOfView = state.savedCamera.fov
-			cam.CameraType = state.savedCamera.type
 		end
 		state.savedCamera = nil
 	end

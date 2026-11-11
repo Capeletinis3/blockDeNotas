@@ -1724,6 +1724,7 @@ test("Cámaras: un solo dueño por pantalla, sin conexiones acumuladas, y pantal
 	for _ = 1, 3 do
 		cycle()
 	end
+	eq(M.services.Workspace.CurrentCamera.CameraType, M.Enum.CameraType.Scriptable, "la cámara queda siempre en manos de un script (sin cuadros de la cámara de Roblox)")
 	eq(live("RenderStepped", RS), rs0, "RenderStepped: no se acumulan conexiones al cambiar de pantalla")
 	eq(live("InputBegan", UIS), ib0, "InputBegan: sin conexiones nuevas")
 	eq(live("InputChanged", UIS), ic0, "InputChanged: sin conexiones nuevas")

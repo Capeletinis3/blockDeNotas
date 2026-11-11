@@ -204,3 +204,13 @@ Respaldo: tag `respaldo-pre-auditoria-visual` y copia del `.rbxl` anterior. Sin 
   - Uno por parcela, un hilo por avatar, se destruye al liberar o reconstruir la parcela.
 - **Ajustes puntuales:** showroom con luces más suaves, exposición −0,35 y bloom moderado (se restauran al salir); fondo del editor azul oscuro y puntos sobre el auto más chicos y translúcidos; tarjetas de investigación con beneficio destacado, costos en píldoras y requisitos por línea.
 - Pruebas: `tests/ui.luau` (Personal, Instalaciones con valores reales, avatar con rig simulado: uno solo, camina dentro de la oficina, no es el personaje, no duplica al abrir menús, se limpia y su rutina termina).
+
+## Correcciones técnicas de la versión 10 (sin probar en Studio)
+
+Respaldo: tag `respaldo-v10` y copia del `.rbxl`. Sin cambios de economía, investigación, producción, ventas, progresión ni guardado.
+- **OwnerAvatar:** una ruta por trayecto con PathfindingService (rodea escritorio y silla; nunca en bucle). Si no avanza 1,5 s o no hay ruta, se detiene donde está y elige otro destino; tras 3 fallos vuelve caminando al último punto alcanzado (aparecer en un punto es el último recurso). Se sienta desde un costado de la silla y se levanta soltando el asiento. El cambio de oficina corta el trayecto sin frenar la simulación. `destroy()` cancela el hilo y libera la ruta.
+- **Personaje:** ningún sistema del juego necesita `Player.Character`. Solo lo miran `App` (desactiva controles si existiera uno) y `Garage:teleport` (al aparecer uno), ambos sin esperas.
+- **WorldPrompts:** no se inicia (gestión por menús). Los ProximityPrompt del garaje se crean desactivados (`Garage.PROMPTS_ENABLED = false`). Pendiente de decidir: si habrá indicadores sobre los objetos del mundo; para activarlos, asignar `WorldPrompts.onOpen`, llamar a `start()` y poner la bandera en true.
+- **Cámaras:** dueño único por pantalla (`App.cameraOwner`). Al salir del showroom la cámara queda Scriptable (antes volvía a Custom un cuadro).
+- **Showroom:** exposición según la luminancia de la pintura (clara −0,35, oscura +0,1). Se restaura al salir.
+- **Interfaz:** títulos que se partían letra por letra en celular angosto (Personal › departamento, Estadísticas); detalle de Instalaciones debajo del elemento elegido en celular; el estado de interfaz de una empresa no pasa a otra.
