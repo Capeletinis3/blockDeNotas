@@ -3036,6 +3036,44 @@ test("Centro de investigación: categorías, filtros, estados, franja de activas
 	noErrors("Centro de investigación")
 end)
 
+test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()
+	App.closeAllDialogs()
+	local slots = {}
+	for k, v in App.profile.slots do
+		if v then
+			table.insert(slots, k)
+		end
+	end
+	table.sort(slots)
+	if #slots < 2 then
+		check(true, "sin dos empresas no aplica")
+		return
+	end
+	local function open(slot: string)
+		if App.g then
+			App.request("leaveCompany", {})
+			waitFor(function()
+				return App.g == nil
+			end)
+		end
+		App.request("selectSlot", { slot = slot })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+	end
+	open(slots[1])
+	App.ui.coName = "Nombre a medio escribir"
+	App.ui.campaignDraft = { kind = "modelo", designId = "d-de-la-otra" }
+	App.ui.reviewsSeen["l3"] = true
+	open(slots[2])
+	check(App.ui.coName == nil and App.ui.campaignDraft == nil, "el nombre y la campaña a medio armar no pasan a la otra empresa")
+	check(App.ui.reviewsSeen["l3"] == nil, "las reseñas vistas se cuentan por empresa (ids de lote repetidos)")
+	noErrors("Cambio de empresa")
+end)
+
 test("Eliminar empresa exige escribir el nombre", function()
 	App.request("leaveCompany")
 	waitFor(function()

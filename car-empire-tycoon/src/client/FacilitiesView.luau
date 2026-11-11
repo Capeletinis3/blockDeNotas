@@ -295,6 +295,10 @@ function View.build(g: any, phone: boolean): Frame
 	local items = {}
 	for _, kind in View.ORDER do
 		table.insert(items, listItem(g, kind, kind == k))
+		if phone and kind == k then
+			-- En celular el detalle va justo debajo de la instalación elegida (no al final de la lista).
+			table.insert(items, detail(g, k))
+		end
 	end
 	local caps = g.derived.caps
 	local list = Ui.col({
@@ -304,7 +308,7 @@ function View.build(g: any, phone: boolean): Frame
 	}, 10)
 	local body
 	if phone then
-		body = Ui.col({ list, detail(g, k) }, 12)
+		body = list
 	else
 		list.Size = UDim2.new(0.36, -6, 0, 0)
 		local d = detail(g, k)

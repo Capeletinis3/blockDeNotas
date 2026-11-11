@@ -77,7 +77,9 @@ function Screen.build(main: Frame, side: Frame)
 		col.Parent = chart
 	end
 	Ui.card({
-		Ui.row({ Ui.grow(Ui.lbl("Por mes")), legend(T.vi, "Ingresos por ventas"), legend(T.gr, "Caja neta (rojo si es negativa)") }, 10, { wrap = App.isPhone() }),
+		-- En celular la etiqueta va arriba de la leyenda (en la misma fila quedaba sin ancho y se cortaba).
+		App.isPhone() and Ui.col({ Ui.lbl("Por mes"), Ui.row({ legend(T.vi, "Ingresos por ventas"), legend(T.gr, "Caja neta (rojo si es negativa)") }, 10, { wrap = true }) }, 6)
+			or Ui.row({ Ui.grow(Ui.lbl("Por mes")), legend(T.vi, "Ingresos por ventas"), legend(T.gr, "Caja neta (rojo si es negativa)") }, 10),
 		chart,
 		Ui.row({ Ui.inline(Util.gameDate(math.max(0, f.from)), { size = Ui.S.xs, color = T.mut }), Ui.spacer(), Ui.inline(Util.gameDate(g.time.day) .. " (actual)", { size = Ui.S.xs, color = T.mut }) }, 8),
 	}, { gap = 8, name = "PorMes" }).Parent = main

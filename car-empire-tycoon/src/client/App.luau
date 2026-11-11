@@ -724,6 +724,19 @@ local function applySettings(settings: any)
 end
 
 local lastIdentity: string? = nil
+-- Estado de interfaz que pertenece a una empresa: ids de lotes, empleados, diseños y borradores de diálogos.
+-- Al entrar a otra empresa (o a la misma recreada) se descarta, así nada apunta a ids de la anterior: las
+-- reseñas de un lote con el mismo id que uno de la otra empresa se muestran igual, y el nombre a medio
+-- escribir de una empresa no se guarda en otra.
+local COMPANY_UI = { "staff", "facSel", "lotDraft", "trainDraft", "campaignDraft", "coName", "salesSel", "lineSel", "reviewShown", "reviewDone", "lastFinalized" }
+local lastCompany: string? = nil
+local function resetCompanyUi()
+	for _, k in COMPANY_UI do
+		App.ui[k] = nil
+	end
+	App.ui.reviewsSeen = {}
+end
+App.resetCompanyUi = resetCompanyUi
 local function leaveEditor()
 	App.ui.editor = nil
 	if App.screens.editor and App.screens.editor.leave then
@@ -756,6 +769,13 @@ function App.onState(payload: any)
 		App.ui.route = "juego"
 	end
 	lastIdentity = identity
+	local company = App.g and (tostring(App.g.company and App.g.company.id) .. "|" .. tostring(App.g.demo)) or nil
+	if company and company ~= lastCompany then
+		if lastCompany ~= nil then
+			resetCompanyUi()
+		end
+		lastCompany = company
+	end
 	if App.g and not hadGame and App.ui.route ~= "editor" then
 		App.ui.route = "juego"
 	elseif not App.g and hadGame then

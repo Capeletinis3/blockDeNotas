@@ -104,6 +104,7 @@ local state = {
 	phone = false,
 	conns = {} :: { RBXScriptConnection },
 	savedLighting = nil :: { any }?,
+	exposure = nil :: number?, -- exposición del auto actual (Showroom.exposureFor)
 	savedCamera = nil :: { fov: number, type: any }?,
 }
 Showroom._state = state -- para las pruebas

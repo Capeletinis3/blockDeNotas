@@ -473,15 +473,18 @@ function Screen.build(main: Frame, side: Frame)
 	end
 	if s.view == "depto" then
 		local sum = Staff.deptSummary(g, s.dept)
-		Ui.row({
-			Ui.button("‹ Departamentos", "default", function()
-				go("inicio")
-			end, { small = true, name = "VolverDeptos" }),
-			Ui.grow(Ui.text(sum.dept.name, { size = 19, weight = W.bold })),
-			Ui.button("Capacitar al departamento", "default", function()
-				App.openDialog("training", { scope = "departamento", dept = s.dept })
-			end, { small = true, disabled = sum.count == 0, why = "Sin empleados", name = "CapacitarDepto" }),
-		}, 10, { wrap = true }).Parent = main
+		local back = Ui.button("‹ Departamentos", "default", function()
+			go("inicio")
+		end, { small = true, name = "VolverDeptos" })
+		local trainDept = Ui.button("Capacitar al departamento", "default", function()
+			App.openDialog("training", { scope = "departamento", dept = s.dept })
+		end, { small = true, disabled = sum.count == 0, why = "Sin empleados", name = "CapacitarDepto" })
+		if App.isPhone() then
+			-- En celular el título va en su propia línea (en la fila quedaba en un hueco mínimo y se partía).
+			Ui.col({ Ui.text(sum.dept.name, { size = 19, weight = W.bold }), Ui.row({ back, trainDept }, 8, { wrap = true }) }, 8).Parent = main
+		else
+			Ui.row({ back, Ui.grow(Ui.text(sum.dept.name, { size = 19, weight = W.bold })), trainDept }, 10, { wrap = true }).Parent = main
+		end
 		local list = {}
 		for _, e in sum.members do
 			local on = s.sel == e.id
