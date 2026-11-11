@@ -1369,8 +1369,29 @@ test("Instalaciones en la interfaz: obra de la línea 2 con confirmación, avanc
 	for _, k in { "offices", "factory", "research", "line2", "line3" } do
 		check(named("Instalacion_" .. k) ~= nil, "tarjeta " .. k)
 	end
-	local b3 = named("ComprarLinea3")
-	check(b3 ~= nil, "la línea 3 ofrece la compra con Robux")
+	-- Lista + detalle: el detalle muestra la comparación con valores reales de las reglas.
+	local FV = require("./.build-ui/client/FacilitiesView")
+	local Rules = require("./.build-ui/shared/Rules")
+	App.ui.facSel = nil
+	App.forceRender()
+	M.task.wait()
+	check(named("DetalleInstalacion") ~= nil and named("NivelActual") ~= nil, "detalle de las oficinas por defecto")
+	check(named("ComparacionMejora") ~= nil and M.find(App.content, tostring(Rules.sede(App.g).staff)) ~= nil, "límite actual de empleados")
+	local fi = FV.info(App.g, "factory")
+	if fi.next then
+		local exp = App.g.derived.caps.perLine * fi.next.def.perLine / Rules.factory(App.g).perLine
+		eq(fi.compare[1][3], require("./.build-ui/shared/Util").num(exp, 1), "fábrica: autos/min después = base del próximo nivel con las mismas mejoras")
+	end
+	local ri = FV.info(App.g, "research")
+	if ri.next then
+		eq(ri.compare[1][3], tostring(ri.next.def.pi), "centro: PI del próximo nivel")
+	end
+	clickN("Instalacion_line3")
+	M.task.wait()
+	check(named("ComprarLinea3") ~= nil, "la línea 3 ofrece la compra con Robux")
+	clickN("Instalacion_line2")
+	M.task.wait()
+	check(named("ComparacionMejora") ~= nil and named("CostoMejora") ~= nil and named("Requisitos") ~= nil, "línea 2: antes → después, costo y requisitos")
 	clickN("Mejorar_line2")
 	M.task.wait()
 	eq(topKind(), "confirm", "confirma antes de pagar")

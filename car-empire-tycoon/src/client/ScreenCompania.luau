@@ -1,5 +1,5 @@
 --!strict
--- Compañía (SCREENS.compania de la V3): identidad de la marca, sede (PI/min, producción y alcance), ampliación y resumen.
+-- Compañía (SCREENS.compania de la V3): instalaciones (lista + detalle), expansión, identidad de la marca y resumen.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -9,6 +9,7 @@ local Rules = require(Shared.Rules)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
+local FacilitiesView = require(script.Parent.FacilitiesView)
 local T = Ui.T
 local W = Ui.W
 
@@ -110,67 +111,8 @@ function Screen.build(main: Frame, side: Frame)
 	marca.Parent = main
 	marca.LayoutOrder = 1e7 -- la identidad de la marca va al final; primero las instalaciones
 
-	-- Instalaciones: oficinas, fábrica, centro de investigación y líneas. Cada mejora es una obra con duración.
-	local caps = g.derived.caps
-	local function facilityCard(kind: string, title: string, current: string, benefit: string, nextText: string?): Frame
-		local nx = Rules.nextFacility(g, kind)
-		local b = Rules.build(g, kind)
-		local rows: { Instance? } = {
-			Ui.row({ Ui.grow(Ui.text(title, { size = Ui.S.base, weight = W.bold })), Ui.chip(current, "cy") }, 8),
-			Ui.text(benefit, { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
-		}
-		if b then
-			local bar = Ui.bar(b.progress / math.max(1, b.days) * 100, T.ye)
-			table.insert(rows, Ui.text("Obra en curso: " .. math.floor(b.progress) .. "/" .. b.days .. " días", { size = Ui.S.xs, color = T.ye }))
-			table.insert(rows, bar)
-		elseif nx then
-			local ok = true
-			table.insert(rows, Ui.text("Próximo: " .. nx.name .. (nextText and (" · " .. nextText) or ""), { size = Ui.S.xs, weight = W.bold }))
-			for _, c in Rules.facilityChecks(g, kind) do
-				ok = ok and c[1]
-				table.insert(rows, Ui.text((c[1] and "✓ " or "✕ ") .. c[2], { size = Ui.S.xs, color = c[1] and T.gr or T.re2 }))
-			end
-			table.insert(rows, Ui.button("Mejorar · " .. Util.money(nx.cost) .. " · " .. nx.days .. " días", "p", function()
-				App.openDialog("confirm", {
-					title = "¿" .. nx.name .. "?",
-					body = "Se paga " .. Util.money(nx.cost) .. " al empezar y la obra dura " .. nx.days .. " días de juego (la organización del personal de Administración la acelera). El beneficio llega al terminarla. Suma " .. Util.round(Catalog.FACILITIES.maintenanceRate * 1000) / 10 .. " % de su costo al mantenimiento mensual.",
-					okLabel = "Empezar la obra",
-					onOk = function()
-						App.request("upgradeFacility", { kind = kind })
-					end,
-				})
-			end, { small = true, fill = true, disabled = not ok, why = "Faltan requisitos", name = "Mejorar_" .. kind }))
-		else
-			table.insert(rows, Ui.text("Nivel máximo.", { size = Ui.S.xs, color = T.gr }))
-		end
-		return Ui.card(rows, { gap = 6, name = "Instalacion_" .. kind })
-	end
-	local sede = Rules.sede(g)
-	local nextOff = Rules.nextFacility(g, "offices")
-	local fac = Rules.factory(g)
-	local nextFac = Rules.nextFacility(g, "factory")
-	local rc = Rules.researchCenter(g)
-	local nextRc = Rules.nextFacility(g, "research")
-	local cards = {
-		facilityCard("offices", "Oficinas centrales", "Nivel " .. g.sede .. " · " .. sede.office, "Etapa: " .. sede.name .. " · " .. caps.staff .. " empleados (límite global) · alcance comercial ×" .. Util.num(caps.reach, 1) .. " · capacitaciones hasta nivel " .. ((g.sede >= 3 and "avanzado") or (g.sede >= 2 and "intermedio") or "básico"), nextOff and (nextOff.def.staff .. " empleados · alcance ×" .. Util.num(nextOff.def.reach, 1)) or nil),
-		facilityCard("factory", "Fábrica", "Nivel " .. Rules.facilityLevel(g, "factory") .. " · " .. fac.name, Util.num(caps.perLine, 1) .. " autos/min por línea (base " .. fac.perLine .. ") · estaciones hasta nivel " .. Rules.maxStationLevel(g), nextFac and ("base " .. nextFac.def.perLine .. " autos/min por línea") or nil),
-		facilityCard("research", "Centro de investigación", "Nivel " .. Rules.facilityLevel(g, "research") .. " · " .. rc.name, rc.pi .. " PI por minuto (más " .. Catalog.RESEARCH_RULES.linePi .. " por cada línea fabricando)", nextRc and (nextRc.def.pi .. " PI/min") or nil),
-		facilityCard("line2", "Línea de producción 2", Rules.ownsLine(g, 2) and "Comprada" or "Sin comprar", "Una línea más para fabricar otro lote en paralelo. Compra permanente con dinero del juego.", nil),
-	}
-	local line3 = Catalog.PRODUCTS.line3
-	local ready3 = line3.id ~= 0
-	table.insert(cards, Ui.card({
-		Ui.row({ Ui.grow(Ui.text("Línea de producción 3", { size = Ui.S.base, weight = W.bold })), Ui.chip(Rules.ownsLine(g, 3) and "Desbloqueada" or "Bloqueada", Rules.ownsLine(g, 3) and "cg" or "cn") }, 8),
-		Ui.text("Desbloqueo permanente con Robux para tu cuenta: vale en todas tus empresas, también en las que crees después. Independiente de la línea 2.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 }),
-		(not Rules.ownsLine(g, 3)) and Ui.button("Desbloquear con Robux", "default", function()
-			App.request("buyProduct", { product = "line3" })
-		end, { small = true, fill = true, disabled = not ready3 or g.demo ~= nil, why = (not ready3) and "Compra no configurada todavía" or "No disponible en demostraciones", name = "ComprarLinea3" }) or nil,
-	}, { gap = 6, name = "Instalacion_line3" }))
-	Ui.card({
-		Ui.row({ Ui.grow(Ui.lbl("Instalaciones")), Ui.chip(caps.lines .. (caps.lines == 1 and " línea" or " líneas") .. " · " .. Util.num(caps.capacity, 1) .. " autos/min", "cn") }, 10),
-		Ui.grid(cards, phone and 1 or 2, nil, 10),
-		Ui.between("Mantenimiento mensual", Util.money(Rules.maintenance(g)), { size = Ui.S.xs }),
-	}, { gap = 12, pad = 18, name = "Sede" }).Parent = main
+	-- Instalaciones: lista + detalle con la comparación antes → después (FacilitiesView).
+	FacilitiesView.build(g, phone).Parent = main
 
 	-- Expansión global: metas grandes después del Imperio automotriz.
 	local E = Catalog.EXPANSION
