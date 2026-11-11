@@ -14,6 +14,7 @@ local DesignCalc = require(Shared.DesignCalc)
 local Rules = require(Shared.Rules)
 local Staff = require(Shared.Staff)
 local GameState = require(script.Parent.GameState)
+local FriendIdentity = require(script.Parent.FriendIdentity)
 local Simulation = require(script.Parent.Simulation)
 local OfficeService = require(script.Parent.OfficeService)
 
@@ -726,7 +727,9 @@ end
 -- Personal ------------------------------------------------------------------------------------
 
 --[[ Contratar: sin costo de contratación (se paga el salario cada mes). payload = { candidateId, dept }: el
-	jugador elige el departamento donde empieza (fuera de su especialidad arranca con adaptación). ]]
+	jugador elige el departamento donde empieza (fuera de su especialidad arranca con adaptación). La identidad
+	no se elige: el empleado es automáticamente el próximo amigo de Roblox libre (FriendIdentity, con la lista
+	que consultó el servidor: ctx.friends). El candidato aporta solo su perfil laboral. ]]
 function Actions.hire(g: any, ctx: any, payload: any): any
 	local c, i = findById(g.candidates, arg(payload, "candidateId"))
 	if not c then
@@ -748,11 +751,14 @@ function Actions.hire(g: any, ctx: any, payload: any): any
 		skills = Util.deepCopy(c.skills), potential = Util.deepCopy(c.potential), months = 0,
 		hiredDay = Rules.absDay(g), adapt = {}, status = "activo", training = nil,
 	}
+	local friend = FriendIdentity.assign(g, e, ctx and ctx.friends, Rules.absDay(g))
 	table.insert(g.employees, e)
 	g.counters.hires += 1
 	Simulation.addXp(g, ctx, 40)
 	local where = Staff.dept(dept).name
-	return { ok = true, msg = c.name .. " se sumó a " .. where .. " (" .. money(c.salary) .. " por mes)." .. (dept ~= c.spec and " Fuera de su especialidad empieza al " .. round(Catalog.STAFF.adaptStart * 100) .. " % y se adapta con el tiempo." or "") }
+	local who = friend and (friend.displayName .. " (@" .. friend.username .. ") se sumó a ") or ("Se cubrió un puesto en ")
+	local note = friend and "" or " Sin amigos de Roblox libres por ahora: el puesto trabaja igual, no aparece en la oficina y recibirá un amigo cuando haya uno disponible."
+	return { ok = true, msg = who .. where .. " (" .. money(c.salary) .. " por mes)." .. (dept ~= c.spec and " Fuera de su especialidad empieza al " .. round(Catalog.STAFF.adaptStart * 100) .. " % y se adapta con el tiempo." or "") .. note }
 end
 
 --[[ Búsqueda paga de candidatos: reemplaza a los 8 actuales que no se contrataron (no se acumulan).

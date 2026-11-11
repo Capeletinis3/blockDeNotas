@@ -223,12 +223,16 @@ function Screen.updateStaff()
 	end
 	table.clear(staffLabels)
 	local shown = Npcs.shown()
-	local visible, hired = Npcs.counts(App.g)
+	local visible, hired, loading, vacant = Npcs.counts(App.g)
 	local toggle = Ui.toggle(shown, function()
 		Editor.setStaffShown(not Npcs.shown())
 	end)
 	toggle.Name = "MostrarEmpleados"
-	local count = Ui.text("Empleados visibles: " .. visible .. " / " .. hired .. " contratados" .. (shown and "" or " (ocultos)"), { size = Ui.S.xs, color = T.mut, name = "EmpleadosVisibles" })
+	local extra = (shown and loading > 0) and (" · " .. loading .. (loading == 1 and " avatar cargando" or " avatares cargando")) or ""
+	if vacant > 0 then
+		extra ..= " · " .. vacant .. (vacant == 1 and " puesto sin amigo" or " puestos sin amigo")
+	end
+	local count = Ui.text("Empleados visibles: " .. visible .. " / " .. hired .. " contratados" .. (shown and "" or " (ocultos)") .. extra, { size = Ui.S.xs, color = T.mut, name = "EmpleadosVisibles" })
 	local head = Ui.row({
 		toggle,
 		Ui.inline("Mostrar empleados", { size = Ui.S.sm, weight = W.semi }),
@@ -237,13 +241,13 @@ function Screen.updateStaff()
 	head.LayoutOrder = 1
 	head.Parent = z
 	if hired == 0 then
-		local t = Ui.text("Sin empleados contratados: la oficina queda vacía. Se contratan en Compañía › Personal.", { size = Ui.S.xs, color = T.mut, name = "SinEmpleados" })
+		local t = Ui.text("Sin empleados contratados: la oficina queda vacía. Cada contratación (Compañía › Personal) es uno de tus amigos de Roblox.", { size = Ui.S.xs, color = T.mut, name = "SinEmpleados" })
 		t.LayoutOrder = 2
 		t.Parent = z
 	end
 	local info = Npcs.info(Npcs.selected())
 	if info and shown then
-		local name = Ui.text(info.name, { size = Ui.S.base, weight = W.bold, name = "EmpleadoNombre" })
+		local name = Ui.text(info.name .. (info.username and ("  @" .. info.username) or ""), { size = Ui.S.base, weight = W.bold, name = "EmpleadoNombre" })
 		local dept = Ui.text(info.dept .. " · " .. info.room, { size = Ui.S.xs, color = T.tx2, name = "EmpleadoDepartamento" })
 		local act = Ui.text(info.activity, { size = Ui.S.sm, name = "EmpleadoActividad" })
 		local nav = Ui.text("Navegación: " .. info.nav, { size = Ui.S.xs, color = T.mut, name = "EmpleadoNavegacion" })

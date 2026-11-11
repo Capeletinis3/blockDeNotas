@@ -1039,6 +1039,60 @@ function M.reset(opts: any?)
 	S.Workspace.CurrentCamera = cam
 	cam.Parent = S.Workspace
 	S.Players = service("Players")
+	-- Amigos de Roblox (dobles): M.friendsOf[userId] = { { userId, username, displayName } }; M.friendsFail = true
+	-- hace fallar la consulta; M.friendsPageFail = n corta la lectura en la página n (lista incompleta).
+	M.friendsOf, M.friendsFail, M.friendsPageFail, M.friendsCalls = {}, false, nil, 0
+	S.Players.GetFriendsAsync = function(_, userId)
+		M.friendsCalls += 1
+		if M.friendsFail then
+			error("HTTP 500 (Internal Server Error)")
+		end
+		local all = M.friendsOf[userId] or {}
+		local size, page = 50, 1
+		local pages = {}
+		local function current()
+			local out = {}
+			for i = (page - 1) * size + 1, math.min(#all, page * size) do
+				local f = all[i]
+				table.insert(out, { Id = f.userId, Username = f.username, DisplayName = f.displayName, IsOnline = false })
+			end
+			return out
+		end
+		pages.IsFinished = #all <= size
+		function pages.GetCurrentPage(_self)
+			return current()
+		end
+		function pages.AdvanceToNextPageAsync(self_)
+			if M.friendsPageFail and page + 1 >= M.friendsPageFail then
+				error("HTTP 502 (Bad Gateway)")
+			end
+			page += 1
+			self_.IsFinished = page * size >= #all
+		end
+		return pages
+	end
+	-- Avatares (dobles): una descripción por userId y un modelo R15 con sus articulaciones (Motor6D con C0/C1).
+	-- Desactivados por defecto (como un entorno sin servicios de avatar): M.avatarsEnabled = true los activa.
+	M.avatarFail, M.avatarCalls, M.avatarsEnabled = {}, { desc = 0, model = 0 }, false
+	S.Players.GetHumanoidDescriptionFromUserId = function(_, userId)
+		if not M.avatarsEnabled then
+			error("Servicio de avatares no simulado")
+		end
+		M.avatarCalls.desc += 1
+		if M.avatarFail[userId] then
+			error("HTTP 404 (avatar no disponible)")
+		end
+		local d = Instance.new("HumanoidDescription")
+		d:SetAttribute("userId", userId)
+		return d
+	end
+	S.Players.CreateHumanoidModelFromDescription = function(_, desc, _rigType)
+		if not M.avatarsEnabled then
+			error("Servicio de avatares no simulado")
+		end
+		M.avatarCalls.model += 1
+		return M.fakeR15(desc:GetAttribute("userId"))
+	end
 	S.RunService = service("RunService")
 	S.RunService.IsStudio = function()
 		return true
@@ -1135,6 +1189,79 @@ function M.reset(opts: any?)
 	M.game = g
 	M.workspace = S.Workspace
 	M.localPlayer = nil
+end
+
+-- Modelo R15 aproximado (medidas de un avatar normal, ~5,8 studs) con Motor6D como los de Roblox.
+function M.fakeR15(userId: any): any
+	local m = Instance.new("Model")
+	m.Name = "Avatar"
+	local P = {}
+	local function part(name, pos, size)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Size = v3(size[1], size[2], size[3])
+		p.CFrame = CFrame.new(pos[1], pos[2], pos[3])
+		p.Parent = m
+		P[name] = p
+		return p
+	end
+	part("HumanoidRootPart", { 0, 3, 0 }, { 2, 2, 1 }).Transparency = 1
+	part("LowerTorso", { 0, 2.9, 0 }, { 2, 0.4, 1 })
+	part("UpperTorso", { 0, 3.95, 0 }, { 2, 1.6, 1 })
+	part("Head", { 0, 5.35, 0 }, { 1.2, 1.2, 1.2 })
+	for _, sd in { { "Left", -1 }, { "Right", 1 } } do
+		local n, x = sd[1], sd[2]
+		part(n .. "UpperArm", { 1.5 * x, 4.2, 0 }, { 1, 1.2, 1 })
+		part(n .. "LowerArm", { 1.5 * x, 3.2, 0 }, { 1, 1, 1 })
+		part(n .. "Hand", { 1.5 * x, 2.55, 0 }, { 1, 0.3, 1 })
+		part(n .. "UpperLeg", { 0.5 * x, 2.15, 0 }, { 1, 1.2, 1 })
+		part(n .. "LowerLeg", { 0.5 * x, 1.1, 0 }, { 1, 1, 1 })
+		part(n .. "Foot", { 0.5 * x, 0.3, 0 }, { 1, 0.6, 1 })
+	end
+	local function joint(name, a, b, at)
+		local j = Instance.new("Motor6D")
+		j.Name = name
+		j.Part0, j.Part1 = P[a], P[b]
+		local c = CFrame.new(at[1], at[2], at[3])
+		j.C0 = P[a].CFrame:Inverse() * c
+		j.C1 = P[b].CFrame:Inverse() * c
+		j.Parent = P[b]
+	end
+	joint("Root", "HumanoidRootPart", "LowerTorso", { 0, 2.9, 0 })
+	joint("Waist", "LowerTorso", "UpperTorso", { 0, 3.15, 0 })
+	joint("Neck", "UpperTorso", "Head", { 0, 4.75, 0 })
+	for _, sd in { { "Left", -1 }, { "Right", 1 } } do
+		local n, x = sd[1], sd[2]
+		joint(n .. "Shoulder", "UpperTorso", n .. "UpperArm", { 1.0 * x, 4.6, 0 })
+		joint(n .. "Elbow", n .. "UpperArm", n .. "LowerArm", { 1.5 * x, 3.65, 0 })
+		joint(n .. "Wrist", n .. "LowerArm", n .. "Hand", { 1.5 * x, 2.7, 0 })
+		joint(n .. "Hip", "LowerTorso", n .. "UpperLeg", { 0.5 * x, 2.75, 0 })
+		joint(n .. "Knee", n .. "UpperLeg", n .. "LowerLeg", { 0.5 * x, 1.6, 0 })
+		joint(n .. "Ankle", n .. "LowerLeg", n .. "Foot", { 0.5 * x, 0.6, 0 })
+	end
+	-- Un accesorio soldado a la cabeza (como el pelo o un sombrero).
+	local acc = Instance.new("Accessory")
+	acc.Name = "Pelo"
+	acc.Parent = m
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = v3(1.3, 0.5, 1.3)
+	handle.CFrame = CFrame.new(0, 6.0, 0)
+	handle.Parent = acc
+	local w = Instance.new("Weld")
+	w.Name = "AccessoryWeld"
+	w.Part0, w.Part1 = P.Head, handle
+	w.C0 = CFrame.new(0, 0.65, 0)
+	w.C1 = CFrame.new()
+	w.Parent = handle
+	local hum = Instance.new("Humanoid")
+	hum.Parent = m
+	local animate = Instance.new("LocalScript")
+	animate.Name = "Animate"
+	animate.Parent = m
+	m.PrimaryPart = P.HumanoidRootPart
+	m:SetAttribute("fakeUser", userId)
+	return m
 end
 
 function M.newPlayer(userId: number, name: string)

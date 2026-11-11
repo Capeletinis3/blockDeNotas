@@ -4157,13 +4157,50 @@ do
 	local Scene = require("./.build-ui/client/OfficeScene")
 	local DEPTS = { "administracion", "investigacion", "marketing", "produccion" }
 
+	-- Empleados de prueba: cada uno es un amigo de Roblox (como los asigna el servidor al contratar).
 	local function staff(n: number, prefix: string, dept: string?): { any }
 		local out = {}
+		local base = 0
+		for i = 1, #prefix do
+			base = base * 31 + string.byte(prefix, i)
+		end
+		base = 100000 + (base % 5000) * 100
 		for i = 1, n do
 			local d = dept or DEPTS[(i - 1) % #DEPTS + 1]
-			table.insert(out, { id = prefix .. i, name = "Empleado " .. prefix .. i, spec = d, dept = d, salary = 1000, skills = { organizacion = 40 }, potential = { organizacion = 80 }, months = 1, hiredDay = 0, adapt = {}, status = "activo" })
+			local uid = base + i
+			table.insert(out, { id = prefix .. i, name = "Amigo " .. prefix .. i, spec = d, dept = d, salary = 1000, skills = { organizacion = 40 }, potential = { organizacion = 80 }, months = 1, hiredDay = 0, adapt = {}, status = "activo", friend = { userId = uid, username = "amigo_" .. prefix .. i, displayName = "Amigo " .. prefix .. i, since = 0 } })
 		end
 		return out
+	end
+
+	-- Plantillas de avatar en PlayerGui.AvataresEmpleados (lo que deja el servidor) para estos empleados.
+	local function provideAvatars(list: { any }, builtAt: number?)
+		local gui = M.services.Players.LocalPlayer:FindFirstChild("PlayerGui")
+		local folder = gui:FindFirstChild("AvataresEmpleados")
+		if not folder then
+			folder = M.Instance.new("Folder")
+			folder.Name = "AvataresEmpleados"
+			folder.Parent = gui
+		end
+		for _, e in list do
+			if e.friend then
+				local old = folder:FindFirstChild("Avatar_" .. e.friend.userId)
+				if old then
+					old:Destroy()
+				end
+				local m = M.fakeR15(e.friend.userId)
+				m.Name = "Avatar_" .. e.friend.userId
+				m:SetAttribute("userId", e.friend.userId)
+				m:SetAttribute("builtAt", builtAt or os.time())
+				m.Parent = folder
+			end
+		end
+	end
+
+	-- ¿El personaje es el avatar real (rig R15 con articulaciones), sin piezas de un personaje genérico?
+	local function isAvatar(rig: any): boolean
+		local m = rig and rig.model
+		return m ~= nil and m:FindFirstChild("HumanoidRootPart") ~= nil and m:FindFirstChild("UpperTorso") ~= nil and m:FindFirstChild("Camisa") == nil and m:FindFirstChild("Corbata") == nil and #rig.chain >= 15
 	end
 
 	local function put(o: any, item: string, room: string, x: number, y: number, rot: number?): string
@@ -4263,6 +4300,22 @@ do
 		-- 2 y 4. Tres contratados: tres personajes, cada uno de un empleado real con su nombre.
 		local three = staff(3, "a")
 		local before = serde.encode("json", three)
+		-- Un puesto sin amigo asignado no tiene personaje (nunca uno genérico).
+		local vacant = { id = "vac1", name = "Puesto sin amigo asignado", spec = "produccion", dept = "produccion", salary = 1000, skills = {}, potential = {}, months = 0, hiredDay = 0, adapt = {} }
+		local withVacant = table.clone(three)
+		table.insert(withVacant, vacant)
+		g = { company = company, office = o, employees = withVacant }
+		Mgr.sync(g)
+		eq(#Mgr.world().order, 3, "13. el puesto sin amigo no se representa")
+		check(Mgr.npc("vac1") == nil, "13. sin NPC genérico para el puesto vacante")
+		eq(npcModels(), 0, "6. sin avatar todavía: no se dibuja nadie (ni genéricos)")
+		local _, _, loading, vacN = Mgr.counts(g)
+		check(loading == 3 and vacN == 1, "contador: 3 avatares cargando y 1 puesto sin amigo")
+		check(Mgr._state.requests >= 1 and #Mgr._state.queue == 0, "16. los avatares se piden al servidor en un lote")
+		local req0 = Mgr._state.requests
+		Mgr.step(0.5)
+		eq(Mgr._state.requests, req0, "16. sin pedidos repetidos antes del reintento")
+		provideAvatars(three)
 		g = { company = company, office = o, employees = three }
 		Mgr.sync(g)
 		eq(#Mgr.world().order, 3, "2. con tres contratados se ven tres")
@@ -4277,7 +4330,8 @@ do
 			end
 			local rig = Mgr.rig(npc.id)
 			check(e ~= nil, "4. " .. npc.id .. " es un empleado real")
-			check(e and npc.name == e.name and rig.label.Text == e.name and rig.model:GetAttribute("employeeId") == e.id, "4. nombre igual al de Personal")
+			check(e and npc.name == e.name and rig.label.Text == e.name and rig.model:GetAttribute("employeeId") == e.id, "4. nombre igual al de Personal (DisplayName del amigo)")
+			check(isAvatar(rig) and rig.userId == e.friend.userId, "4. el personaje es el avatar real de su amigo")
 			check(not ids[npc.id], "5. sin ids repetidos")
 			ids[npc.id] = true
 		end
@@ -4309,6 +4363,7 @@ do
 		-- Contratar uno nuevo: entra por la puerta.
 		local hired = table.clone(fired)
 		table.insert(hired, staff(1, "n")[1])
+		provideAvatars(hired)
 		Mgr.sync({ company = company, office = o, employees = hired })
 		local newbie = Mgr.npc("n1")
 		check(newbie ~= nil, "el contratado nuevo se incorpora")
@@ -4326,7 +4381,14 @@ do
 		for _, rig in Mgr._state.rigs do
 			table.insert(oldModels, rig.model)
 		end
-		Mgr.sync({ company = { id = "npc-B" }, office = Office.new(1), employees = staff(2, "b") })
+		-- Avatar actualizado (el servidor lo rearmó): se rearma solo el personaje.
+		local before1 = Mgr.rig("n1") and Mgr.rig("n1").model
+		provideAvatars({ hired[#hired] }, os.time() + 5)
+		Mgr.step(0.1)
+		check(Mgr.rig("n1") and Mgr.rig("n1").model ~= before1 and before1.Parent == nil, "16. avatar actualizado: se reemplaza el personaje")
+		local bList = staff(2, "b")
+		provideAvatars(bList)
+		Mgr.sync({ company = { id = "npc-B" }, office = Office.new(1), employees = bList })
 		for _, m in oldModels do
 			check(m.Parent == nil, "6. personaje de la empresa anterior destruido")
 		end
@@ -4342,6 +4404,7 @@ do
 		local o5 = Office.new(5)
 		Scene.buildRooms(o5)
 		local fifty = staff(50, "c")
+		provideAvatars(fifty)
 		Mgr.open({ company = { id = "npc-C" }, office = o5, employees = fifty })
 		local w = Mgr.world()
 		eq(#w.order, Act.MAX_VISIBLE_NPCS, "3. con 50 contratados se ven MAX_VISIBLE_NPCS (" .. Act.MAX_VISIBLE_NPCS .. ")")
@@ -4609,7 +4672,10 @@ do
 		end
 		-- Animaciones: cada estado tiene su pose y al salir de una pose no quedan restos.
 		local NPCm = require("./.build-ui/client/OfficeNPC")
-		local rig = NPCm.build("anim1", "Ana", "administracion")
+		local tpl = M.fakeR15(4242)
+		tpl:SetAttribute("userId", 4242)
+		local rig = NPCm.build("anim1", "Ana", "administracion", tpl)
+		check(isAvatar(rig), "el rig es el avatar R15 (con sus articulaciones)")
 		local fake = { state = "Idle", pose = "idle", seed = 3 }
 		local cf = M.CFrame.new(0, 100, 0)
 		for _, pose in { "idle", "walk", "sit", "sitwork", "work", "browse", "rest", "meet", "sitmeet" } do
@@ -4627,6 +4693,23 @@ do
 		Anim.update(rig, fake, cf, 1, 0.05)
 		local midHip = rig.current.hipH
 		check(midHip < NPCm.DIM.hipH and midHip > 1.5, "sentarse: transición entre de pie y sentado")
+		-- Sentado del todo: la cadera del avatar queda a la altura del asiento y los muslos horizontales.
+		fake.phase = nil
+		for _ = 1, 20 do
+			Anim.update(rig, fake, cf, 1, 0.05)
+		end
+		local lower = rig.model:FindFirstChild("LowerTorso")
+		local hipJ = rig.joints.LeftHip
+		local hipY = (lower.CFrame * hipJ.c0).Position.Y - 100
+		check(math.abs(hipY - 1.5) < 0.05, string.format("sentado: cadera a la altura del asiento (%.2f studs)", hipY))
+		local thigh = rig.model:FindFirstChild("LeftUpperLeg")
+		local knee = (thigh.CFrame * rig.joints.LeftKnee.c0).Position
+		check(math.abs(knee.Y - 100 - hipY) < 0.1, "sentado: muslo horizontal (rodilla a la altura de la cadera)")
+		check((cf:Inverse() * M.CFrame.new(knee)).Position.Z < -0.5, "sentado: la rodilla hacia adelante")
+		local pelo = rig.model:FindFirstChild("Pelo")
+		local handle = pelo and pelo:FindFirstChild("Handle")
+		local head = rig.model:FindFirstChild("Head")
+		check(handle and (handle.CFrame.Position - (head.CFrame * M.CFrame.new(0, 0.65, 0)).Position).Magnitude < 1e-3, "los accesorios siguen a la cabeza")
 		fake.phase, fake.phaseT = "up", Act.SIT_TIME
 		Anim.update(rig, fake, cf, 1, 0.05)
 		fake.phase, fake.pose, fake.state = nil, "idle", "Idle"
@@ -4634,8 +4717,16 @@ do
 			Anim.update(rig, fake, cf, 1, 0.05)
 		end
 		check(math.abs(rig.current.hipH - NPCm.DIM.hipH) < 1e-6 and math.abs(rig.current.thighL) < 0.05, "levantarse: vuelve a la postura de pie sin restos")
-		local headY = rig.parts.head.CFrame.Position.Y - 100
-		check(headY > 4.5 and headY < 5.6, string.format("altura de la cabeza acorde a los muebles (%.2f studs)", headY))
+		local headY = rig.model:FindFirstChild("Head").CFrame.Position.Y - 100
+		check(headY > 4.5 and headY < 6, string.format("altura de la cabeza acorde a los muebles (%.2f studs)", headY))
+		for _, d in rig.model:GetDescendants() do
+			if d:IsA("BasePart") and not d.Anchored then
+				check(false, "todas las piezas ancladas (" .. d.Name .. ")")
+			end
+			if d:IsA("LocalScript") or d:IsA("Script") then
+				check(false, "sin scripts del avatar (" .. d.Name .. ")")
+			end
+		end
 		NPCm.destroy(rig)
 		noErrors("Actividades de los empleados")
 	end)
@@ -4736,21 +4827,103 @@ do
 		end
 		local sess = Sessions.instance.list[player]
 		sess.game.money = 1e6
-		for _, e in staff(6, "ed") do
-			table.insert(sess.game.employees, e)
+		sess.game.sede = 3 -- lugar para contratar varios
+		-- 1. La lista de amigos real del servidor (Players:GetFriendsAsync, aquí con dobles): 8 amigos.
+		local FI = require("./.build-ui/server/FriendIdentity")
+		local list = {}
+		for i = 1, 8 do
+			table.insert(list, { userId = 700000 + i, username = "amiga_" .. i, displayName = "Amiga " .. i })
 		end
-		Sessions.instance:push(sess)
-		waitFor(function()
-			return App.g.money == 1e6 and #App.g.employees == 6
-		end)
-		local hb0 = heartbeatHandlers()
+		M.friendsOf[player.UserId] = list
+		M.avatarsEnabled = true
+		local calls0 = M.friendsCalls
+		Sessions.instance:fetchFriends(sess)
+		eq(M.friendsCalls, calls0 + 1, "1. la lista se pide con la API oficial")
+		check(waitFor(function()
+			return App.payload.friends ~= nil and App.payload.friends.status == "ok" and App.payload.friends.total == 8
+		end), "la interfaz conoce la lista (8 amigos)")
+		-- 2–5. Contratar desde Personal: cada uno es automáticamente un amigo, sin elegirlo.
+		App.go("personal")
+		M.task.wait()
+		local staffSt = App.ui.staff
+		check(staffSt ~= nil, "estado de Personal")
+		staffSt.view = "mercado"
+		App.forceRender()
+		M.task.wait()
+		local nextName = App.payload.friends.next and App.payload.friends.next.displayName
+		check(nextName ~= nil and find("La próxima contratación se incorpora como " .. nextName) ~= nil, "Personal anuncia qué amigo se incorpora (sin elegirlo)")
+		check(named("PerfilCandidato") ~= nil, "los candidatos son perfiles laborales (sin un nombre propio inventado)")
+		check(find("Elegir amigo") == nil and find("Elegí un amigo") == nil, "5. no hay selección manual de amigos")
+		local first
+		for k = 1, 6 do
+			local c = App.g.candidates[1]
+			local r = App.request("hire", { candidateId = c.id })
+			check(r.ok, "contratar " .. k .. ": " .. tostring(r.msg))
+			if k == 1 then
+				first = r
+			end
+			waitFor(function()
+				return #App.g.employees == k
+			end)
+		end
+		check(string.find(first.msg, nextName, 1, true) ~= nil, "3. el primero es el amigo anunciado")
+		local ids = {}
+		for _, e in App.g.employees do
+			check(e.friend ~= nil and e.name == e.friend.displayName, "4. identidad del amigo: " .. tostring(e.name))
+			check(not ids[e.friend.userId], "7. sin repetir amigos")
+			ids[e.friend.userId] = true
+		end
+		eq(App.payload.friends.available, 2, "quedan 2 amigos libres")
+		-- Personal muestra la foto y el usuario del amigo.
+		staffSt.view = "inicio"
+		staffSt.dept = App.g.employees[1].dept
+		staffSt.sel = App.g.employees[1].id
+		App.go("personal")
+		App.forceRender()
+		M.task.wait()
+		staffSt.view = "depto"
+		App.forceRender()
+		M.task.wait()
+		local photo = named("FotoAmigo")
+		check(photo ~= nil and string.find(photo.Image, "id=" .. App.g.employees[1].friend.userId, 1, true) ~= nil, "Personal muestra la foto del avatar del amigo")
+		check(find("@" .. App.g.employees[1].friend.username) ~= nil, "y su nombre de usuario")
 		App.go("oficina")
 		M.task.wait()
+		-- 16. Los avatares llegan del servidor (a lo sumo 2 a la vez) y se dibujan; nunca genéricos.
+		check(waitFor(function()
+			Mgr.step(0.5)
+			return npcModels() == 6
+		end, 400), "16. llegan los seis avatares reales")
+		for _, npc in Act.list(Mgr.world()) do
+			local rig = Mgr.rig(npc.id)
+			local e
+			for _, x in App.g.employees do
+				if x.id == npc.id then
+					e = x
+				end
+			end
+			check(isAvatar(rig) and rig.userId == e.friend.userId and rig.label.Text == e.friend.displayName, "4. " .. e.name .. ": su avatar y su nombre")
+		end
+		local gui = player:FindFirstChild("PlayerGui")
+		check(gui:FindFirstChild("AvataresEmpleados") ~= nil, "las plantillas viven en el PlayerGui de este jugador (solo él las recibe)")
+		-- Seguridad: pedir el avatar de alguien que no es empleado no hace nada.
+		local built = M.avatarCalls.model
+		M.services.ReplicatedStorage.CarEmpireRemotes.Avatares:FireServer({ "no-existe", "e999" })
+		M.task.wait()
+		eq(M.avatarCalls.model, built, "el cliente no puede pedir avatares de cualquiera")
+		-- Caché: volver a pedir los mismos no los rearma.
+		M.services.ReplicatedStorage.CarEmpireRemotes.Avatares:FireServer({ App.g.employees[1].id })
+		M.task.wait()
+		eq(M.avatarCalls.model, built, "16. un avatar vigente no se vuelve a armar")
+		local hb0 = heartbeatHandlers() - 1
 		check(Mgr.isOpen(), "los empleados aparecen al abrir el editor")
 		eq(#Mgr.world().order, 6, "seis visibles")
 		eq(npcModels(), 6, "seis personajes")
 		check(named("ZonaEmpleados") ~= nil and named("MostrarEmpleados") ~= nil, "interruptor «Mostrar empleados»")
+		App.forceRender()
+		M.task.wait()
 		check(find("Empleados visibles: 6 / 6 contratados") ~= nil, "«Empleados visibles: 6 / 6 contratados»")
+		local _ = FI
 		-- 28. La empresa sigue en pausa: los empleados se mueven pero el tiempo y el dinero no.
 		check(App.menuPaused(), "28. el editor pausa la empresa (setUiPause)")
 		local day0, min0, money0 = sess.game.time.day, sess.game.time.minute, sess.game.money
@@ -4866,6 +5039,58 @@ do
 		for k in probe do
 			check(table.find({ "version", "level", "seq", "rev", "inventory", "placed", "finishes", "storedFinishes", "starter", "ops" }, k) ~= nil, "30. g.office solo con sus campos de siempre (" .. k .. ")")
 		end
+		-- 12. Despedir libera al amigo y su personaje desaparece.
+		local victim = App.g.employees[1]
+		local freedId = victim.friend.userId
+		App.ui.dialogs = {}
+		local fr = App.request("fire", { employeeId = victim.id })
+		check(fr.ok, "despedir: " .. tostring(fr.msg))
+		check(waitFor(function()
+			return #App.g.employees == 5
+		end), "quedan cinco")
+		Mgr.step(0.2)
+		check(Mgr.npc(victim.id) == nil and Mgr.rig(victim.id) == nil, "12. su representación desaparece")
+		eq(App.payload.friends.available, 3, "12. su amigo vuelve a estar libre")
+		-- 13. Más contrataciones que amigos: puestos sin identidad y sin clones.
+		if #App.g.candidates < 4 then
+			check(App.request("searchCandidates", { kind = "general" }).ok, "búsqueda de candidatos")
+			waitFor(function()
+				return #App.g.candidates >= 4
+			end)
+		end
+		for _ = 1, 4 do
+			local c = App.g.candidates[1]
+			if not c then
+				break
+			end
+			App.request("hire", { candidateId = c.id })
+		end
+		local withF, without, seenU = 0, 0, {}
+		for _, e in App.g.employees do
+			if e.friend then
+				withF += 1
+				check(not seenU[e.friend.userId], "13. ningún amigo repetido")
+				seenU[e.friend.userId] = true
+			else
+				without += 1
+			end
+		end
+		check(withF == 8 and without >= 1, "13. ocho con amigo y el resto como puestos sin identidad (" .. without .. ")")
+		check(seenU[freedId] == true, "el amigo liberado se volvió a asignar")
+		Mgr.step(0.5)
+		for _, npc in Act.list(Mgr.world()) do
+			local e
+			for _, x in App.g.employees do
+				if x.id == npc.id then
+					e = x
+				end
+			end
+			check(e and e.friend ~= nil, "13. solo hay personajes de empleados con amigo")
+		end
+		App.forceRender()
+		M.task.wait()
+		check(find("sin amigo") ~= nil, "el contador muestra los puestos sin amigo")
+		M.avatarsEnabled = false
 		-- Cambiar de empresa: el editor se cierra y no queda ningún empleado de esta.
 		App.request("leaveCompany", {})
 		waitFor(function()

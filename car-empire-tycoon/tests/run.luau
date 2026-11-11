@@ -1430,8 +1430,9 @@ local function makeServer(store: any, jobId: string, clock: any, opts: any?)
 				pushed[player] = jsonCopy(payload)
 			end
 		end,
-		notice = function() end,
+		notice = o.notice or function() end,
 		garage = nil,
+		friends = o.friends,
 		newRng = function()
 			return seeded(99)
 		end,
@@ -5310,6 +5311,270 @@ do
 			local okc, whyc = Office.checkInteraction(f)
 			check(okc, id .. ": puntos de uso válidos (" .. tostring(whyc) .. ")")
 		end
+	end)
+end
+
+
+-- Empleados = amigos de Roblox ----------------------------------------------------------------------------------
+do
+	local FI = require("./.build/server/FriendIdentity")
+	local Staff = require("./.build/shared/Staff")
+
+	local function friends(n: number, from: number?): { any }
+		local out = {}
+		for i = 1, n do
+			local id = (from or 1000) + i
+			table.insert(out, { userId = id, username = "amigo" .. id, displayName = "Amigo " .. id })
+		end
+		return out
+	end
+
+	local function hireN(g: any, ctx: any, n: number): { any }
+		local out = {}
+		for _ = 1, n do
+			Simulation.ensureMarket(g, ctx)
+			if #g.candidates == 0 then
+				Simulation.refreshCandidates(g, ctx, nil)
+			end
+			local c = g.candidates[1]
+			local r = Actions.hire(g, ctx, { candidateId = c.id })
+			assert(r.ok, r.msg)
+			table.insert(out, { e = g.employees[#g.employees], c = c, r = r })
+		end
+		return out
+	end
+
+	test("[AM1] Contratar asigna solo un amigo de Roblox: identidad real, sin repetir, sin tocar la economía", function()
+		local g = newCompany("Amigos SA")
+		g.sede = 3 -- lugar para 16 empleados
+		local ctx = makeCtx(5)
+		ctx.friends = FI.roster({ status = "ok", complete = true, list = friends(3) })
+		local nextF = FI.nextFriend(g, ctx.friends)
+		local hired = hireN(g, ctx, 3)
+		local seen = {}
+		for i, h in hired do
+			local e, c = h.e, h.c
+			check(e.friend ~= nil, "1-3. el contratado " .. i .. " es un amigo")
+			check(ctx.friends.byId[e.friend.userId] ~= nil, "4. su UserId es de un amigo real de la lista")
+			eq(e.name, e.friend.displayName, "4. usa el DisplayName del amigo")
+			check(e.friend.username == "amigo" .. e.friend.userId, "4. y su Username")
+			check(not seen[e.friend.userId], "7. ningún amigo repetido en la empresa")
+			seen[e.friend.userId] = true
+			-- 10. Habilidades, especialidad y salario: los del perfil contratado (Staff de siempre).
+			eq(e.spec, c.spec, "10. especialidad del perfil")
+			eq(e.salary, c.salary, "10. salario del perfil")
+			eq(serde.encode("json", e.skills), serde.encode("json", c.skills), "10. habilidades del perfil")
+			check(string.find(h.r.msg, e.friend.displayName, 1, true) ~= nil, "el aviso nombra al amigo")
+		end
+		eq(hired[1].e.friend.userId, nextF.userId, "se asigna el que se anunció como próximo")
+		-- 13. Más contrataciones que amigos: el puesto existe y trabaja, sin identidad ni clones.
+		local extra = hireN(g, ctx, 2)
+		for _, h in extra do
+			check(h.e.friend == nil and h.e.name == FI.VACANT, "13. puesto sin amigo (sin clonar a nadie)")
+			check(string.find(h.r.msg, "Sin amigos de Roblox libres", 1, true) ~= nil, "13. el aviso lo explica")
+		end
+		eq(#g.employees, 5, "13. los cinco puestos económicos se mantienen")
+		local sum = FI.summary(g, ctx.friends)
+		check(sum.total == 3 and sum.available == 0 and sum.vacant == 2 and sum.next == nil, "resumen: 3 amigos, 0 libres, 2 puestos sin amigo")
+		-- La productividad de un puesto sin amigo es la misma que la de uno con amigo (misma fórmula).
+		local a, b = hired[1].e, extra[1].e
+		local pb = Staff.productivity(g, b)
+		b.friend = { userId = 1, username = "x", displayName = "x" }
+		eq(Staff.productivity(g, b), pb, "10. la identidad no cambia la productividad")
+		b.friend = nil
+		check(Staff.productivity(g, a) > 0, "productividad normal")
+		-- 12. Despedir libera al amigo: la contratación siguiente lo recibe.
+		local freed = hired[2].e.friend.userId
+		check(Actions.fire(g, ctx, { employeeId = hired[2].e.id }).ok, "despedir")
+		eq(FI.nextFriend(g, ctx.friends).userId, freed, "12. el amigo despedido queda libre")
+		local res = FI.reconcile(g, ctx.friends, 5000, 1)
+		eq(res.assigned, 1, "12. un puesto sin amigo recibe al liberado")
+		check(extra[1].e.friend and extra[1].e.friend.userId == freed, "12. el más antiguo sin amigo lo recibe")
+		-- Orden estable: la misma empresa asigna siempre igual; otra empresa, en otro orden posible.
+		local g2 = newCompany("Amigos SA")
+		g2.company.id = g.company.id
+		local o1 = FI.available({ employees = {}, company = g.company }, ctx.friends)
+		local o2 = FI.available({ employees = {}, company = g2.company }, ctx.friends)
+		eq(o1[1].userId, o2[1].userId, "orden estable para la misma empresa")
+		-- Sin lista (cargando o con falla): se contrata igual, sin identidad, y se asigna después.
+		local g3 = newCompany("Sin Lista SA")
+		g3.sede = 3
+		local ctx3 = makeCtx(6)
+		ctx3.friends = FI.roster({ status = "failed" })
+		local h3 = hireN(g3, ctx3, 1)[1]
+		check(h3.e.friend == nil, "14. con la consulta fallida el puesto espera su amigo")
+		FI.reconcile(g3, FI.roster({ status = "ok", complete = true, list = friends(2) }), 100, 1)
+		check(h3.e.friend ~= nil and h3.e.name == h3.e.friend.displayName, "al llegar la lista recibe su amigo")
+		-- 11. El amigo no está conectado ni juega: alcanza con estar en la lista (no hay ningún otro requisito).
+		check(ctx.friends.list[1].isOnline == nil, "no se usa si está conectado")
+	end)
+
+	test("[AM2] Política segura: fallas, listas incompletas o sospechosas, reasignación confirmada y nombres", function()
+		local g = newCompany("Seguro SA")
+		g.sede = 3
+		local ctx = makeCtx(7)
+		local list = friends(10)
+		ctx.friends = FI.roster({ status = "ok", complete = true, list = list })
+		local hired = hireN(g, ctx, 3)
+		FI.reconcile(g, ctx.friends, 1000, 1) -- registra el tamaño de la lista completa
+		local e = hired[1].e
+		local uid = e.friend.userId
+		local stats = serde.encode("json", { e.skills, e.potential, e.salary, e.months, e.hiredDay, e.spec, e.dept, e.id })
+		local function without(id: number, extra: { any }?): { any }
+			local out = {}
+			for _, f in list do
+				if f.userId ~= id then
+					table.insert(out, f)
+				end
+			end
+			for _, f in extra or {} do
+				table.insert(out, f)
+			end
+			return out
+		end
+		-- 14. Consulta fallida o cargando: nadie pierde su amigo.
+		for _, st in { "failed", "loading" } do
+			local r = FI.reconcile(g, FI.roster({ status = st }), 5000, 2)
+			check(r.marked + r.reassigned + r.released == 0 and e.friend.userId == uid, "14. lista " .. st .. ": se conservan las asignaciones")
+		end
+		-- Lista incompleta (una página falló): no se marca a nadie como ausente.
+		FI.reconcile(g, FI.roster({ status = "ok", complete = false, list = without(uid) }), 5000, 2)
+		check(e.friend.missingSince == nil, "14. lista incompleta: no cuenta como ausencia")
+		-- Lista sospechosa (cae a menos de la mitad): tampoco.
+		FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = { list[2], list[3] } }), 5000, 2)
+		check(e.friend.missingSince == nil and e.friend.userId == uid, "14. caída brusca de la lista: no se quita a nadie")
+		-- 15. Ausente en una lista confiable: primero se marca; no se reemplaza enseguida.
+		local nine = without(uid)
+		local r1 = FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = nine }), 6000, 2)
+		check(r1.marked == 1 and e.friend.userId == uid and e.friend.missingSince == 6000, "15. primera ausencia: solo se anota")
+		local r2 = FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = nine }), 6000 + FI.MISSING_CONFIRM - 1, 2)
+		check(r2.reassigned == 0 and e.friend.userId == uid, "15. antes del plazo de confirmación sigue igual")
+		-- Si vuelve a aparecer, se borra la marca.
+		FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = list }), 6300, 2)
+		check(e.friend.missingSince == nil, "15. vuelve a estar: se borra la marca")
+		FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = nine }), 7000, 2)
+		local r3 = FI.reconcile(g, FI.roster({ status = "ok", complete = true, list = nine }), 7000 + FI.MISSING_CONFIRM, 3)
+		check(r3.reassigned == 1 and e.friend and e.friend.userId ~= uid, "15. confirmado: el puesto pasa a otro amigo libre")
+		eq(e.name, e.friend.displayName, "15. con su nombre")
+		eq(serde.encode("json", { e.skills, e.potential, e.salary, e.months, e.hiredDay, e.spec, e.dept, e.id }), stats, "15. sin perder las estadísticas laborales")
+		check(#r3.messages == 1 and string.find(r3.messages[1], "mismas habilidades", 1, true) ~= nil, "15. se avisa al jugador")
+		-- Sin amigos libres: el puesto queda sin identidad hasta que haya uno.
+		local g2 = newCompany("Pocos SA")
+		g2.sede = 3
+		local ctx2 = makeCtx(8)
+		local two = friends(4, 5000)
+		ctx2.friends = FI.roster({ status = "ok", complete = true, list = two })
+		local h2 = hireN(g2, ctx2, 4)
+		FI.reconcile(g2, ctx2.friends, 100, 1)
+		local gone = h2[1].e.friend.userId
+		local three = { two[1], two[2], two[3], two[4] }
+		for i = #three, 1, -1 do
+			if three[i].userId == gone then
+				table.remove(three, i)
+			end
+		end
+		FI.reconcile(g2, FI.roster({ status = "ok", complete = true, list = three }), 200, 1)
+		local r4 = FI.reconcile(g2, FI.roster({ status = "ok", complete = true, list = three }), 200 + FI.MISSING_CONFIRM, 1)
+		check(r4.released == 1 and h2[1].e.friend == nil and h2[1].e.name == FI.VACANT, "15. sin amigos libres: el puesto sigue, sin identidad")
+		local plus = table.clone(three)
+		table.insert(plus, { userId = 9999, username = "nuevo", displayName = "Nuevo" })
+		FI.reconcile(g2, FI.roster({ status = "ok", complete = true, list = plus }), 300, 1)
+		check(h2[1].e.friend and h2[1].e.friend.userId == 9999, "al aparecer un amigo nuevo, lo recibe")
+		-- Cambio de DisplayName del amigo: se actualiza el nombre del empleado.
+		plus[#plus] = { userId = 9999, username = "nuevo", displayName = "Nuevo Nombre" }
+		local r5 = FI.reconcile(g2, FI.roster({ status = "ok", complete = true, list = plus }), 400, 1)
+		check(r5.renamed == 1 and h2[1].e.name == "Nuevo Nombre", "16. el nombre visible sigue al del amigo")
+		-- Datos guardados dañados o repetidos: se reparan sin perder el puesto.
+		local g3 = newCompany("Dañada SA")
+		g3.employees = {
+			{ id = "e1", name = "x", friend = { userId = 7, username = "siete", displayName = "Siete" } },
+			{ id = "e2", name = "y", friend = { userId = 7, username = "siete", displayName = "Siete" } },
+			{ id = "e3", name = "z", friend = { userId = -3, username = "" } },
+		}
+		FI.sanitize(g3)
+		check(g3.employees[1].friend and not g3.employees[2].friend and not g3.employees[3].friend, "8. amigo repetido o inválido: queda sin identidad (sin borrar el empleado)")
+		eq(#g3.employees, 3, "8. ningún empleado eliminado")
+	end)
+
+	test("[AM3] Sesión: la lista se pide al entrar, se reintenta, se guarda el UserId y las partidas viejas se completan", function()
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mode = "fail"
+		local calls = 0
+		local roster = friends(3, 2000)
+		local notices = {}
+		local fetcher = {
+			fetch = function(_player: any): any
+				calls += 1
+				if mode == "fail" then
+					error("HTTP 500")
+				end
+				return { status = "ok", complete = mode ~= "partial", list = mode == "partial" and { roster[1] } or roster, fetchedAt = clock.t }
+			end,
+		}
+		local mgr, pushed = makeServer(store, "A", clock, { friends = fetcher, notice = function(_, _, text)
+			table.insert(notices, text)
+		end })
+		local p = { UserId = 77, Name = "siete" }
+		mgr:add(p)
+		eq(calls, 1, "1. la lista se pide al entrar")
+		local s = playThrough(mgr, p)
+		s.game.sede = 3
+		eq(pushed[p].friends.status, "failed", "14. la falla se informa a la interfaz")
+		Simulation.ensureMarket(s.game, s.ctx)
+		local c = s.game.candidates[1]
+		check(mgr:request(p, "hire", { candidateId = c.id, requestId = rid() }).ok, "contratar con la lista caída")
+		local e = s.game.employees[#s.game.employees]
+		check(e.friend == nil, "14. sin lista: puesto sin identidad (no se inventa ninguna)")
+		-- Reintento programado: se vuelve a pedir después de la espera, no en cada segundo.
+		check(s.friendsNext ~= nil and s.friendsNext > clock.c, "se programa un reintento")
+		mgr:tick()
+		eq(calls, 1, "no se reintenta antes de tiempo (límite de solicitudes)")
+		mode = "ok"
+		clock.c = s.friendsNext + 0.1
+		mgr:tick()
+		eq(calls, 2, "reintenta después de la espera")
+		check(e.friend ~= nil and e.name == e.friend.displayName, "al llegar la lista, el puesto recibe su amigo")
+		local uid = e.friend.userId
+		eq(pushed[p].friends.status, "ok", "la interfaz recibe el estado de la lista")
+		check(pushed[p].game.employees[#pushed[p].game.employees].friend.userId == uid, "el cliente recibe el UserId del amigo")
+		-- Una lista cortada no reemplaza a la completa.
+		mode = "partial"
+		mgr:fetchFriends(s)
+		eq(#s.friends.list, 3, "lista incompleta: sigue valiendo la completa")
+		-- 8. Se guarda el UserId y se recupera en otra sesión, aunque allí la consulta falle.
+		mgr:remove(p) -- guarda al salir
+		check(store.data["player_77"] ~= nil, "partida guardada")
+		mode = "fail"
+		local mgr2, pushed2 = makeServer(store, "B", clock, { friends = fetcher })
+		mgr2:add(p)
+		check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abrir la empresa en otro servidor")
+		local e2 = mgr2.list[p].game.employees[#mgr2.list[p].game.employees]
+		check(e2.friend and e2.friend.userId == uid and e2.name == e.name, "8 y 14. identidad conservada entre sesiones aunque falle la consulta")
+		eq(pushed2[p].game.schema, GameState.SCHEMA, "sin cambio de esquema")
+		mgr2:remove(p)
+		-- 18. Partida vieja (sin identidades): al llegar la lista, sus empleados reciben amigos sin tocar nada más.
+		local old = loadFixture()
+		local store2 = newStore()
+		local migrated = assert(GameState.migrate(Util.deepCopy(old), 1000))
+		migrated.employees = {
+			{ id = "v1", name = "Viejo Uno", spec = "produccion", dept = "produccion", salary = 1500, skills = {}, potential = {}, months = 12, hiredDay = 0, adapt = {}, status = "activo" },
+		}
+		for _, k in Staff.SKILL_ORDER do
+			migrated.employees[1].skills[k] = 30
+			migrated.employees[1].potential[k] = 60
+		end
+		store2.data["player_78"] = { schema = 2, profile = { slots = { ["1"] = migrated }, active = "1" } }
+		mode = "ok"
+		local mgr3, pushed3 = makeServer(store2, "C", clock, { friends = fetcher })
+		local p3 = { UserId = 78 }
+		mgr3:add(p3)
+		eq(pushed3[p3].status, "ready", "18. la partida vieja carga")
+		check(mgr3:request(p3, "selectSlot", { slot = "1" }).ok, "18. abrirla")
+		local ve = mgr3.list[p3].game.employees[1]
+		check(ve.friend ~= nil and ve.name == ve.friend.displayName, "18. el empleado viejo pasa a ser un amigo")
+		eq(ve.salary, 1500, "18. conserva su salario")
+		eq(ve.months, 12, "18. y su experiencia")
 	end)
 end
 

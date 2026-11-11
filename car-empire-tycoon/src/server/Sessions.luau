@@ -15,6 +15,8 @@
 	  log       = (texto) -> ()               debug = boolean (muestra datos de diagnóstico en el registro)
 	  saveMode  = "datastore" | "memory"
 	  prompt    = (player, productId) -> () | nil                   -- abre la compra de un Developer Product
+	  friends   = { fetch = (player) -> { status, complete, list = { { userId, username, displayName } } } } | nil
+	              -- lista de amigos de Roblox (Players:GetFriendsAsync en Main.server; puede fallar: se reintenta)
 	}
 
 	Estados de una sesión: "loading" → "ready" (o "failed") ; "lost" si otro servidor tomó la partida.
@@ -24,12 +26,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
+local Rules = require(Shared.Rules)
 
 local GameState = require(script.Parent.GameState)
 local Simulation = require(script.Parent.Simulation)
 local Actions = require(script.Parent.Actions)
 local DataService = require(script.Parent.DataService)
 local Demo = require(script.Parent.Demo)
+local FriendIdentity = require(script.Parent.FriendIdentity)
 
 local Sessions = {}
 Sessions.__index = Sessions
@@ -40,6 +44,8 @@ Sessions.RATE_WINDOW = 2
 Sessions.RATE_MAX = 14
 Sessions.PROCESSED_KEPT = 60
 Sessions.RECEIPTS_KEPT = 300 -- recibos de Robux ya acreditados (un reintento de Roblox no se acredita dos veces)
+Sessions.FRIENDS_REFRESH = 600 -- segundos entre consultas de la lista de amigos (límite de solicitudes)
+Sessions.FRIENDS_RETRY = { 5, 20, 60, 180 } -- espera tras cada falla seguida
 
 -- Opciones de Configuración (las de la V3). camSpeed va de 0,4 a 2 en pasos de 0,1.
 local CAM_SPEEDS = {}
@@ -100,6 +106,7 @@ function Sessions:payload(s: any): any
 		profile = s.profile and { slots = slots, usable = usable, active = s.activeKey, last = s.profile.active, settings = s.profile.settings } or nil,
 		demo = s.demo,
 		menuPaused = s.uiPaused == true,
+		friends = s.game and FriendIdentity.summary(s.game, s.friends) or nil,
 		game = s.game and GameState.view(s.game) or nil,
 	}
 end
@@ -269,6 +276,7 @@ function Sessions:activate(s: any, key: string, demoGame: any?)
 		GameState.applyAccount(s.profile, s.damaged) -- compras de la cuenta (línea 3) también en una empresa recién creada
 	end
 	Simulation.ensureMarket(s.game, s.ctx) -- candidatos del mes (8, se renuevan cada mes)
+	self:applyFriends(s, true) -- identidades de los empleados con la lista de amigos que ya se tenga
 	local garage = self.deps.garage
 	if garage then
 		local plot = garage.assign(s.player, s.game)
@@ -323,7 +331,9 @@ function Sessions:add(player: any)
 		lastSave = 0, lastAutosave = self.deps.clock(), lastRenew = self.deps.clock(), lockConfirmed = 0,
 		saveWarning = nil, blocked = nil, busy = false, requests = {}, processed = {}, leaving = false, hasPlot = false,
 	}
+	s.friends = FriendIdentity.roster(nil) -- "loading" hasta que llegue la primera consulta
 	s.ctx = {
+		friends = s.friends,
 		rng = rng,
 		notify = function(kind: string, text: string)
 			if not s.leaving then
@@ -335,7 +345,77 @@ function Sessions:add(player: any)
 	self.deps.spawn(function()
 		self:load(s)
 	end)
+	if self.deps.friends then
+		self.deps.spawn(function()
+			self:fetchFriends(s)
+		end)
+	end
 	return s
+end
+
+-- Amigos de Roblox -----------------------------------------------------------------------------------
+
+--[[ Consulta la lista de amigos (puede tardar o fallar). Una falla nunca borra una lista buena anterior ni las
+	identidades guardadas: se reintenta con espera creciente. Una lista incompleta no reemplaza a una completa
+	con más amigos (se conservan las asignaciones). Las consultas se espacian FRIENDS_REFRESH segundos. ]]
+function Sessions:fetchFriends(s: any)
+	local f = self.deps.friends
+	if not f or s.leaving or s.friendsBusy then
+		return
+	end
+	s.friendsBusy = true
+	local ok, raw = pcall(f.fetch, s.player)
+	s.friendsBusy = false
+	if s.leaving then
+		return
+	end
+	local roster = ok and FriendIdentity.roster(raw) or nil
+	if roster and roster.status == "ok" then
+		s.friendsFails = 0
+		s.friendsNext = self.deps.clock() + Sessions.FRIENDS_REFRESH
+		if not roster.complete and s.friends.status == "ok" and s.friends.complete and #roster.list < #s.friends.list then
+			return -- lista cortada: sigue valiendo la completa anterior
+		end
+		self:setFriends(s, roster)
+	else
+		s.friendsFails = (s.friendsFails or 0) + 1
+		s.friendsNext = self.deps.clock() + Sessions.FRIENDS_RETRY[math.min(s.friendsFails, #Sessions.FRIENDS_RETRY)]
+		if not ok then
+			self.deps.log("No se pudo leer la lista de amigos: " .. tostring(raw))
+		end
+		if s.friends.status ~= "ok" then
+			s.friends = FriendIdentity.roster({ status = "failed" })
+			s.ctx.friends = s.friends
+			if s.game then
+				self:push(s)
+			end
+		end
+	end
+end
+
+function Sessions:setFriends(s: any, roster: any)
+	s.friends = roster
+	s.ctx.friends = roster
+	if s.game then
+		self:applyFriends(s)
+	end
+end
+
+-- Aplica la lista a la empresa activa (asignar, renombrar, política de reasignación). quiet = sin enviar.
+function Sessions:applyFriends(s: any, quiet: boolean?)
+	if not s.game then
+		return
+	end
+	local res = FriendIdentity.reconcile(s.game, s.friends, self.deps.now(), Rules.absDay(s.game))
+	for _, msg in res.messages do
+		self.deps.notice(s.player, "aviso", msg)
+	end
+	if res.assigned + res.renamed + res.marked + res.reassigned + res.released > 0 then
+		s.dirty = true
+	end
+	if not quiet then
+		self:push(s)
+	end
 end
 
 function Sessions:remove(player: any)
@@ -814,6 +894,12 @@ end
 function Sessions:tick()
 	local clock = self.deps.clock()
 	for player, s in self.list do
+		if self.deps.friends and s.friendsNext and clock >= s.friendsNext and not s.friendsBusy and not s.leaving then
+			s.friendsNext = nil
+			self.deps.spawn(function()
+				self:fetchFriends(s)
+			end)
+		end
 		if s.status == "ready" and not s.leaving then
 			local g = s.game
 			if g and not g.demo then

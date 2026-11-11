@@ -72,6 +72,7 @@ local GameState = require(script.Parent.GameState)
 local DataService = require(script.Parent.DataService)
 local Sessions = require(script.Parent.Sessions)
 local Garage = require(script.Parent.Garage)
+local EmployeeAvatars = require(script.Parent.EmployeeAvatars)
 
 local STORE_NAME = "CarEmpireTycoon_v1"
 
@@ -90,6 +91,10 @@ NoticeEvent.Parent = remotes
 local OpenEvent = Instance.new("RemoteEvent")
 OpenEvent.Name = "Open"
 OpenEvent.Parent = remotes
+-- Avatares de los empleados: el cliente pide (ids de empleados) y el servidor los deja en su PlayerGui.
+local AvatarEvent = Instance.new("RemoteEvent")
+AvatarEvent.Name = "Avatares"
+AvatarEvent.Parent = remotes
 remotes.Parent = ReplicatedStorage
 
 local function log(msg: string)
@@ -217,7 +222,60 @@ sessions = Sessions.new({
 	prompt = function(player: Player, productId: number)
 		MarketplaceService:PromptProductPurchase(player, productId)
 	end,
+	-- Lista de amigos de Roblox (API oficial). No hace falta que estén conectados ni que jueguen este juego.
+	-- Si una página falla, la lista vuelve marcada como incompleta (no se usa para quitar a nadie).
+	friends = {
+		fetch = function(player: Player): any
+			local pages = Players:GetFriendsAsync(player.UserId)
+			local list, complete = {}, false
+			for _ = 1, 100 do
+				for _, item in pages:GetCurrentPage() do
+					table.insert(list, { userId = item.Id, username = item.Username, displayName = item.DisplayName })
+				end
+				if pages.IsFinished then
+					complete = true
+					break
+				end
+				local ok = pcall(function()
+					pages:AdvanceToNextPageAsync()
+				end)
+				if not ok then
+					break
+				end
+			end
+			return { status = "ok", complete = complete, list = list, fetchedAt = os.time() }
+		end,
+	},
 })
+
+-- Pedido de avatares: solo de empleados de la empresa activa de ese jugador que tienen un amigo asignado.
+AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any)
+	local s = sessions.list[player]
+	local g = s and s.game
+	if not g or type(ids) ~= "table" then
+		return
+	end
+	local byEmployee = {}
+	for _, e in g.employees do
+		if e.friend then
+			byEmployee[e.id] = e.friend.userId
+		end
+	end
+	local want, seen = {}, {}
+	for i, id in ids do
+		if i > 12 then
+			break -- nunca más de lo que se ve a la vez (con margen)
+		end
+		local userId = type(id) == "string" and byEmployee[id] or nil
+		if userId and not seen[userId] then
+			seen[userId] = true
+			table.insert(want, userId)
+		end
+	end
+	if #want > 0 then
+		EmployeeAvatars.request(player, want)
+	end
+end)
 
 -- Compras permanentes con Developer Products: se acreditan solo después de guardarlas (Sessions.processReceipt).
 MarketplaceService.ProcessReceipt = function(info: any): Enum.ProductPurchaseDecision
@@ -252,6 +310,7 @@ for _, p in Players:GetPlayers() do
 end
 
 Players.PlayerRemoving:Connect(function(player: Player)
+	EmployeeAvatars.forget(player)
 	sessions:remove(player)
 end)
 

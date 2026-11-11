@@ -13,11 +13,17 @@
 	nueva del servidor y close al salir (antes de destruir la escena). Una sola conexión a Heartbeat mientras el
 	editor está abierto, que se desconecta al cerrar: abrir y cerrar muchas veces no acumula conexiones.
 
-	Separado de la economía: solo lee App.g (copia sincronizada por el servidor). No envía solicitudes, no
-	cambia la partida y no avanza g.time (la empresa sigue en pausa con setUiPause mientras el editor está
+	Identidad: solo se representan empleados con un amigo de Roblox asignado (e.friend, lo decide el servidor
+	al contratar). El personaje es el avatar real de ese amigo: se pide al servidor (evento Avatares, en lotes,
+	a lo sumo cada REQUEST_GAP segundos y reintentando cada RETRY segundos) y se dibuja cuando llega. Mientras
+	no llegó, el empleado no se ve (nunca un personaje genérico).
+
+	Separado de la economía: solo lee App.g (copia sincronizada por el servidor). No envía solicitudes que
+	cambien la partida y no avanza g.time (la empresa sigue en pausa con setUiPause mientras el editor está
 	abierto); su reloj es propio. ]]
 
 local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local OfficeCatalog = require(Shared.OfficeCatalog)
@@ -31,6 +37,9 @@ local Scene = require(script.Parent.OfficeScene)
 local Manager = {}
 
 Manager.UPDATE_HZ = 30 -- pasos por segundo de movimiento y animación (no se calculan rutas por cuadro)
+Manager.REQUEST_GAP = 1 -- segundos entre pedidos de avatares al servidor
+Manager.RETRY = 20 -- segundos antes de volver a pedir un avatar que no llegó
+Manager.REFRESH_AFTER = 1800 -- un avatar más viejo que esto se pide de nuevo al abrir el editor (actualizado)
 
 local st = {
 	open = false,
@@ -46,6 +55,12 @@ local st = {
 	lastText = "",
 	shown = true, -- «Mostrar empleados» (empieza activada; es una preferencia de esta sesión, no se guarda)
 	opens = 0,
+	friendOf = {} :: { [string]: number }, -- id de empleado → userId de su amigo
+	requested = {} :: { [number]: number }, -- userId → cuándo se pidió
+	queue = {} :: { string },
+	lastRequest = -math.huge,
+	clock = 0,
+	requests = 0,
 }
 Manager._state = st
 
@@ -64,9 +79,68 @@ end
 local function employeesSig(list: { any }?): string
 	local parts = {}
 	for _, e in list or {} do
-		table.insert(parts, tostring(e.id) .. "=" .. tostring(e.name) .. "@" .. tostring(e.dept))
+		table.insert(parts, tostring(e.id) .. "=" .. tostring(e.name) .. "@" .. tostring(e.dept) .. "#" .. tostring(e.friend and e.friend.userId))
 	end
 	return table.concat(parts, ";")
+end
+
+-- Solo los empleados que son un amigo de Roblox (los puestos sin amigo no tienen personaje).
+local function withFriend(list: { any }?): { any }
+	local out = {}
+	table.clear(st.friendOf)
+	for _, e in list or {} do
+		if type(e) == "table" and type(e.friend) == "table" and type(e.friend.userId) == "number" then
+			table.insert(out, e)
+			st.friendOf[tostring(e.id)] = e.friend.userId
+		end
+	end
+	return out
+end
+
+-- Carpeta donde el servidor deja los avatares de este jugador (solo la ve él).
+local function templates(): Instance?
+	local lp = Players.LocalPlayer
+	local gui = lp and lp:FindFirstChild("PlayerGui")
+	return gui and gui:FindFirstChild("AvataresEmpleados") or nil
+end
+Manager.templates = templates
+
+local function templateFor(userId: number?): Model?
+	local f = userId and templates()
+	local m = f and f:FindFirstChild("Avatar_" .. userId)
+	return (m and m:IsA("Model")) and m or nil
+end
+
+-- Pide al servidor los avatares en cola (un evento por lote, como mucho cada REQUEST_GAP segundos).
+local function flushRequests()
+	if #st.queue == 0 or st.clock - st.lastRequest < Manager.REQUEST_GAP then
+		return
+	end
+	local remotes = ReplicatedStorage:FindFirstChild("CarEmpireRemotes")
+	local ev = remotes and remotes:FindFirstChild("Avatares")
+	local ids = table.clone(st.queue)
+	table.clear(st.queue)
+	st.lastRequest = st.clock
+	if ev then
+		st.requests += 1
+		pcall(function()
+			(ev :: any):FireServer(ids)
+		end)
+	end
+end
+
+local function want(employeeId: string, force: boolean?)
+	local userId = st.friendOf[employeeId]
+	if not userId then
+		return
+	end
+	local at = st.requested[userId]
+	if force or not at or st.clock - at >= Manager.RETRY then
+		st.requested[userId] = st.clock
+		if not table.find(st.queue, employeeId) then
+			table.insert(st.queue, employeeId)
+		end
+	end
 end
 
 -- Orientación en el mundo: el frente del personaje (−Z) mira hacia `heading` del plano (0 = +x, 90 = +y).
@@ -112,16 +186,31 @@ local function reconcile()
 	for _, id in world.order do
 		local npc = world.npcs[id]
 		local rig = st.rigs[id]
-		if not rig then
-			rig = NPC.build(id, npc.name, npc.dept)
-			rig.model.Parent = st.folder
-			st.rigs[id] = rig
+		local template = templateFor(st.friendOf[id])
+		if rig and template and rig.builtAt ~= template:GetAttribute("builtAt") then
+			-- Llegó el avatar actualizado del amigo: se rearma solo el personaje (la actividad sigue igual).
+			NPC.destroy(rig)
+			st.rigs[id] = nil
+			rig = nil
 			changed = true
+		end
+		if not rig then
+			if template then
+				rig = NPC.build(id, npc.name, npc.dept, template)
+				if rig then
+					rig.model.Parent = st.folder
+					st.rigs[id] = rig
+					changed = true
+				end
+			else
+				want(id) -- todavía no llegó: se pide (y se reintenta), sin personaje genérico mientras tanto
+			end
 		elseif rig.name ~= npc.name or rig.dept ~= npc.dept then
 			NPC.setInfo(rig, npc.name, npc.dept) -- sin rearmar el personaje
 			changed = true
 		end
 	end
+	flushRequests()
 	for id, rig in st.rigs do
 		if not world.npcs[id] then
 			NPC.destroy(rig)
@@ -151,6 +240,7 @@ function Manager.step(dt: number)
 	if not st.open or not st.shown or not st.world then
 		return -- ocultos: actividades suspendidas
 	end
+	st.clock += dt
 	Act.step(st.world, dt)
 	reconcile()
 	render(dt)
@@ -193,7 +283,15 @@ function Manager.open(g: any)
 	st.world = Act.new(g.office, { seed = st.company })
 	st.officeRef = g.office
 	st.empSig = employeesSig(g.employees)
-	Act.setEmployees(st.world, g.employees, true)
+	Act.setEmployees(st.world, withFriend(g.employees), true)
+	-- Avatares viejos: se piden de nuevo (el servidor los rearma con la apariencia actual del amigo).
+	for _, id in st.world.order do
+		local tpl = templateFor(st.friendOf[id])
+		local at = tpl and tpl:GetAttribute("builtAt")
+		if type(at) == "number" and os.time() - at >= Manager.REFRESH_AFTER then
+			want(id, true)
+		end
+	end
 	st.acc = 0
 	st.selected, st.lastText = nil, ""
 	reconcile()
@@ -224,7 +322,7 @@ function Manager.sync(g: any)
 	local sig = employeesSig(g.employees)
 	if sig ~= st.empSig then
 		st.empSig = sig
-		Act.setEmployees(world, g.employees, false)
+		Act.setEmployees(world, withFriend(g.employees), false)
 	end
 	reconcile()
 	render(0)
@@ -249,6 +347,8 @@ function Manager.close()
 	end
 	st.world, st.officeRef, st.company = nil, nil, nil
 	st.empSig, st.selected, st.lastText, st.acc = "", nil, "", 0
+	table.clear(st.queue)
+	table.clear(st.friendOf)
 	local was = st.open
 	st.open = false
 	if was then
@@ -276,11 +376,27 @@ function Manager.shown(): boolean
 	return st.shown
 end
 
--- Cantidades reales: visibles ahora y contratados (g.employees).
-function Manager.counts(g: any?): (number, number)
-	local hired = g and g.employees and #g.employees or (st.world and st.world.hired) or 0
-	local visible = (st.open and st.shown and st.world) and #st.world.order or 0
-	return visible, hired
+--[[ Cantidades reales: (visibles ahora con su avatar, contratados en g.employees, avatares que todavía no
+	llegaron, puestos sin amigo asignado). ]]
+function Manager.counts(g: any?): (number, number, number, number)
+	local hired = g and g.employees and #g.employees or 0
+	local vacant = 0
+	for _, e in (g and g.employees) or {} do
+		if type(e.friend) ~= "table" then
+			vacant += 1
+		end
+	end
+	local visible, loading = 0, 0
+	if st.open and st.shown and st.world then
+		for _, id in st.world.order do
+			if st.rigs[id] then
+				visible += 1
+			else
+				loading += 1
+			end
+		end
+	end
+	return visible, hired, loading, vacant
 end
 
 function Manager.world(): any
@@ -323,7 +439,7 @@ function Manager.pickRay(origin: Vector3, dir: Vector3): string?
 			local p = origin + dir * t
 			for _, id in world.order do
 				local npc = world.npcs[id]
-				local c = Scene.roomToWorld(npc.room, npc.x, npc.y)
+				local c = st.rigs[id] and Scene.roomToWorld(npc.room, npc.x, npc.y)
 				if c then
 					local d = math.sqrt((p.X - c.X) ^ 2 + (p.Z - c.Z) ^ 2) / OfficeCatalog.CELL
 					if d < bestD then
@@ -345,7 +461,14 @@ function Manager.info(employeeId: string?): any
 	local d = Catalog.department(npc.dept)
 	local room = OfficeCatalog.room(st.world.level, npc.room)
 	local activity, nav = Act.describe(npc)
-	return { id = npc.id, name = npc.name, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state }
+	local userId = st.friendOf[npc.id]
+	local friend
+	for _, e in (st.world.employees or {}) do
+		if tostring(e.id) == npc.id then
+			friend = e.friend
+		end
+	end
+	return { id = npc.id, name = npc.name, username = friend and friend.username, userId = userId, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state, avatar = st.rigs[npc.id] ~= nil }
 end
 
 -- Posición en el mundo del empleado (para enfocar la cámara).

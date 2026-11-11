@@ -15,6 +15,7 @@ local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
 local Staff = require(Shared.Staff)
 local Office = require(Shared.Office)
+local FriendIdentity = require(script.Parent.FriendIdentity)
 
 local GameState = {}
 
@@ -1267,6 +1268,8 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 				-- La oficina es decoración: si sus datos tienen algo inválido se repara (los muebles vuelven al
 				-- inventario) en lugar de dar por dañada toda la empresa.
 				pcall(Office.sanitize, migrated)
+				-- Identidades de amigos dañadas o repetidas: el puesto queda sin identidad (no se pierde nada).
+				pcall(FriendIdentity.sanitize, migrated)
 				ok, why = GameState.validate(migrated)
 			end
 			if ok then

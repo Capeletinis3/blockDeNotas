@@ -137,6 +137,51 @@ Sin cambios de esquema (19) ni datos guardados nuevos: todo se calcula desde `g.
 Los empleados visibles son **representaciones** de `g.employees`: solo existen en el cliente mientras el editor
 está abierto, no son entidades económicas y no guardan nada (posiciones, rutas, reservas ni actividades).
 
+### Identidad: cada empleado es un amigo de Roblox
+
+- **Lista de amigos**: el servidor la pide con `Players:GetFriendsAsync` al entrar el jugador (todas las páginas),
+  la refresca cada 10 min y, si falla, reintenta a los 5, 20, 60 y 180 s. No hace falta que los amigos estén
+  conectados ni que jueguen el juego. Una lista cortada no reemplaza a una completa.
+- **Al contratar** (`Actions.hire`), el servidor asigna solo el primer amigo libre en un orden estable por
+  empresa (`server/FriendIdentity`). No hay pantalla para elegir amigos. El candidato del mercado aporta
+  únicamente el perfil laboral (especialidad, habilidades, potencial, salario): Personal lo muestra como «Perfil
+  de …» y anuncia a qué amigo se incorporará la próxima contratación.
+- **Guardado**: `e.friend = { userId, username, displayName, since, missingSince? }` y `e.name` = DisplayName.
+  Campo aditivo: esquema 19 sin cambios y sin migraciones. Al cargar, `FriendIdentity.sanitize` deja sin
+  identidad a un amigo inválido o repetido (nunca borra el empleado).
+- **Un amigo por empresa**: nunca dos empleados con el mismo amigo. Despedir libera al amigo.
+- **Más empleados que amigos** (o lista todavía sin llegar): el puesto económico existe y trabaja igual, se llama
+  «Puesto sin amigo asignado», no aparece en la oficina (ni genéricos ni clones) y recibe un amigo apenas haya
+  uno libre (el más antiguo primero).
+- **Partidas viejas**: sus empleados no tienen `e.friend`; al llegar la lista reciben amigos libres con las
+  mismas estadísticas.
+- **Política de reasignación segura** (un amigo guardado que ya no está en la lista):
+  1. Solo cuentan listas confiables: consulta exitosa, todas las páginas y sin caída brusca (menos de la mitad
+     de la última lista completa se trata como falla de la API).
+  2. La primera ausencia se anota (`missingSince`); si el amigo vuelve, se borra.
+  3. Si sigue ausente en otra lista confiable al menos 10 min después (en esta sesión o en otra), el puesto
+     pasa al próximo amigo libre con las mismas habilidades, salario y antigüedad; sin amigos libres queda sin
+     identidad. Se avisa al jugador. Un cambio de DisplayName del amigo actualiza el nombre del empleado.
+- **Habilidades, especialidad, salario y productividad** siguen siendo los de `Staff`; la identidad no entra en
+  ninguna fórmula.
+
+### Avatares reales
+
+- `server/EmployeeAvatars` arma el avatar con `Players:GetHumanoidDescriptionFromUserId` y
+  `Players:CreateHumanoidModelFromDescription` (R15; prueba también los nombres con sufijo `Async`) y lo deja en
+  `PlayerGui.AvataresEmpleados` del jugador: se replica solo a él. Se arman solo avatares de amigos asignados a
+  empleados de su empresa activa (el cliente no puede pedir el de cualquiera).
+- Límites: descripciones en caché 30 min, 2 armados a la vez, 20 por minuto por jugador, 30 modelos por jugador
+  y un avatar que falló no se reintenta antes de 60 s. El cliente pide en lotes (1 por segundo como mucho),
+  reintenta a los 20 s y vuelve a pedir un avatar de más de 30 min al abrir el editor (apariencia actualizada).
+- El cliente copia la plantilla, ancla todas las piezas y la anima recorriendo las articulaciones R15 (cinemática
+  directa, sin física, sin Animator ni IDs de animación). Escala uniforme hacia 5,3 studs (entre ×0,7 y ×1,35)
+  para que encaje con los muebles; al sentarse, la cadera baja a la altura real del asiento.
+- Mientras un avatar no llegó, ese empleado no se dibuja (el contador lo indica como «avatares cargando»).
+- Personal muestra la foto oficial (`rbxthumb://type=AvatarHeadShot`), el DisplayName y el `@usuario`.
+- Datos de terceros: solo se guardan datos públicos del perfil (UserId, Username, DisplayName) dentro de la
+  partida del jugador. Ante un pedido de borrado de un usuario, alcanza con quitar las entradas con su UserId.
+
 ### Módulos
 
 | Módulo | Lado | Qué hace |
@@ -144,8 +189,10 @@ está abierto, no son entidades económicas y no guardan nada (posiciones, rutas
 | `shared/OfficeGeometry` | compartido | Geometría del plano (antes dentro de `Office`, que la reexporta con los mismos nombres) + distancia exacta punto–mueble. |
 | `shared/OfficeNavigation` | compartido | Zona transitable por habitación, A*, rutas, accesibilidad desde la entrada. |
 | `client/OfficeActivities` | cliente | Máquina de estados, elección de actividades, reservas, visibles y rotación (lógica pura). |
-| `client/OfficeNPC` | cliente | Personaje provisional (rig de Parts) o modelo definitivo de `CarEmpireAssets.Empleados`. |
-| `client/OfficeAnimations` | cliente | Poses procedurales con mezcla; `AnimationTrack` si el modelo definitivo trae `Animator` y `Animaciones`. |
+| `client/OfficeNPC` | cliente | Copia del avatar real del amigo (R15), anclado, con su nombre sobre la cabeza. |
+| `client/OfficeAnimations` | cliente | Poses con mezcla aplicadas a las articulaciones R15 del avatar. |
+| `server/FriendIdentity` | servidor (puro) | Asignar amigos al contratar, reconciliar con la lista, política segura. |
+| `server/EmployeeAvatars` | servidor | Arma los avatares con caché y límites y los entrega solo a ese jugador. |
 | `client/OfficeNPCManager` | cliente | Ciclo de vida: abrir, sincronizar, ocultar, seleccionar, cerrar. Una sola conexión a `Heartbeat`. |
 
 Modificados: `Office` (puntos múltiples, accesibilidad por ruta), `OfficeCatalog` (asientos del sofá, lugares de
@@ -191,5 +238,7 @@ panel: nombre, departamento y habitación, actividad, navegación, «Enfocar». 
 
 ### Pendiente de verificar en Roblox Studio
 
-Aspecto de los personajes y de las poses, fluidez del movimiento a 30 pasos por segundo, la selección con el
-mouse sobre el personaje, el nombre sobre la cabeza y el rendimiento real con 10 empleados en el nivel 5.
+La lista real de amigos (`GetFriendsAsync`) y la creación de avatares en un servidor de Roblox; el aspecto de
+los avatares animados (sobre todo avatares con proporciones poco comunes, ropa en capas y cabezas dinámicas),
+la fluidez a 30 pasos por segundo, la selección con el mouse, el nombre sobre la cabeza, la foto en Personal y
+el rendimiento con 10 avatares en el nivel 5.

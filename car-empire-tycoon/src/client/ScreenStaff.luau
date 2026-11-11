@@ -166,15 +166,48 @@ local function skillBar(name: string, v: number, pot: number, color: Color3, row
 	}, 4, { Name = rowName })
 end
 
+-- Foto del avatar del amigo (miniatura oficial de Roblox: no hace falta pedirla, el motor la carga y la guarda).
+local function headshot(userId: number, size: number): ImageLabel
+	return Ui.new("ImageLabel", {
+		Name = "FotoAmigo",
+		BackgroundColor3 = T.p2,
+		Size = UDim2.fromOffset(size, size),
+		Image = "rbxthumb://type=AvatarHeadShot&id=" .. userId .. "&w=150&h=150",
+		Corner = size // 2,
+	})
+end
+
+-- Identidad del empleado: el amigo de Roblox que es (o el aviso de puesto sin amigo).
+local function identityLine(e: any): TextLabel
+	if e.friend then
+		return Ui.text("@" .. tostring(e.friend.username) .. " · amigo de Roblox", { size = Ui.S.xs, color = T.tx2, name = "UsuarioAmigo" })
+	end
+	return Ui.text("Sin amigo de Roblox libre: el puesto trabaja igual, no aparece en la oficina y recibirá un amigo cuando haya uno.", { size = Ui.S.xs, color = T.ye, name = "SinAmigo" })
+end
+
+-- A quién se incorporaría la próxima contratación (lo decide el servidor; no se elige).
+function Screen.nextFriendNote(): Instance
+	local f = App.payload and App.payload.friends
+	if not f or f.status == "loading" then
+		return Ui.note("b", "Cargando tu lista de amigos de Roblox… Si contratás ahora, el puesto recibe su amigo apenas llegue la lista.")
+	elseif f.status == "failed" then
+		return Ui.note("y", "No se pudo leer tu lista de amigos de Roblox (se reintenta sola). Tus empleados conservan su identidad; quien contrates ahora recibe su amigo después.")
+	elseif f.next then
+		return Ui.note("g", "Cada empleado es uno de tus amigos de Roblox, asignado solo al contratar. La próxima contratación se incorpora como " .. tostring(f.next.displayName) .. " (@" .. tostring(f.next.username) .. "). Amigos libres: " .. f.available .. " de " .. f.total .. ".")
+	end
+	return Ui.note("y", "Todos tus amigos de Roblox ya trabajan en esta empresa (" .. f.total .. "). Podés contratar igual: el puesto trabaja, pero no tiene identidad ni aparece en la oficina hasta que haya un amigo libre.")
+end
+
 local function employeeDetail(g: any, e: any): Frame
 	local today = Rules.absDay(g)
 	local prod = Staff.productivity(g, e)
 	local col = deptColor(e.dept)
 	local rows: { Instance? } = {
 		Ui.row({
-			Ui.ico(Staff.dept(e.dept).icon, col, col, 36, { alpha = 0.16, iconSize = 18 }),
+			e.friend and headshot(e.friend.userId, 44) or Ui.ico(Staff.dept(e.dept).icon, col, col, 36, { alpha = 0.16, iconSize = 18 }),
 			Ui.grow(Ui.col({
-				Ui.text(e.name, { size = 19, weight = W.bold }),
+				Ui.text(e.name, { size = 19, weight = W.bold, name = "NombreEmpleado" }),
+				identityLine(e),
 				Ui.text("Especialidad: " .. Staff.dept(e.spec).name .. " · trabaja en " .. Staff.dept(e.dept).name, { size = Ui.S.xs, color = T.mut }),
 			}, 2)),
 			e.training and Ui.chip("Capacitándose", "cb") or nil,
@@ -269,7 +302,8 @@ local function candidateCard(g: any, c: any, full: boolean): Frame
 		Ui.row({
 			Ui.ico(spec.icon, col, col, 34, { alpha = 0.16, iconSize = 17 }),
 			Ui.grow(Ui.col({
-				Ui.text(c.name, { size = 17, weight = W.bold }),
+				-- El candidato es solo un perfil laboral: la persona que se incorpora es un amigo de Roblox.
+				Ui.text("Perfil de " .. string.lower(spec.name), { size = 17, weight = W.bold, name = "PerfilCandidato" }),
 				Ui.inline(spec.name, { size = Ui.S.sm, weight = W.semi, color = col, name = "Especialidad" }),
 			}, 2)),
 			c.exceptional and Ui.chip("Extraordinario", "cg") or nil,
@@ -443,6 +477,7 @@ function Screen.build(main: Frame, side: Frame)
 
 	if s.view == "mercado" then
 		Ui.text("Cada mes llegan " .. Catalog.STAFF.candidatesPerMonth .. " candidatos nuevos y los que no contrataste se van. Contratar no tiene costo: se paga el salario mensual.", { size = Ui.S.xs, color = T.mut }).Parent = main
+		Screen.nextFriendNote().Parent = main
 		local cards = {}
 		for _, c in g.candidates do
 			table.insert(cards, candidateCard(g, c, full))
@@ -490,7 +525,7 @@ function Screen.build(main: Frame, side: Frame)
 		local list = {}
 		for _, e in sum.members do
 			local on = s.sel == e.id
-			table.insert(list, Ui.opt(e.name .. " · " .. Util.round(Staff.productivity(g, e) * 100) .. " %" .. (e.dept ~= e.spec and " · adaptándose" or "") .. (e.training and " · en capacitación" or ""), on, function()
+			table.insert(list, Ui.opt((e.friend and e.name or "Sin amigo asignado") .. " · " .. Util.round(Staff.productivity(g, e) * 100) .. " %" .. (e.dept ~= e.spec and " · adaptándose" or "") .. (e.training and " · en capacitación" or ""), on, function()
 				s.sel = e.id
 				App.forceRender()
 			end, { name = "Empleado_" .. e.id, fill = true, height = 36 }))
