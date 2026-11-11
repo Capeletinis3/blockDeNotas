@@ -124,15 +124,15 @@ end
 function Screen.nextAction(g: any): any
 	local ed = App.ui.editor
 	if realDesigns(g) == 0 then
-		return { label = ed and "Continuar diseño" or "Diseñar mi primer auto", sub = ed and "Tenés un proyecto sin guardar" or "Abrí el escritorio de diseño", go = "editor", key = "1" }
+		return { label = ed and "Continuar diseño" or "Diseñar mi primer auto", sub = ed and "Tenés un proyecto sin guardar" or "Abrí el escritorio de diseño", go = "editor", key = "1", intent = "disenar" }
 	end
 	if ed and ed.dirty then
-		return { label = "Continuar diseño", sub = ed.draft.name .. " tiene cambios sin guardar", go = "editor", key = "1" }
+		return { label = "Continuar diseño", sub = ed.draft.name .. " tiene cambios sin guardar", go = "editor", key = "1", intent = "disenar" }
 	end
 	-- Un lote terminado espera el precio: es lo más urgente (sin precio no se vende).
 	for _, l in g.lots do
 		if l.saleState == "por lanzar" then
-			return { label = "Poner a la venta", sub = l.design.name .. " · reseñas " .. Util.num(l.review and l.review.avg or 0, 1) .. "/10", dialog = "reviews", params = { lotId = l.id }, key = "4" }
+			return { label = "Poner a la venta", sub = l.design.name .. " · reseñas " .. Util.num(l.review and l.review.avg or 0, 1) .. "/10", dialog = "reviews", params = { lotId = l.id }, key = "4", intent = "vender" }
 		end
 	end
 	-- Tutorial: el botón principal lleva al paso actual (en el orden diseñar → lote → ventas → mejora →
@@ -140,14 +140,15 @@ function Screen.nextAction(g: any): any
 	local tut = Rules.currentTutorial(g)
 	if tut and not g.tutorial.skipped then
 		if Rules.missionState(g, tut) == "lista" then
-			return { label = "Reclamar recompensa", sub = tut.title, go = "misiones", key = "↵" }
+			return { label = "Reclamar recompensa", sub = tut.title, go = "misiones", key = "↵", tutorial = true, intent = "reclamar" }
 		end
+		-- tutorial = true: el paso lo marca el tutorial (topAlert no recomienda otra cosa encima).
 		local STEP = {
-			t2 = { label = "Ordenar un lote", sub = "Elegí cuántas unidades fabricar", dialog = "lot", key = "3" },
-			t3 = { label = "Mirar las ventas", sub = "Terminado el lote, fijá el precio y se vende solo", go = "ventas", key = "4" },
-			t4 = { label = "Mejorar la fábrica", sub = "Subí de nivel una estación", go = "fabrica", key = "3" },
-			t5 = { label = "Investigar", sub = "Elegí tu primera tecnología", go = "investigacion", key = "6" },
-			t6 = { label = "Diseñar otro modelo", sub = "Otro tipo de auto vende en otro segmento", go = "editor", params = { fresh = true }, key = "1" },
+			t2 = { label = "Ordenar un lote", sub = "Elegí cuántas unidades fabricar", dialog = "lot", key = "3", tutorial = true, intent = "lote" },
+			t3 = { label = "Mirar las ventas", sub = "Terminado el lote, fijá el precio y se vende solo", go = "ventas", key = "4", tutorial = true, intent = "vender" },
+			t4 = { label = "Mejorar la fábrica", sub = "Subí de nivel una estación", go = "fabrica", key = "3", tutorial = true, intent = "mejorar" },
+			t5 = { label = "Investigar", sub = "Elegí tu primera tecnología", go = "investigacion", key = "6", tutorial = true, intent = "investigar" },
+			t6 = { label = "Diseñar otro modelo", sub = "Otro tipo de auto vende en otro segmento", go = "editor", params = { fresh = true }, key = "1", tutorial = true, intent = "otro" },
 		}
 		if STEP[tut.id] then
 			return STEP[tut.id]
@@ -156,9 +157,9 @@ function Screen.nextAction(g: any): any
 	if #g.lots == 0 then
 		-- Cada modelo fabrica un solo lote: si todos ya tuvieron el suyo, lo que sigue es diseñar otro.
 		if fabricable(g) == 0 then
-			return { label = "Diseñar otro modelo", sub = "Tus modelos ya fabricaron su lote: el próximo necesita un diseño nuevo", go = "editor", params = { fresh = true }, key = "1" }
+			return { label = "Diseñar otro modelo", sub = "Tus modelos ya fabricaron su lote: el próximo necesita un diseño nuevo", go = "editor", params = { fresh = true }, key = "1", intent = "otro" }
 		end
-		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3" }
+		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3", intent = "lote" }
 	end
 	for _, l in g.lots do
 		if l.prodState == "sin fondos" then
@@ -208,25 +209,40 @@ function Screen.runNext(g: any)
 end
 
 -- topAlert de la V3
+--[[ Alerta superior. Las críticas (producción detenida por falta de fondos) van siempre primero. Las demás tienen
+	una intención (diseñar, lote, otro modelo, investigar) y respetan el paso que marca el botón principal
+	(Screen.nextAction): si ese paso viene del tutorial, solo se muestra una alerta con la MISMA intención, así
+	la alerta nunca recomienda algo distinto del tutorial. Sin tutorial activo (terminado o salteado) se muestran
+	como siempre. ]]
 function Screen.topAlert(g: any): any
 	for _, l in g.lots do
 		if l.prodState == "sin fondos" then
-			return { title = "Producción en pausa", text = l.design.name .. ": no alcanza el dinero para la próxima unidad. Sigue sola cuando entre dinero.", go = "fabrica", icon = "warn", col = T.re2, bg = T.re, a = 0.15, border = T.re, ba = 0.5 }
+			return { title = "Producción en pausa", text = l.design.name .. ": no alcanza el dinero para la próxima unidad. Sigue sola cuando entre dinero.", go = "fabrica", icon = "warn", col = T.re2, bg = T.re, a = 0.15, border = T.re, ba = 0.5, critical = true }
 		end
 	end
+	local cta = Screen.nextAction(g)
+	local guide = (cta and cta.tutorial) and cta.intent or nil
+	-- Candidatas en orden de prioridad; se muestra la primera que coincide con el paso del tutorial (si hay).
+	local cands = {}
 	-- Sin lotes activos: qué sigue depende de los modelos (mismo criterio que el botón principal). Con lotes
 	-- activos (fabricando, por lanzar o a la venta) no se dice que la fábrica está parada.
 	if #g.lots == 0 then
 		if realDesigns(g) == 0 then
-			return { title = "Tu primer automóvil", text = "Diseñá tu primer automóvil para comenzar.", go = "editor", icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5 }
+			table.insert(cands, { title = "Tu primer automóvil", text = "Diseñá tu primer automóvil para comenzar.", go = "editor", icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5, intent = "disenar" })
 		elseif fabricable(g) > 0 then
-			return { title = "La fábrica está parada", text = "Iniciá la producción de uno de tus modelos.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5 }
+			table.insert(cands, { title = "La fábrica está parada", text = "Iniciá la producción de uno de tus modelos.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5, intent = "lote" })
 		else
-			return { title = "Modelo terminado", text = "Tu último modelo completó su ciclo. Diseñá un nuevo automóvil para continuar.", go = "editor", params = { fresh = true }, icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5 }
+			table.insert(cands, { title = "Modelo terminado", text = "Tu último modelo completó su ciclo. Diseñá un nuevo automóvil para continuar.", go = "editor", params = { fresh = true }, icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5, intent = "otro" })
 		end
 	end
 	if #(g.research.projects or {}) == 0 and g.rp >= 30 and researchFree(g) then
-		return { title = "Investigación sin proyectos", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados. Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
+		table.insert(cands, { title = "Investigación sin proyectos", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados. Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5, intent = "investigar" })
+	end
+	for _, alert in cands do
+		-- Con tutorial, una alerta de otra intención no se muestra (ni tapa a la siguiente que coincida).
+		if guide == nil or alert.intent == guide then
+			return alert
+		end
 	end
 	return nil
 end

@@ -41,6 +41,13 @@ tocar el dinero, y por la interfaz (entorno simulado) como un jugador nuevo.
    nuevo automóvil para continuar» (abre el editor). Con lotes activos no aparece ninguna de esas tres. El botón y la
    alerta usan la misma regla (`ScreenHud.fabricable`, basada en `Dialogs.lotBlock`, la del catálogo del lote).
 
+6. **Alerta superior y tutorial**: con un paso del tutorial activo (por ejemplo t4 «Mejorá la fábrica» con el primer
+   lote ya archivado) el botón principal seguía el tutorial y la alerta recomendaba otra cosa («Diseñá un nuevo
+   automóvil»). Ahora cada paso de `nextAction` declara su intención (diseñar, lote, vender, mejorar, investigar,
+   otro modelo, reclamar) y `topAlert` toma esa decisión de `nextAction`: si el paso viene del tutorial, solo
+   muestra una alerta con la misma intención. La producción detenida por falta de fondos se avisa siempre. Sin
+   tutorial (terminado o salteado) las alertas son las de la corrección anterior.
+
 ### Comportamientos revisados que se conservan (no son errores)
 
 - Un componente omitido en la solicitud se completa con el predeterminado de la carrocería (compatibilidad); uno

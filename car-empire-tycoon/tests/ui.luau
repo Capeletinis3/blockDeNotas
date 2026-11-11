@@ -6252,6 +6252,229 @@ test("HUD coherente: botón principal y alerta superior en los nueve estados del
 	noErrors("HUD coherente")
 end)
 
+
+test("HUD y tutorial: la alerta superior respeta el paso del tutorial (t1–t6) con y sin lotes, archivados y sin fondos", function()
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Rules = require("./.build-ui/shared/Rules")
+	local Hud = App.screens.hud
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		for k, v in App.profile.slots do
+			if v and v.name ~= nil then
+				App.request("deleteCompany", { slot = k, confirm = v.name })
+				slot = k
+				break
+			end
+		end
+	end
+	check(App.request("createCompany", { slot = slot, name = "Tutorial HUD", color = "#3B82F6", logo = "pico" }).ok, "empresa nueva")
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	App.go("juego")
+	M.task.wait()
+	App.ui.editor = nil
+	-- Estados reales de un lote (del servidor): fabricando, por lanzar, a la venta y archivado.
+	local dr = DesignCalc.newDraft(App.g, "brisa")
+	dr.name = "Tutorial Uno"
+	check(App.request("saveDesign", { draft = dr }).ok, "diseño")
+	waitFor(function()
+		return #App.g.designs == 1
+	end)
+	local base = Util.deepCopy(App.g)
+	local d1 = App.g.designs[1]
+	check(App.request("createLot", { designId = d1.id, qty = 10 }).ok, "lote")
+	waitFor(function()
+		return #App.g.lots == 1
+	end)
+	local producing = Util.deepCopy(App.g)
+	local function runUntil(cond: () -> boolean): boolean
+		for _ = 1, 900 do
+			App.closeAllDialogs()
+			if App.ui.route ~= "juego" then
+				App.go("juego")
+			end
+			advance(1)
+			if cond() then
+				return true
+			end
+		end
+		return false
+	end
+	check(runUntil(function()
+		return App.g.lots[1] ~= nil and App.g.lots[1].saleState == "por lanzar"
+	end), "por lanzar")
+	local ready = Util.deepCopy(App.g)
+	check(App.request("launchSale", { lotId = App.g.lots[1].id, price = App.g.lots[1].refPrice }).ok, "a la venta")
+	waitFor(function()
+		return App.g.lots[1] ~= nil and App.g.lots[1].saleState == "en venta"
+	end)
+	local selling = Util.deepCopy(App.g)
+	check(runUntil(function()
+		return #App.g.lots == 0
+	end), "agotado y archivado")
+	local archived = Util.deepCopy(App.g)
+	check(#archived.lotHistory >= 1 and Hud.fabricable(archived) == 0, "archivado: ningún modelo fabricable")
+	-- Escenarios de lotes (copias de estados reales).
+	local function noFunds(): any
+		local g = Util.deepCopy(producing)
+		g.lots[1].prodState = "sin fondos"
+		return g
+	end
+	local function archivedPlusNew(): any
+		local g = Util.deepCopy(archived)
+		local nd = Util.deepCopy(g.designs[1])
+		nd.id, nd.name, nd.lotLaunched = "d-nuevo", "Tutorial Dos", nil
+		table.insert(g.designs, nd)
+		return g
+	end
+	local LOTS = {
+		{ "sin diseños", function(): any
+			local g = Util.deepCopy(base)
+			g.designs = {}
+			return g
+		end },
+		{ "diseño sin fabricar", function(): any
+			return Util.deepCopy(base)
+		end },
+		{ "fabricando", function(): any
+			return Util.deepCopy(producing)
+		end },
+		{ "por lanzar", function(): any
+			return Util.deepCopy(ready)
+		end },
+		{ "a la venta", function(): any
+			return Util.deepCopy(selling)
+		end },
+		{ "archivado (todos usados)", function(): any
+			return Util.deepCopy(archived)
+		end },
+		{ "archivado + modelo nuevo", archivedPlusNew },
+		{ "sin fondos", noFunds },
+	}
+	-- Paso del tutorial: los anteriores reclamados; el actual en progreso o con la recompensa lista.
+	local tutorials = {}
+	for _, m in Catalog.MISSIONS do
+		if m.kind == "tutorial" then
+			table.insert(tutorials, m)
+		end
+	end
+	local function setTutorial(g: any, k: number?, ready: boolean, skipped: boolean)
+		g.claimed = {}
+		g.tutorial = { skipped = skipped, tips = true }
+		for i, m in tutorials do
+			if k == nil or i < k then
+				g.claimed[Rules.missionKey(g, m)] = true
+			end
+		end
+		if k then
+			local m = tutorials[k]
+			g.counters[m.counter] = ready and Rules.missionGoal(g, m) or 0
+		end
+	end
+	local checked, coherent, critical = 0, 0, 0
+	local failures = {}
+	local function verify(label: string, g: any, tutorialOn: boolean)
+		local cta = Hud.nextAction(g)
+		local alert = Hud.topAlert(g)
+		checked += 1
+		local ok = true
+		if alert and alert.critical then
+			critical += 1
+		elseif cta and cta.tutorial and tutorialOn then
+			ok = alert == nil or alert.intent == cta.intent
+		end
+		if ok then
+			coherent += 1
+		else
+			table.insert(failures, label .. ": botón «" .. tostring(cta and cta.label) .. "» y alerta «" .. tostring(alert and alert.text) .. "»")
+		end
+		return cta, alert
+	end
+	for k = 1, #tutorials do
+		for _, ready2 in { false, true } do
+			for _, sc in LOTS do
+				local g = sc[2]()
+				setTutorial(g, k, ready2, false)
+				verify(tutorials[k].id .. (ready2 and " (lista)" or "") .. " · " .. sc[1], g, true)
+			end
+		end
+	end
+	eq(#failures, 0, "t1–t6 × lotes: botón y alerta coherentes en " .. checked .. " combinaciones (" .. tostring(failures[1]) .. ")")
+	-- Casos concretos.
+	local function at(k: number?, scName: string, opts: any?): (any, any)
+		for _, sc in LOTS do
+			if sc[1] == scName then
+				local g = sc[2]()
+				setTutorial(g, k, opts and opts.ready or false, opts and opts.skipped or false)
+				if opts and opts.rp then
+					g.rp = opts.rp
+					g.research.projects = {}
+				end
+				return Hud.nextAction(g), Hud.topAlert(g)
+			end
+		end
+		return nil, nil
+	end
+	local cta, alert = at(4, "archivado (todos usados)")
+	eq(cta.label, "Mejorar la fábrica", "t4 con el lote archivado: el botón dice mejorar la fábrica")
+	check(alert == nil, "t4 con el lote archivado: la alerta no recomienda diseñar otro auto (" .. tostring(alert and alert.text) .. ")")
+	cta, alert = at(6, "archivado (todos usados)")
+	check(cta.label == "Diseñar otro modelo" and alert and alert.intent == "otro", "t6 con todo usado: botón y alerta piden diseñar otro modelo")
+	cta, alert = at(2, "diseño sin fabricar")
+	check(cta.label == "Ordenar un lote" and alert and alert.intent == "lote", "t2 sin lotes: botón y alerta piden fabricar")
+	cta, alert = at(1, "sin diseños")
+	check(cta.label == "Diseñar mi primer auto" and alert and alert.intent == "disenar", "t1 sin diseños: botón y alerta piden el primer auto")
+	cta, alert = at(5, "diseño sin fabricar", { rp = 40 })
+	check(cta.label == "Investigar" and alert and alert.intent == "investigar", "t5 con PI: la alerta de investigación acompaña al botón (no la de la fábrica)")
+	cta, alert = at(3, "archivado (todos usados)", { ready = true })
+	check(cta.label == "Reclamar recompensa" and alert == nil, "recompensa lista: sin alertas que la contradigan")
+	for k = 1, #tutorials do
+		cta, alert = at(k, "sin fondos")
+		check(alert and alert.critical and alert.title == "Producción en pausa", tutorials[k].id .. ": la producción sin fondos se avisa siempre")
+	end
+	-- Tutorial terminado o salteado: el comportamiento corregido antes, sin cambios.
+	for _, mode in { { nil, false, "terminado" }, { 3, true, "salteado" } } do
+		local _, a1 = at(mode[1], "archivado (todos usados)", { skipped = mode[2] })
+		local _, a2 = at(mode[1], "archivado + modelo nuevo", { skipped = mode[2] })
+		local _, a3 = at(mode[1], "sin diseños", { skipped = mode[2] })
+		local _, a4 = at(mode[1], "a la venta", { skipped = mode[2] })
+		check(a1 and a1.intent == "otro", mode[3] .. ": todo usado → diseñá un nuevo automóvil")
+		check(a2 and a2.intent == "lote", mode[3] .. ": con un modelo nuevo → la fábrica está parada")
+		check(a3 and a3.intent == "disenar", mode[3] .. ": sin diseños → diseñá tu primer automóvil")
+		check(a4 == nil or (a4.intent ~= "otro" and a4.intent ~= "lote" and a4.intent ~= "disenar"), mode[3] .. ": a la venta → sin alerta de fábrica parada")
+	end
+	-- El caso del informe, dibujado: t4 en curso con el lote vendido y archivado.
+	setTutorial(App.g, 4, false, false)
+	App.forceRender()
+	M.task.wait()
+	local b = named("Principal")
+	check(b and M.find(b, "Mejorar la fábrica") ~= nil, "HUD: el botón principal dice «Mejorar la fábrica»")
+	local shown = named("Alerta")
+	check(shown == nil or M.find(shown, "Diseñá un nuevo automóvil") == nil, "HUD: la alerta no pide diseñar otro auto")
+	App.request("sync")
+	M.task.wait()
+	App.go("juego")
+	noErrors("HUD y tutorial")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)
