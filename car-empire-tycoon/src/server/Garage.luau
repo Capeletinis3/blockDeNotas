@@ -14,6 +14,7 @@ local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local CarModel = require(Shared.CarModel)
 local Rules = require(Shared.Rules)
+local OwnerAvatar = require(script.Parent.OwnerAvatar)
 
 local Garage = {}
 Garage.__index = Garage
@@ -22,6 +23,11 @@ local PLOT_COUNT = 8
 local PLOT_W, PLOT_D = 90, 70
 local PLOT_SPACING = 110
 local PLOTS_Z = 130
+-- Oficina provisional (alrededor del escritorio de diseño): puntos del piso por donde camina el avatar del
+-- dueño y la silla del escritorio, en coordenadas de la parcela. Un edificio de sede con «PuntosAvatar» los reemplaza.
+local OFFICE_POINTS = { Vector3.new(-38, 0, -15), Vector3.new(-22, 0, -13), Vector3.new(-31, 0, -9), Vector3.new(-41, 0, -24), Vector3.new(-19, 0, -28) }
+local OFFICE_SEAT = CFrame.new(-30, 1.3, -19.6) -- mira hacia el escritorio (−Z de la parcela)
+local FLOOR_Y = 0.4
 
 local C = {
 	floor = Color3.fromHex("#2B303D"),
@@ -147,6 +153,7 @@ end
 
 function Garage:buildEmptyPlot(i: number)
 	local plot = self.plots[i]
+	self:removeAvatar(i)
 	if plot.model then
 		plot.model:Destroy()
 	end
@@ -186,6 +193,7 @@ function Garage:assign(player: Player, g: any): number?
 	pcall(function()
 		player:SetAttribute("PlotCenter", plot.cf.Position) -- centro de la cámara del escenario (SceneCamera)
 	end)
+	self:spawnAvatar(index)
 	return index
 end
 
@@ -195,6 +203,7 @@ function Garage:release(player: Player)
 		return
 	end
 	self.byPlayer[player] = nil
+	self:removeAvatar(i)
 	self.plots[i].owner = nil
 	pcall(function()
 		player:SetAttribute("PlotCenter", nil)
@@ -235,6 +244,7 @@ function Garage:buildPlot(i: number, company: any)
 	plot.model = model
 	plot.sig = nil
 	plot.sedeLevel, plot.sedeModel = nil, nil
+	plot.officeLevel = nil
 	local brand = Color3.fromHex(company.color)
 
 	self:plotPart(i, "Piso", Vector3.new(PLOT_W, 0.4, PLOT_D), CFrame.new(0, 0.2, 0), C.floor, { Material = Enum.Material.Concrete })
@@ -253,6 +263,19 @@ function Garage:buildPlot(i: number, company: any)
 	self:plotPart(i, "Pantalla", Vector3.new(5.6, 3, 0.1), CFrame.new(-30, 5.2, -25.2), C.vi, { Material = Enum.Material.Neon, Transparency = 0.2 })
 	label(desk, "✎  Escritorio de diseño", UDim2.fromOffset(220, 38), Vector3.new(0, 7, 0), Color3.fromHex("#B3AAFF"))
 	self:prompt(desk, "Diseñar", "Escritorio de diseño", "editor", i)
+	-- Silla del escritorio (la usa el avatar del dueño; desactivada salvo cuando él se sienta).
+	local seat = Instance.new("Seat")
+	seat.Name = "SillaOficina"
+	seat.Anchored = true
+	seat.Size = Vector3.new(2.6, 0.6, 2.6)
+	seat.CFrame = plot.cf * OFFICE_SEAT
+	seat.Color = Color3.fromHex("#2A3142")
+	seat.Material = Enum.Material.SmoothPlastic
+	seat.Disabled = true
+	seat.Parent = model
+	plot.officeSeat = seat
+	self:plotPart(i, "RespaldoSilla", Vector3.new(2.6, 2.8, 0.4), OFFICE_SEAT * CFrame.new(0, 1.6, 1.2), Color3.fromHex("#2A3142"))
+	self:plotPart(i, "PataSilla", Vector3.new(0.5, 0.9, 0.5), OFFICE_SEAT * CFrame.new(0, -0.75, 0), C.dark)
 
 	-- Línea de producción
 	local belt = self:plotPart(i, "LineaProduccion", Vector3.new(30, 1.2, 9), CFrame.new(2, 1, -20), Color3.fromHex("#20242E"))
@@ -370,6 +393,66 @@ function Garage:applySedeModel(i: number, sedeLevel: number)
 		m.Parent = plot.model
 		plot.sedeModel = m
 	end
+	if plot.avatar then
+		plot.avatar:setSpots(self:avatarSpots(i)) -- el edificio cambió: usa sus puntos válidos
+	end
+end
+
+--[[ Puntos del avatar del dueño: los del edificio de la sede si trae «PuntosAvatar» (ver OwnerAvatar);
+	si no, la oficina provisional alrededor del escritorio de diseño. ]]
+function Garage:avatarSpots(i: number): any
+	local plot = self.plots[i]
+	local fromModel = OwnerAvatar.spotsFrom(plot.sedeModel)
+	if fromModel then
+		return fromModel
+	end
+	local points = {}
+	for _, v in OFFICE_POINTS do
+		table.insert(points, (plot.cf * CFrame.new(v.X, FLOOR_Y, v.Z)).Position)
+	end
+	local seat = plot.officeSeat
+	return {
+		points = points,
+		seat = (seat and seat.Parent) and seat or nil,
+		desk = plot.cf * CFrame.new(-30, FLOOR_Y, -19.6),
+		source = "oficina provisional",
+	}
+end
+
+-- Crea el avatar del dueño (uno por parcela). La apariencia se pide a Roblox en otro hilo para no demorar
+-- la apertura de la empresa; si mientras tanto la parcela cambió de dueño o se reconstruyó, se descarta.
+function Garage:spawnAvatar(i: number)
+	local plot = self.plots[i]
+	local owner = plot.owner
+	if not owner or plot.avatar or plot.avatarPending then
+		return
+	end
+	local model = plot.model
+	plot.avatarPending = true
+	task.spawn(function()
+		local ok, av = pcall(function()
+			return OwnerAvatar.new(owner, model, self:avatarSpots(i))
+		end)
+		plot.avatarPending = false
+		if ok and av and plot.owner == owner and plot.model == model and not plot.avatar then
+			plot.avatar = av
+			return
+		end
+		if ok and av then
+			av:destroy()
+		end
+		if plot.owner and plot.model ~= model and not plot.avatar then
+			self:spawnAvatar(i) -- la parcela se reconstruyó mientras tanto: avatar para la nueva
+		end
+	end)
+end
+
+function Garage:removeAvatar(i: number)
+	local plot = self.plots[i]
+	if plot.avatar then
+		plot.avatar:destroy()
+		plot.avatar = nil
+	end
 end
 
 function Garage:update(player: Player, g: any, refreshSign: boolean?)
@@ -379,6 +462,14 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	end
 	local plot = self.plots[i]
 	self:applySedeModel(i, (g.facilities and g.facilities.factory) or 1) -- el edificio sigue a la fábrica
+	local office = Rules.officeLevel(g)
+	if plot.officeLevel ~= office then
+		-- Oficinas mejoradas: el avatar vuelve a tomar los puntos válidos (preparado para oficinas con su modelo).
+		if plot.officeLevel ~= nil and plot.avatar then
+			plot.avatar:setSpots(self:avatarSpots(i))
+		end
+		plot.officeLevel = office
+	end
 	if refreshSign then
 		self:refreshSign(i, g.company)
 	end

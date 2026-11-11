@@ -1442,6 +1442,129 @@ test("Escenario sin personaje: la cámara orbita sobre el garaje con zoom y rota
 	noErrors("Cámara del escenario")
 end)
 
+test("Avatar autónomo del dueño: uno por parcela, camina por la oficina, no es el personaje y se limpia", function()
+	local OwnerAvatar = require("./.build-ui/server/OwnerAvatar")
+	local original = { makeRig = OwnerAvatar.makeRig, PAUSE = OwnerAvatar.PAUSE, WORK = OwnerAvatar.WORK, MOVE_TIMEOUT = OwnerAvatar.MOVE_TIMEOUT, START_DELAY = OwnerAvatar.START_DELAY }
+	-- La simulación no tiene los servicios de avatares de Roblox: un rig mínimo con Humanoid reemplaza
+	-- a CreateHumanoidModelFromDescription; MoveTo lo lleva directo al destino.
+	local made, moves = 0, 0
+	OwnerAvatar.PAUSE = { 0.02, 0.05 }
+	OwnerAvatar.WORK = { 0.02, 0.05 }
+	OwnerAvatar.MOVE_TIMEOUT = 0.5
+	OwnerAvatar.START_DELAY = { 0.01, 0.02 }
+	OwnerAvatar.makeRig = function(_userId: number)
+		made += 1
+		local rig = M.Instance.new("Model")
+		local rootPart = M.Instance.new("Part")
+		rootPart.Name = "HumanoidRootPart"
+		rootPart.Size = M.Vector3.new(2, 2, 1)
+		rootPart.Parent = rig
+		rig.PrimaryPart = rootPart
+		local hum = M.Instance.new("Humanoid")
+		hum.HipHeight = 2
+		hum.MoveTo = function(_, pos)
+			moves += 1
+			rig:PivotTo(M.CFrame.new(pos + M.Vector3.new(0, 3, 0)))
+		end
+		hum.Parent = rig
+		return rig
+	end
+	local function avatars(): { any }
+		local out = {}
+		for _, d in M.services.Workspace:GetDescendants() do
+			if d.Name == OwnerAvatar.NAME then
+				table.insert(out, d)
+			end
+		end
+		return out
+	end
+	local function reopen()
+		App.closeAllDialogs()
+		if App.g then
+			App.request("leaveCompany", {})
+			waitFor(function()
+				return App.g == nil
+			end)
+		end
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+	end
+	reopen()
+	check(waitFor(function()
+		return #avatars() == 1
+	end), "aparece un avatar en la parcela del dueño")
+	local av = avatars()[1]
+	eq(av:GetAttribute("OwnerId"), player.UserId, "es el avatar del dueño")
+	check(av ~= player.Character and M.services.Players.CharacterAutoLoads == false, "no es el personaje del jugador (no se controla)")
+	local cam = M.services.Workspace.CurrentCamera
+	check(cam.CameraSubject == nil or not cam.CameraSubject:IsDescendantOf(av), "la cámara de gestión no sigue al avatar")
+	-- Camina entre puntos de la oficina (sin pathfinding continuo: MoveTo en línea recta).
+	local center = player:GetAttribute("PlotCenter")
+	local inside = true
+	-- La rutina usa segundos reales: se espera con tiempo real (máximo 8 s).
+	for _ = 1, 160 do
+		local p = av:GetPivot().Position
+		-- La parcela está girada 180°: la oficina (x −44…−15, z −32…−5 de la parcela) queda en +x / +z del centro.
+		local dx, dz = p.X - center.X, p.Z - center.Z
+		if dx < 14 or dx > 45 or dz < 4 or dz > 33 then
+			inside = false
+		end
+		if moves >= 4 then
+			break
+		end
+		M.task.wait(0.05)
+	end
+	check(moves >= 4, "camina solo entre varios puntos (" .. moves .. ")")
+	check(inside, "siempre dentro de la oficina")
+	-- Abrir y cerrar menús no crea otro avatar.
+	for _, route in { "personal", "compania", "fabrica", "juego" } do
+		App.go(route)
+		M.task.wait()
+	end
+	check(#avatars() == 1 and avatars()[1] == av and made == 1, "abrir menús no duplica el avatar")
+	-- Puntos de un edificio de sede: carpeta PuntosAvatar con marcadores invisibles y silla.
+	local m = M.Instance.new("Model")
+	local folder = M.Instance.new("Folder")
+	folder.Name = "PuntosAvatar"
+	folder.Parent = m
+	for k = 1, 2 do
+		local pt = M.Instance.new("Part")
+		pt.CFrame = M.CFrame.new(k * 5, 0.4, 3)
+		pt.Parent = folder
+	end
+	local seat = M.Instance.new("Seat")
+	seat.Parent = folder
+	local spots = OwnerAvatar.spotsFrom(m)
+	check(spots ~= nil and #spots.points == 2 and spots.seat == seat, "usa los puntos y la silla del edificio")
+	check(folder:GetChildren()[1].Transparency == 1 and folder:GetChildren()[1].CanCollide == false, "marcadores invisibles y sin colisión")
+	check(OwnerAvatar.spotsFrom(M.Instance.new("Model")) == nil, "sin puntos en el edificio: usa la oficina provisional")
+	-- Al salir de la empresa se destruye y su rutina termina; al volver hay uno solo otra vez.
+	App.request("leaveCompany", {})
+	check(waitFor(function()
+		return App.g == nil and #avatars() == 0
+	end), "se elimina al liberar la parcela")
+	local frozen = moves
+	M.task.wait(0.6)
+	eq(moves, frozen, "la rutina se detiene (sin hilos ni conexiones colgadas)")
+	reopen()
+	check(waitFor(function()
+		return #avatars() == 1
+	end), "un solo avatar al volver a entrar")
+	-- Restaurar: sin rig falso la simulación no crea avatares (como sin servicios de Roblox).
+	OwnerAvatar.makeRig = original.makeRig
+	OwnerAvatar.PAUSE, OwnerAvatar.WORK, OwnerAvatar.MOVE_TIMEOUT, OwnerAvatar.START_DELAY = original.PAUSE, original.WORK, original.MOVE_TIMEOUT, original.START_DELAY
+	reopen()
+	check(waitFor(function()
+		return #avatars() == 0
+	end), "sin servicios de avatares no queda ninguno a medias")
+	noErrors("Avatar del dueño")
+end)
+
 test("Showroom 3D del menú: escenario persistente, transición entre empresas, cámara con arrastre y zoom, y limpieza", function()
 	local Showroom = App.screens.showroom
 	local st = Showroom._state
