@@ -4300,7 +4300,7 @@ test("[OF] Rotaciones y cuadrícula: giros de 45°, casillas ocupadas, límites,
 	-- Punto de uso del avatar: gira con el mueble.
 	local p = { x = 5, y = 2.5, rot = 90 }
 	local pt = Office.interactionPoint(desk, p)
-	check(math.abs(pt.x - 4) < 1e-6 and math.abs(pt.y - 2.5) < 1e-6 and pt.facing == 270, "el punto del escritorio gira con él")
+	check(math.abs(pt.x - 4) < 1e-6 and math.abs(pt.y - 2.5) < 1e-6 and pt.facing == 0, "el punto del escritorio gira con él (mira al escritorio)")
 end)
 
 test("[OF] Compra y colocación atómicas: precio del servidor, sin cobro si falla, inventario sin duplicados", function()
@@ -4368,7 +4368,7 @@ test("[OF] Bonificaciones aisladas: solo lo colocado suma, rendimientos decrecie
 	local cap = Catalog.STAFF.skills.organizacion.cap
 	eq(Office.sharedBonus(cap, two, cap), cap, "con el personal al tope, los muebles no superan el límite")
 	check(math.abs(Office.sharedBonus(0.1, two, cap) - (0.1 + two)) < 1e-9, "por debajo del tope se suman")
-	eq(Rules.staff(g, "organizacion"), before, "la simulación todavía no aplica bonos de muebles (sin doble aplicación)")
+	check(math.abs(Rules.staff(g, "organizacion") - (before + two)) < 1e-9, "la simulación aplica el mobiliario una sola vez (Rules.staff)")
 end)
 
 test("[OF] Acabados y ampliación: cotización por superficie/largo/luminarias, sin pérdidas al cambiar de plano", function()
@@ -4811,6 +4811,314 @@ test("[OF5] Remodelación en los cinco niveles por Sessions: cobro exacto, dupli
 	check(not cross.ok, "una operación de la primera empresa no se aplica en la segunda")
 	eq(g3.office.finishes.oficina_principal.floor, "piso_cemento", "la segunda empresa no cambia")
 	check(paidTotal > 0, "se cobraron remodelaciones en los cinco niveles")
+end)
+
+
+-- [OF6] Bonificaciones del mobiliario ------------------------------------------------------------------------
+local Staff6 = require("./.build/shared/Staff")
+local function near(a: number, b: number): boolean
+	return math.abs(a - b) < 1e-9
+end
+local function placeN(g: any, item: string, n: number)
+	local o = g.office
+	for _ = 1, n do
+		o.seq += 1
+		table.insert(o.placed, { id = "m" .. o.seq, item = item, room = "oficina_principal", x = 0, y = 0, rot = 0 })
+	end
+	o.rev = (o.rev or 0) + 1
+end
+
+test("[OF6] Mobiliario: 1, 2 y 3 escritorios (1 %, 1,5 %, 1,75 %), guardados no suman, retirar, mover y decorativos", function()
+	local g = newCompany("Bonos Uno")
+	eq(#g.employees, 0, "sin empleados")
+	eq(Rules.staff(g, "organizacion"), 0, "sin muebles colocados no hay bono (escritorio inicial guardado)")
+	-- Colocados con OfficeService (validados por el servidor).
+	g.money = 1e6
+	check(OfficeService.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 }).ok, "1er escritorio (del inventario)")
+	check(near(Rules.staff(g, "organizacion"), 0.01), "1. un escritorio: +1 % (" .. Rules.staff(g, "organizacion") .. ")")
+	check(OfficeService.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 5.5, rot = 0 }).ok, "2º escritorio (compra)")
+	check(near(Rules.staff(g, "organizacion"), 0.015), "2. dos escritorios: +1,5 %")
+	local r3 = OfficeService.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 8, y = 4.5, rot = 0 })
+	check(r3.ok, "3er escritorio")
+	check(near(Rules.staff(g, "organizacion"), 0.0175), "3. tres escritorios: +1,75 % (" .. Rules.staff(g, "organizacion") .. ")")
+	-- 8. Funciona sin empleados.
+	eq(#g.employees, 0, "8. sigue sin empleados")
+	-- 6. Mover y girar no cambia el aporte.
+	check(OfficeService.move(g, { instance = r3.instance, room = "oficina_principal", x = 8, y = 6, rot = 45 }).ok, "mover y girar 45°")
+	check(near(Rules.staff(g, "organizacion"), 0.0175), "6. mover o girar no cambia el aporte")
+	-- 5. Retirar baja el aporte; 4. lo guardado no suma.
+	check(OfficeService.remove(g, { instance = r3.instance }).ok, "retirar")
+	check(near(Rules.staff(g, "organizacion"), 0.015), "5. al retirar vuelve a +1,5 %")
+	eq(Office.count(g.office, "escritorio_metal_1970"), 1, "4. el retirado queda guardado…")
+	check(near(Office.furnitureRaw(g.office, "organizacion"), 0.015), "4. …y no suma")
+	-- Determinismo: el orden de las instancias no importa.
+	local rev = g.office.placed
+	local copy = table.clone(rev)
+	table.sort(copy, function(a: any, b: any): boolean
+		return a.id > b.id
+	end)
+	local g2 = jsonCopy(g)
+	g2.office.placed = copy
+	check(near(Office.furnitureRaw(g2.office, "organizacion"), Office.furnitureRaw(g.office, "organizacion")), "mismo resultado con otro orden")
+	-- 7. Decorativos: no aportan a ninguna habilidad.
+	local deco = newCompany("Deco SA")
+	placeN(deco, "planta_interior_1970", 3)
+	placeN(deco, "lampara_pie_1970", 2)
+	placeN(deco, "silla_oficina_1970", 2)
+	placeN(deco, "sofa_cuero_1970", 1)
+	for k in Catalog.STAFF.skills do
+		eq(Rules.staff(deco, k), 0, "7. decorativos: " .. k .. " sin bono")
+	end
+	-- Valores del catálogo conservados.
+	local F = OfficeCatalog.FURNITURE
+	eq(F.escritorio_metal_1970.bonus.value, 0.01, "escritorio 0,01 organización")
+	eq(F.maquina_escribir_1970.bonus.skill, "finanzas", "máquina de escribir: finanzas")
+	eq(F.estanteria_madera_1970.bonus.value, 0.008, "estantería 0,008 conocimiento")
+	eq(F.mesa_reuniones_1970.bonus.skill, "gestion", "mesa: gestión")
+	eq(OfficeCatalog.BONUS_DECAY, 0.5, "decaimiento 0,5")
+	local bonus = 0
+	for _, f in F do
+		if f.bonus then
+			bonus += 1
+		end
+	end
+	eq(bonus, 4, "solo cuatro muebles con bonificación")
+end)
+
+test("[OF6] Personal + mobiliario: suma, tope compartido, contratación efectiva, cambio de departamento, adaptación, capacitación y deuda", function()
+	local g = newCompany("Bonos Dos")
+	local ctx = makeCtx(5)
+	local cap = Catalog.STAFF.skills.organizacion.cap
+	-- Un empleado de Administración con aporte conocido.
+	Simulation.ensureMarket(g, ctx)
+	local c = g.candidates[1]
+	c.spec = "administracion"
+	c.skills.organizacion = 90
+	c.potential.organizacion = 100
+	g.money = 1e7
+	check(Actions.hire(g, ctx, { candidateId = c.id, dept = "administracion" }).ok, "contratado")
+	local e = g.employees[#g.employees]
+	local staffOnly = Staff6.contribution(g, e, "organizacion")
+	placeN(g, "escritorio_metal_1970", 2)
+	local v, raw, capOut, sRaw, fRaw = Staff6.bonusDetail(g, "organizacion")
+	check(near(sRaw, staffOnly) and near(fRaw, 0.015), "aportes separados (personal " .. sRaw .. ", muebles " .. fRaw .. ")")
+	check(near(v, math.min(cap, staffOnly + 0.015)) and near(Rules.staff(g, "organizacion"), v), "9. se suman (y Rules.staff usa el combinado)")
+	eq(capOut, cap, "tope de la habilidad")
+	-- 10. Nunca se supera el tope: personal cerca del tope + muebles.
+	local big = Util.deepCopy(e)
+	big.id = "e-grande"
+	big.skills.organizacion = 100
+	for _ = 1, 4 do
+		local x = Util.deepCopy(big)
+		x.id = x.id .. tostring(#g.employees)
+		table.insert(g.employees, x)
+	end
+	local v2, raw2 = Staff6.bonusDetail(g, "organizacion")
+	check(raw2 > cap and near(v2, cap), "10. con personal y muebles por encima del tope, queda en " .. cap .. " (" .. raw2 .. " sin tope)")
+	check(near(Rules.staff(g, "organizacion"), cap), "10. Rules.staff no supera el tope")
+	-- 11. Vista previa de contratación: mejora efectiva 0 cuando ya está al tope por muebles + personal.
+	local cand = Util.deepCopy(g.candidates[2] or c)
+	cand.id = "cand-test"
+	cand.skills.organizacion = 80
+	local gain = nil
+	for _, p in Staff6.previewHire(g, cand, "administracion") do
+		if p.skill == "organizacion" then
+			gain = p
+		end
+	end
+	check(gain and near(gain.gain, 0) and gain.capped, "11. contratar no muestra una mejora ficticia (al tope por personal + muebles)")
+	-- Con margen: la vista previa muestra solo el espacio que queda hasta el tope.
+	while #g.employees > 1 do
+		table.remove(g.employees)
+	end
+	local before = Rules.staff(g, "organizacion")
+	cand.skills.organizacion = 100
+	cand.potential.organizacion = 100
+	cand.spec = "administracion" -- en su especialidad (sin adaptación)
+	for _, p in Staff6.previewHire(g, cand, "administracion") do
+		if p.skill == "organizacion" then
+			gain = p
+		end
+	end
+	local candRaw = 100 / 100 * Catalog.STAFF.skills.organizacion.per
+	check(near(gain.gain, math.min(cap, before + candRaw) - before), "11. vista previa = aumento efectivo con el mobiliario incluido")
+	-- 12. Cambio de departamento: el aporte del empleado sale de Organización; el de los muebles queda.
+	check(Actions.setDept(g, ctx, { employeeId = e.id, dept = "produccion" }).ok, "a Producción")
+	check(near(Rules.staff(g, "organizacion"), 0.015), "12. sin el empleado queda solo el mobiliario")
+	-- 13. Adaptación y capacitación afectan al empleado, no a los muebles.
+	local _, _, _, sAfter, fAfter = Staff6.bonusDetail(g, "organizacion")
+	eq(sAfter, 0, "12. aporte del personal en 0")
+	check(near(fAfter, 0.015), "13. el aporte de los muebles no depende de la adaptación")
+	check(Actions.setDept(g, ctx, { employeeId = e.id, dept = "administracion" }).ok, "vuelve a Administración")
+	e.training = "t-prueba"
+	local _, _, _, sTrain, fTrain = Staff6.bonusDetail(g, "organizacion")
+	check(sTrain < staffOnly and near(fTrain, 0.015), "13. capacitándose rinde menos el empleado; los muebles igual")
+	e.training = nil
+	-- 14. Deuda salarial: baja la productividad del personal, no el aporte de los muebles.
+	g.payroll.debtMonths = 3
+	local _, _, _, sDebt, fDebt = Staff6.bonusDetail(g, "organizacion")
+	check(sDebt < staffOnly and near(fDebt, 0.015), "14. con deuda baja el personal y los muebles siguen en +1,5 %")
+	g.payroll.debtMonths = 0
+end)
+
+test("[OF6] Economía: obras, mantenimiento, PI de investigación y expansión; sin doble aplicación; empresas y niveles", function()
+	local base = newCompany("Economia Base")
+	local furn = newCompany("Economia Muebles")
+	-- 15. Escritorio: las obras avanzan más rápido (Rules.buildSpeed = 1 + organización).
+	placeN(furn, "escritorio_metal_1970", 1)
+	check(near(Rules.buildSpeed(furn), 1.01) and near(Rules.buildSpeed(base), 1), "15. obras: 1,01 días por día con un escritorio")
+	local ctx = makeCtx(4)
+	for _, g in { base, furn } do
+		g.money = 1e9
+		g.counters.unitsSold = 1e6
+		g.reputation = 5
+		check(Actions.upgradeFacility(g, ctx, { kind = "offices" }).ok, "obra")
+	end
+	Simulation.simulate(base, ctx, Catalog.RULES.gameDayMinutes * 30)
+	Simulation.simulate(furn, ctx, Catalog.RULES.gameDayMinutes * 30)
+	check(furn.facilities.builds[1].progress > base.facilities.builds[1].progress, "15. una obra en curso avanza más con el escritorio (" .. furn.facilities.builds[1].progress .. " > " .. base.facilities.builds[1].progress .. ")")
+	-- 16. Máquina de escribir: menor mantenimiento (finanzas).
+	local fin = newCompany("Economia Finanzas")
+	fin.facilities.invested, base.facilities.invested = 10000000, 10000000
+	placeN(fin, "maquina_escribir_1970", 1)
+	eq(Rules.maintenance(base), Util.round(10000000 * Catalog.FACILITIES.maintenanceRate), "16. mantenimiento base")
+	eq(Rules.maintenance(fin), Util.round(10000000 * Catalog.FACILITIES.maintenanceRate * (1 - 0.01)), "16. mantenimiento con la máquina de escribir (−1 %)")
+	-- 17. Estantería: menos PI para una investigación nueva (no genera PI).
+	local know = newCompany("Economia Saber")
+	placeN(know, "estanteria_madera_1970", 1)
+	local node
+	for _, cat in { "chasis", "motores", "seguridad", "tecnologia" } do
+		for _, n in Catalog.RESEARCH[cat].nodes do
+			if not node or n.rp > node.rp then
+				node = n
+			end
+		end
+	end
+	local piBase = Rules.researchCost(base, node)
+	local piKnow, _, _, info = Rules.researchCost(know, node)
+	local diff = info.diffusion
+	local ahead = info.ahead
+	eq(piKnow, math.max(1, math.floor(node.rp * diff * (1 + Catalog.RESEARCH_RULES.aheadPi * ahead) * (1 - 0.008) + 0.5)), "17. PI con la estantería (−0,8 %)")
+	check(piKnow < piBase, "17. menos PI que sin la estantería (" .. piKnow .. " < " .. piBase .. ")")
+	eq(Rules.piPerMinute(know), Rules.piPerMinute(base), "17. no genera PI por minuto")
+	-- 18. Mesa de reuniones: expansiones más baratas (gestión).
+	local mgmt = newCompany("Economia Gestion")
+	placeN(mgmt, "mesa_reuniones_1970", 1)
+	eq(Rules.expansionCost(mgmt, 300000), Util.round(300000 * (1 - 0.008) / 100) * 100, "18. costo de expansión con la mesa (−0,8 %)")
+	eq(Rules.expansionCost(base, 300000), 300000, "18. sin la mesa, el costo base")
+	-- 19. Una sola aplicación: Rules.staff = combinado, y una obra de oficinas cuesta lo mismo que el cálculo directo.
+	eq(Rules.staff(mgmt, "gestion"), Staff6.bonus(mgmt, "gestion"), "19. Rules.staff = Staff.bonus (un solo camino)")
+	check(near(Rules.staff(mgmt, "gestion"), 0.008), "19. no se aplica dos veces")
+	-- 21. Empresas distintas: estadísticas independientes.
+	check(Rules.staff(base, "organizacion") == 0 and near(Rules.staff(furn, "organizacion"), 0.01), "21. cada empresa con sus muebles")
+	-- 20. Guardar y cargar (JSON): los beneficios se reconstruyen desde g.office.placed (colocación válida).
+	local saved = newCompany("Economia Guardada")
+	saved.money = 1e6
+	check(OfficeService.place(saved, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 }).ok, "escritorio válido")
+	local loaded = GameState.migrate(jsonCopy(saved), 2)
+	Office.sanitize(loaded)
+	check(near(Rules.staff(loaded, "organizacion"), 0.01), "20. al cargar se reconstruye el beneficio")
+	check(loaded.office.bonus == nil and loaded.office.bonuses == nil, "20. no se guardan estadísticas derivadas")
+	-- 22. Niveles 1 a 5: al ampliar los muebles siguen aportando.
+	local lv = newCompany("Economia Niveles")
+	lv.money = 1e7
+	check(OfficeService.place(lv, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 }).ok, "escritorio colocado")
+	for level = 2, 5 do
+		lv.sede = level
+		Office.remap(lv.office, level)
+		check(near(Rules.staff(lv, "organizacion"), 0.01), "22. nivel " .. level .. ": el escritorio sigue aportando")
+	end
+	-- 24. Datos inválidos no crean beneficios: muebles desconocidos, habitaciones de otro nivel, ids repetidos.
+	local bad = newCompany("Economia Mala")
+	table.insert(bad.office.placed, { id = "m1", item = "escritorio_inexistente", room = "oficina_principal", x = 1, y = 1, rot = 0 })
+	table.insert(bad.office.placed, { id = "m2", item = "escritorio_metal_1970", room = "direccion", x = 1, y = 1, rot = 0 })
+	table.insert(bad.office.placed, { id = "m3", item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	table.insert(bad.office.placed, { id = "m3", item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 5.5, rot = 0 })
+	table.insert(bad.office.placed, "basura")
+	check(near(Rules.staff(bad, "organizacion"), 0.01), "24. solo cuenta el escritorio válido (sin duplicar ids ni habitaciones de otro nivel)")
+	bad.office.placed = "no es una lista"
+	eq(Rules.staff(bad, "organizacion"), 0, "24. una oficina dañada no da bonificaciones")
+	bad.office = nil
+	eq(Rules.staff(bad, "organizacion"), 0, "24. sin oficina tampoco")
+end)
+
+test("[OF6] Sessions: colocaciones duplicadas no duplican beneficios, el cliente no envía estadísticas y se reconstruyen al cargar", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 7301, Name = "bonos" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	g.money = 1e6
+	local id = rid()
+	local body = { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0, requestId = id, companyId = g.company.id, bonus = 5, organizacion = 1 }
+	check(mgr:request(p, "officePlace", body).ok, "colocado (los campos extra del cliente se ignoran)")
+	clock.c += 1
+	check(mgr:request(p, "officePlace", body).duplicate, "duplicado")
+	check(near(Rules.staff(g, "organizacion"), 0.01), "23. la colocación duplicada no duplica el beneficio")
+	eq(Office.placedCount(g.office, "escritorio_metal_1970"), 1, "23. una sola instancia")
+	-- El estado que recibe el cliente no lleva bonificaciones calculadas (las calcula con los mismos datos).
+	check(g.office.bonus == nil, "sin campos derivados en la partida")
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "recargar")
+	check(near(Rules.staff(mgr2.list[p].game, "organizacion"), 0.01), "20. reconstruido después de cargar en otro servidor")
+end)
+
+
+test("[OF6] Puntos de interacción: catálogo válido, giros de 45°, posición en el mundo e inaccesibles sin afectar el beneficio", function()
+	for id, f in OfficeCatalog.FURNITURE do
+		local ok, why = Office.checkInteraction(f)
+		check(ok, id .. ": " .. tostring(why))
+	end
+	local kinds = {}
+	for _, f in OfficeCatalog.FURNITURE do
+		if f.interaction then
+			kinds[f.interaction.kind] = Office.INTERACTION_KINDS[f.interaction.kind]
+		end
+	end
+	check(kinds.work == "stand" and kinds.browse == "stand" and kinds.sit == "seat" and kinds.rest == "seat", "trabajar y consultar de pie; sentarse y descansar sobre el mueble")
+	local g = newCompany("Puntos SA")
+	g.money = 1e6
+	local r = OfficeService.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 4, rot = 45 })
+	check(r.ok, "escritorio a 45°")
+	local spots = Office.interactionSpots(g.office)
+	eq(#spots, 1, "un punto")
+	local sp = spots[1]
+	-- Punto (0, 1) del escritorio girado 45°: (5 − sin45, 4 + cos45), mirando al escritorio (270 + 45).
+	check(math.abs(sp.x - (5 - math.sqrt(0.5))) < 1e-6 and math.abs(sp.y - (4 + math.sqrt(0.5))) < 1e-6, "punto girado 45°")
+	eq(sp.facing, 315, "mira al escritorio")
+	check(sp.accessible and sp.approach ~= nil, "accesible")
+	local wx, wy, wz = Office.toWorld({ x = 100, y = 20, z = 300 }, sp.x, sp.y, sp.facing)
+	check(math.abs(wx - (100 + sp.x * OfficeCatalog.CELL)) < 1e-6 and wy == 20 and math.abs(wz - (300 + sp.y * OfficeCatalog.CELL)) < 1e-6, "posición en el mundo según la habitación")
+	-- Silla pegada al escritorio por delante: se llega por un costado.
+	check(OfficeService.place(g, { item = "silla_oficina_1970", room = "oficina_principal", x = 8.5, y = 1.5, rot = 0 }).ok, "silla")
+	for _, x in Office.interactionSpots(g.office) do
+		if x.item == "silla_oficina_1970" then
+			check(x.accessible, "silla accesible (por algún lado)")
+		end
+	end
+	-- Un mueble que tapa el punto del escritorio lo vuelve inaccesible, sin cambiar el beneficio.
+	local before = Rules.staff(g, "organizacion")
+	local pr = OfficeService.place(g, { item = "planta_interior_1970", room = "oficina_principal", x = 4, y = 5, rot = 45 })
+	check(pr.ok, "planta delante del escritorio (sin superponerse): " .. tostring(pr.msg))
+	local blocked
+	for _, x in Office.interactionSpots(g.office) do
+		if x.item == "escritorio_metal_1970" then
+			blocked = x
+		end
+	end
+	check(blocked and not blocked.accessible and blocked.reason ~= nil, "punto tapado: inaccesible (" .. tostring(blocked and blocked.reason) .. ")")
+	eq(Rules.staff(g, "organizacion"), before, "el beneficio pasivo no cambia")
+	-- Contra la pared: el punto queda fuera de la habitación.
+	local w = newCompany("Pared SA")
+	w.money = 1e6
+	check(OfficeService.place(w, { item = "estanteria_madera_1970", room = "oficina_principal", x = 5, y = 7.5, rot = 0 }).ok, "estantería contra la pared del fondo")
+	local wall = Office.interactionSpots(w.office)[1]
+	check(wall and not wall.accessible and string.find(wall.reason, "fuera", 1, true) ~= nil, "punto fuera de la habitación: inaccesible")
+	check(math.abs(Rules.staff(w, "conocimiento") - 0.008) < 1e-9, "la estantería sigue aportando")
 end)
 
 T.finish()

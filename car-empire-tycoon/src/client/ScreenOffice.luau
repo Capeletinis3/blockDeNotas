@@ -12,6 +12,7 @@ local OfficeCatalog = require(Shared.OfficeCatalog)
 local Rules = require(Shared.Rules)
 local Util = require(Shared.Util)
 local Catalog = require(Shared.Catalog)
+local Staff = require(Shared.Staff)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
@@ -203,10 +204,74 @@ function Screen.updateBar()
 	end
 end
 
--- Nombre de la habilidad de una bonificación (sin conectar todavía a la simulación).
-local function skillName(skill: string): string
-	local sk = Catalog.STAFF.skills[skill]
-	return sk and (sk.name .. " (" .. sk.effect .. ")") or skill
+--[[ Beneficio de un tipo de mueble con los datos reales: habilidad y efecto, beneficio base, copias colocadas,
+	aporte actual de ese tipo, lo que sumaría otra unidad de verdad (con el tope compartido con el personal) y el
+	tope. Todo sale de Office/Staff (los mismos cálculos que usa la simulación por Rules.staff). ]]
+local function bonusBlock(g: any, o: any, item: any): Frame?
+	local b = item.bonus
+	local sk = b and Catalog.STAFF.skills[b.skill]
+	if not b or not sk then
+		return nil
+	end
+	local n, total = Office.furnitureOf(o, item.id)
+	local value, raw, cap = Staff.bonusDetail(g, b.skill)
+	local nextRaw = Office.nextBonus(item, n)
+	local nextEff = math.max(0, math.min(cap, raw + nextRaw) - value)
+	local atCap = raw >= cap - 1e-9
+	local rows: { Instance? } = {
+		Ui.text(sk.name .. ": " .. sk.effect .. ".", { size = Ui.S.xs, weight = W.semi, color = T.tx }),
+		Ui.between("Beneficio base", Staff.formatFine(b.skill, b.value), { size = Ui.S.xs }),
+		Ui.between("Colocados", tostring(n), { size = Ui.S.xs }),
+		Ui.between("Aporte actual", Staff.formatFine(b.skill, total), { size = Ui.S.xs, color = total > 0 and T.gr or T.mut }),
+		Ui.between("Próxima unidad", Staff.formatFine(b.skill, nextEff), { size = Ui.S.xs, color = nextEff > 0 and T.gr or T.ye }),
+		Ui.between("Límite compartido con el personal", Staff.formatFine(b.skill, cap), { size = Ui.S.xs, color = T.mut }),
+	}
+	if atCap then
+		table.insert(rows, Ui.text("Límite alcanzado entre personal y mobiliario: otra unidad no mejora esta habilidad (sirve como decoración).", { size = Ui.S.xs, color = T.ye, name = "Tope_" .. item.id }))
+	end
+	return Ui.col(rows, 2, { Name = "Bono_" .. item.id })
+end
+
+local SKILL_DEPT = {}
+for _, d in Catalog.STAFF.departments do
+	for _, k in d.skills do
+		SKILL_DEPT[k] = d
+	end
+end
+
+--[[ «Beneficios de la oficina»: por departamento, cada habilidad con aporte del personal, del mobiliario, total
+	efectivo sobre el tope y lo que se desperdicia por superarlo. Se rearma con cada estado nuevo del servidor
+	(al colocar, retirar o comprar muebles y cuando cambia el personal). ]]
+local function benefitsPanel(g: any): { Instance? }
+	local items: { Instance? } = {
+		Ui.text("Lo que aportan hoy el personal y los muebles colocados (los guardados no suman). Cada habilidad tiene un solo límite para los dos.", { size = Ui.S.xs, color = T.mut }),
+	}
+	for _, d in Catalog.STAFF.departments do
+		local rows: { Instance? } = { Ui.lbl(d.name) }
+		local any = false
+		for _, k in d.skills do
+			local value, raw, cap, staffRaw, furnRaw = Staff.bonusDetail(g, k)
+			if raw > 0 then
+				any = true
+				local sk = Catalog.STAFF.skills[k]
+				local wasted = math.max(0, raw - cap)
+				local bar = Ui.bar(cap > 0 and value / cap * 100 or 0, raw >= cap - 1e-9 and T.gr or T.vi, 6)
+				table.insert(rows, Ui.col({
+					Ui.row({
+						Ui.grow(Ui.text(sk.name, { size = Ui.S.sm, weight = W.semi })),
+						Ui.inline(Staff.formatFine(k, value) .. " <font color=\"#8C95A7\">/ " .. Staff.formatFine(k, cap) .. "</font>", { size = Ui.S.sm, weight = W.bold }),
+					}, 8),
+					bar,
+					Ui.text("Personal " .. Staff.formatFine(k, staffRaw) .. " · Mobiliario " .. Staff.formatFine(k, furnRaw) .. (wasted > 1e-9 and (" · se desperdicia " .. Staff.formatFine(k, wasted)) or ""), { size = Ui.S.xs, color = wasted > 1e-9 and T.ye or T.mut }),
+				}, 3, { Name = "Resumen_" .. k }))
+			end
+		end
+		if not any then
+			table.insert(rows, Ui.text("Sin aportes todavía.", { size = Ui.S.xs, color = T.mut }))
+		end
+		table.insert(items, Ui.card(rows, { gap = 8, pad = 12, name = "Beneficios_" .. d.id }))
+	end
+	return items
 end
 
 local function itemCard(g: any, o: any, item: any, year: number): Frame
@@ -230,7 +295,7 @@ local function itemCard(g: any, o: any, item: any, year: number): Frame
 			}, 2)),
 			price,
 		}, 8, { v = "T" }),
-		item.bonus and Ui.text("Beneficio futuro: " .. skillName(item.bonus.skill), { size = Ui.S.xs, color = T.tx2 }) or nil,
+		bonusBlock(g, o, item),
 		Ui.button(on and "Colocando…" or (n > 0 and "Colocar gratis" or ("Comprar y colocar · " .. Util.money(item.price))), on and "default" or "p", function()
 			Editor.startPlace(item.id)
 		end, { small = true, fill = true, name = "Colocar_" .. item.id, disabled = not open, why = "Disponible desde " .. item.year }),
@@ -332,9 +397,18 @@ local function sidePanel(g: any, o: any): Frame
 			ui.tab = "inventario"
 			App.forceRender()
 		end, { name = "TabInventario", height = 34 }),
-	}, 6))
+		Ui.opt("Beneficios", ui.tab == "beneficios", function()
+			ui.tab = "beneficios"
+			App.forceRender()
+		end, { name = "TabBeneficios", height = 34 }),
+	}, 6, { wrap = true }))
 	local list = {}
-	if ui.tab == "catalogo" then
+	if ui.tab == "beneficios" then
+		table.insert(items, Ui.lbl("Beneficios de la oficina"))
+		for _, x in benefitsPanel(g) do
+			table.insert(list, x)
+		end
+	elseif ui.tab == "catalogo" then
 		local cats = { Ui.opt("Todas", ui.cat == "todas", function()
 			ui.cat = "todas"
 			App.forceRender()

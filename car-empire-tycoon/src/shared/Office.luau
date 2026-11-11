@@ -599,28 +599,105 @@ function Office.remap(o: any, newLevel: number): any
 	return { kept = #o.placed, toInventory = moved }
 end
 
--- Bonificaciones (sin conectar a la simulación) ------------------------------------------------------------
+-- Bonificaciones del mobiliario ----------------------------------------------------------------------------
+--[[ Solo los muebles COLOCADOS (en una habitación del plano actual) aportan; lo guardado no. Cada tipo de mueble
+	aporta value × (1 + d + d² + … + d^(n−1)) = value × (1 − dⁿ) / (1 − d) con n copias colocadas y
+	d = BONUS_DECAY: depende solo de cuántas copias hay, no del orden de las instancias ni de su posición o giro.
+	Los tipos se suman en orden alfabético (resultado determinista). El aporte se combina con el del personal
+	en Staff.bonusDetail con un único tope por habilidad (Office.sharedBonus); la economía lo lee siempre por
+	Rules.staff. Nada de esto se guarda: se calcula de g.office.placed. ]]
 
---[[ Aporte del mobiliario COLOCADO a una habilidad (misma unidad que Staff.contribution): por cada tipo de
-	mueble, la n-ésima copia suma value × BONUS_DECAY^(n−1). Lo guardado no suma. ]]
-function Office.furnitureRaw(o: any, skillId: string): number
-	local copies: { [string]: number } = {}
-	local total = 0
-	for _, p in (o and o.placed) or {} do
-		local item = OfficeCatalog.item(p.item)
-		if item and item.bonus and item.bonus.skill == skillId then
-			local n = (copies[p.item] or 0) + 1
-			copies[p.item] = n
-			total += item.bonus.value * OfficeCatalog.BONUS_DECAY ^ (n - 1)
+-- Aporte total de n copias de un mueble.
+function Office.itemBonus(item: any, n: number): number
+	if not item or not item.bonus or n <= 0 then
+		return 0
+	end
+	local d = OfficeCatalog.BONUS_DECAY
+	if d == 1 then
+		return item.bonus.value * n
+	end
+	return item.bonus.value * (1 - d ^ n) / (1 - d)
+end
+
+-- Lo que sumaría la copia n+1 de un mueble (antes del tope).
+function Office.nextBonus(item: any, n: number): number
+	if not item or not item.bonus then
+		return 0
+	end
+	return item.bonus.value * OfficeCatalog.BONUS_DECAY ^ math.max(0, n)
+end
+
+-- Copias colocadas válidas por tipo (datos dañados o habitaciones de otro nivel no cuentan).
+local function placedCounts(o: any): { [string]: number }
+	local counts = {}
+	if type(o) ~= "table" or type(o.placed) ~= "table" then
+		return counts
+	end
+	local level = tonumber(o.level) or 1
+	local seen, n = {}, 0
+	for _, p in o.placed do
+		n += 1
+		if n > MAX_PLACED then
+			break
+		end
+		if type(p) == "table" and type(p.id) == "string" and not seen[p.id] and OfficeCatalog.item(p.item) and type(p.room) == "string" and OfficeCatalog.room(level, p.room) then
+			seen[p.id] = true
+			counts[p.item] = (counts[p.item] or 0) + 1
 		end
 	end
-	return total
+	return counts
+end
+
+-- Caché por oficina (tabla débil): se invalida sola cuando cambian la revisión, el nivel o la cantidad de muebles
+-- colocados (toda operación de OfficeService sube rev). Las copias de la partida del cliente son tablas nuevas.
+local cache = setmetatable({}, { __mode = "k" }) :: { [any]: any }
+
+local function bonusTable(o: any): any
+	local key = tostring(o.rev) .. ":" .. tostring(o.level) .. ":" .. tostring(#o.placed)
+	local c = cache[o]
+	if c and c.key == key then
+		return c
+	end
+	local counts = placedCounts(o)
+	local ids = {}
+	for id in counts do
+		table.insert(ids, id)
+	end
+	table.sort(ids)
+	local raw, byItem = {}, {}
+	for _, id in ids do
+		local item = OfficeCatalog.item(id)
+		if item and item.bonus then
+			local v = Office.itemBonus(item, counts[id])
+			raw[item.bonus.skill] = (raw[item.bonus.skill] or 0) + v
+			byItem[id] = v
+		end
+	end
+	c = { key = key, raw = raw, counts = counts, byItem = byItem }
+	cache[o] = c
+	return c
+end
+
+-- Aporte del mobiliario colocado a una habilidad (misma unidad que Staff.contribution, antes del tope).
+function Office.furnitureRaw(o: any, skillId: string): number
+	if type(o) ~= "table" or type(o.placed) ~= "table" then
+		return 0
+	end
+	return bonusTable(o).raw[skillId] or 0
+end
+
+-- Copias colocadas válidas de un mueble y su aporte total (para la interfaz).
+function Office.furnitureOf(o: any, itemId: string): (number, number)
+	if type(o) ~= "table" or type(o.placed) ~= "table" then
+		return 0, 0
+	end
+	local t = bonusTable(o)
+	return t.counts[itemId] or 0, t.byItem[itemId] or 0
 end
 
 --[[ Bonificación combinada personal + mobiliario con el tope único de la habilidad:
-	min(tope, aporte del personal + aporte de los muebles). staffRaw y cap salen de Staff.bonusDetail.
-	Para conectarlo (etapa posterior) basta con que Rules.staff use esta función en lugar de Staff.bonus:
-	así hay una sola aplicación de cada bonificación. ]]
+	min(tope, aporte del personal + aporte de los muebles). La usa Staff.bonusDetail (y por ella Rules.staff):
+	hay una sola aplicación de cada bonificación. ]]
 function Office.sharedBonus(staffRaw: number, furnitureRaw: number, cap: number): number
 	return math.min(cap, math.max(0, staffRaw) + math.max(0, furnitureRaw))
 end
@@ -735,11 +812,92 @@ function Office.interactionSpots(o: any, roomId: string?): { any }
 			local pt = item and Office.interactionPoint(item, p)
 			if pt then
 				pt.instance, pt.item, pt.room = p.id, p.item, p.room
+				local ok, why, approach = Office.interactionAccess(o, p, pt)
+				pt.accessible, pt.reason, pt.approach = ok, why, approach
 				table.insert(out, pt)
 			end
 		end
 	end
 	return out
+end
+
+-- Tipos de interacción: "work" y "browse" se usan de pie frente al mueble; "sit" y "rest" sobre el mueble.
+Office.INTERACTION_KINDS = { work = "stand", browse = "stand", sit = "seat", rest = "seat" }
+
+-- ¿El punto (x, y) de la habitación está libre (dentro de la habitación y sin otro mueble encima)?
+local function freeSpot(o: any, r: any, x: number, y: number, ignore: string?): (boolean, string?)
+	if x < 0.25 or y < 0.25 or x > r.w - 0.25 or y > r.d - 0.25 then
+		return false, "fuera de la habitación"
+	end
+	for _, q in o.placed do
+		if q.room == r.id and q.id ~= ignore and Office.hits(q, x, y) then
+			return false, "tapado por otro mueble"
+		end
+	end
+	return true, nil
+end
+
+--[[ ¿Se puede usar el punto de un mueble colocado? Devuelve (accesible, motivo, punto de llegada {x, y}).
+	- De pie ("work", "browse"): el punto mismo debe estar libre (dentro de la habitación y sin otro mueble,
+	  tampoco el propio).
+	- Sentado ("sit", "rest"): el punto está sobre el mueble; hace falta un lugar libre al lado para llegar
+	  (adelante, a los costados o atrás, a media casilla del borde).
+	Solo informa: un punto inaccesible no cambia la bonificación pasiva del mueble. ]]
+function Office.interactionAccess(o: any, p: any, pt: any): (boolean, string?, any)
+	local r = OfficeCatalog.room(o.level, p.room)
+	local item = OfficeCatalog.item(p.item)
+	if not r or not item or not pt then
+		return false, "mueble fuera del plano", nil
+	end
+	local mode = Office.INTERACTION_KINDS[pt.kind]
+	if mode == "stand" then
+		local ok, why = freeSpot(o, r, pt.x, pt.y, nil)
+		return ok, why, ok and { x = pt.x, y = pt.y } or nil
+	end
+	-- Lugar de llegada: a media casilla del borde del mueble, empezando por el frente (hacia donde mira).
+	local f = math.rad(pt.facing)
+	local fx, fy = math.cos(f), math.sin(f)
+	local reach = math.max(item.cells[1], item.cells[2]) / 2 + 0.5
+	for _, turn in { 0, 90, -90, 180 } do
+		local a = math.rad(turn)
+		local dx, dy = fx * math.cos(a) - fy * math.sin(a), fx * math.sin(a) + fy * math.cos(a)
+		local x, y = pt.x + dx * reach, pt.y + dy * reach
+		if freeSpot(o, r, x, y, nil) then
+			return true, nil, { x = x, y = y }
+		end
+	end
+	return false, "sin lugar libre para llegar", nil
+end
+
+--[[ Posición en el mundo de un punto de la habitación: anchor = { x, y, z } esquina (0, 0) de la habitación
+	en studs (y = altura del piso), con la habitación alineada a los ejes del mundo (x de la habitación → X,
+	y → Z, como OfficeScene). Devuelve (X, Y, Z, giro en grados alrededor de Y para CFrame.Angles(0, −rad, 0)).
+	Admite cualquier giro (también de 45°): facing viene ya girado con el mueble. ]]
+function Office.toWorld(anchor: any, x: number, y: number, facing: number?): (number, number, number, number)
+	local cell = OfficeCatalog.CELL
+	return anchor.x + x * cell, anchor.y, anchor.z + y * cell, facing or 0
+end
+
+-- Valida los puntos de interacción del catálogo (lo usan las pruebas y una futura carga de assets).
+function Office.checkInteraction(item: any): (boolean, string?)
+	local it = item.interaction
+	if it == nil then
+		return true, nil
+	end
+	local mode = Office.INTERACTION_KINDS[it.kind]
+	if not mode then
+		return false, "tipo de interacción desconocido"
+	end
+	if type(it.dx) ~= "number" or type(it.dy) ~= "number" or type(it.facing) ~= "number" or it.facing % 45 ~= 0 or it.facing < 0 or it.facing >= 360 then
+		return false, "punto o dirección inválidos"
+	end
+	local inside = math.abs(it.dx) < item.cells[1] / 2 and math.abs(it.dy) < item.cells[2] / 2
+	if mode == "seat" and not inside then
+		return false, "el asiento debe estar sobre el mueble"
+	elseif mode == "stand" and inside then
+		return false, "el lugar de trabajo debe estar fuera del mueble"
+	end
+	return true, nil
 end
 
 return Office

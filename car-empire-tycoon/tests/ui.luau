@@ -4007,6 +4007,143 @@ test("Remodelación en el editor, niveles 1 a 5: presupuesto igual a las paredes
 	noErrors("Remodelación por niveles en el editor")
 end)
 
+
+test("Bonificaciones del mobiliario en la interfaz: tarjetas con aporte real, Beneficios de la oficina y Personal con el tope compartido", function()
+	local Office = require("./.build-ui/shared/Office")
+	local Editor = require("./.build-ui/client/OfficeEditor")
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		for k, v in App.profile.slots do
+			if v and (v.name == "Remodela Uno" or v.name == "Muebles Uno" or v.name == "Oficinas SA") then
+				App.request("deleteCompany", { slot = k, confirm = v.name })
+				slot = k
+				break
+			end
+		end
+	end
+	check(App.request("createCompany", { slot = slot, name = "Bonos Interfaz", color = "#FF8A3D", logo = "pico" }).ok, "empresa creada")
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = 1e6
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.money == 1e6
+	end)
+	App.go("oficina")
+	M.task.wait()
+	local R = "oficina_principal"
+	for _, pos in { { 5, 2.5 }, { 5, 5.5 } } do
+		Editor.startPlace("escritorio_metal_1970")
+		Editor.hover(R, pos[1], pos[2])
+		check(Editor.confirm().ok, "escritorio colocado")
+	end
+	Editor.cancel()
+	clickN("TabCatalogo")
+	M.task.wait()
+	clickN("Cat_todas")
+	M.task.wait()
+	-- Tarjeta del escritorio con los datos reales.
+	local card = named("Bono_escritorio_metal_1970")
+	check(card ~= nil, "la tarjeta muestra la bonificación")
+	check(M.find(card, "Organización") ~= nil and M.find(card, "obras y mejoras más rápidas") ~= nil, "habilidad y efecto")
+	check(M.find(card, "+1 %") ~= nil, "beneficio base +1 %")
+	check(M.find(card, "+1,5 %") ~= nil, "aporte actual de dos escritorios +1,5 %")
+	check(M.find(card, "+0,25 %") ~= nil, "próximo escritorio +0,25 %")
+	check(M.find(card, "+40 %") ~= nil, "límite compartido 40 %")
+	check(M.find(App.content, "Beneficio futuro") == nil, "ya no dice «Beneficio futuro»")
+	-- Beneficios de la oficina.
+	clickN("TabBeneficios")
+	M.task.wait()
+	local row = named("Resumen_organizacion")
+	check(row ~= nil and M.find(row, "Mobiliario +1,5 %") ~= nil and M.find(row, "Personal +0 %") ~= nil, "Beneficios de la oficina: personal y mobiliario")
+	check(M.find(row, "/ +40 %") ~= nil, "con el límite")
+	check(named("Beneficios_administracion") ~= nil and named("Beneficios_produccion") ~= nil, "separado por departamento")
+	-- Al tope: el personal (inyectado) más los muebles superan el 40 %.
+	sess = Sessions.instance.list[player]
+	local cap = 0.40
+	for i = 1, 5 do
+		table.insert(sess.game.employees, { id = "eb" .. i, name = "Admin " .. i, spec = "administracion", dept = "administracion", salary = 1000, skills = { organizacion = 100 }, potential = { organizacion = 100 }, months = 1, hiredDay = 0, adapt = {}, status = "activo" })
+	end
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return #App.g.employees >= 5
+	end)
+	App.forceRender()
+	M.task.wait()
+	row = named("Resumen_organizacion")
+	check(row ~= nil and M.find(row, "se desperdicia") ~= nil, "muestra lo que se desperdicia por el tope")
+	check(M.find(row, "+40 % / +40 %") ~= nil, "total efectivo en el tope")
+	clickN("TabCatalogo")
+	M.task.wait()
+	card = named("Bono_escritorio_metal_1970")
+	check(named("Tope_escritorio_metal_1970") ~= nil, "aviso de límite alcanzado en la tarjeta")
+	check(M.find(card, "Próxima unidad") ~= nil and M.find(card, "+0 %") ~= nil, "otro escritorio no suma")
+	local buy = named("Colocar_escritorio_metal_1970")
+	check(buy ~= nil and buy:GetAttribute("disabled") ~= true, "la compra sigue habilitada (decoración)")
+	-- Personal: desglose y mensaje del tope compartido; la vista previa de contratación no inventa mejoras.
+	App.ui.staff = nil
+	App.go("personal")
+	M.task.wait()
+	local d = named("Desglose_organizacion")
+	check(d ~= nil and string.find(d.Text, "Mobiliario +1,5 %", 1, true) ~= nil, "Personal: desglose personal / mobiliario")
+	check(M.find(App.content, "entre personal y mobiliario") ~= nil, "Personal: el tope se explica con personal y mobiliario")
+	App.ui.staff = { view = "mercado", dept = "produccion", hireDept = {} }
+	local c = App.g.candidates[1]
+	App.ui.staff.hireDept[c.id] = "administracion"
+	App.forceRender()
+	M.task.wait()
+	local Staff = require("./.build-ui/shared/Staff")
+	local gainOrg
+	for _, p in Staff.previewHire(App.g, c, "administracion") do
+		if p.skill == "organizacion" then
+			gainOrg = p
+		end
+	end
+	check(gainOrg and gainOrg.gain == 0 and gainOrg.capped, "vista previa de contratación: +0 en Organización (al tope)")
+	local aporte = named("Aporte_" .. c.id)
+	check(aporte ~= nil and M.find(aporte, "tope") ~= nil, "la tarjeta del candidato lo marca")
+	-- Retirar escritorios baja el beneficio y la interfaz se actualiza.
+	sess = Sessions.instance.list[player]
+	for i = #sess.game.employees, 1, -1 do
+		if string.sub(sess.game.employees[i].id, 1, 2) == "eb" then
+			table.remove(sess.game.employees, i)
+		end
+	end
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return #App.g.employees == 0
+	end)
+	App.go("oficina")
+	M.task.wait()
+	Editor.selectAt(R, 5, 5.5)
+	check(Editor.removeSelected().ok, "retirar un escritorio")
+	App.forceRender()
+	M.task.wait()
+	card = named("Bono_escritorio_metal_1970")
+	check(M.find(card, "+1 %") ~= nil and M.find(card, "+0,5 %") ~= nil, "con uno: aporte +1 % y el próximo +0,5 %")
+	check(math.abs(require("./.build-ui/shared/Rules").staff(App.g, "organizacion") - 0.01) < 1e-9, "el cliente calcula lo mismo que el servidor")
+	App.go("juego")
+	noErrors("Bonificaciones del mobiliario")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

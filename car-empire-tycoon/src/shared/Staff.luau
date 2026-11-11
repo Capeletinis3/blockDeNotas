@@ -15,6 +15,7 @@
 
 local Catalog = require(script.Parent.Catalog)
 local Util = require(script.Parent.Util)
+local Office = require(script.Parent.Office) -- aporte del mobiliario (Office no depende de Staff: sin ciclos)
 
 local Staff = {}
 
@@ -93,24 +94,29 @@ function Staff.contribution(g: any, e: any, skillId: string): number
 	return (e.skills[skillId] or 0) / 100 * sk.per * Staff.productivity(g, e)
 end
 
--- Bonificación de la empresa para una habilidad: (valor con tope, suma sin tope, tope).
-function Staff.bonusDetail(g: any, skillId: string, list: { any }?): (number, number, number)
+--[[ Bonificación de la empresa para una habilidad, personal y mobiliario juntos con un único tope:
+	(valor efectivo = min(tope, personal + mobiliario), suma sin tope, tope, aporte del personal, aporte del
+	mobiliario). list reemplaza a g.employees (vista previa de una contratación); el mobiliario sale siempre de
+	g.office.placed (Office.furnitureRaw). Es la única combinación: Rules.staff → Staff.bonus → acá. ]]
+function Staff.bonusDetail(g: any, skillId: string, list: { any }?): (number, number, number, number, number)
 	local sk = S.skills[skillId]
 	if not sk then
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	end
-	local raw = 0
+	local staffRaw = 0
 	for _, e in list or g.employees or {} do
-		raw += Staff.contribution(g, e, skillId)
+		staffRaw += Staff.contribution(g, e, skillId)
 	end
-	return math.min(sk.cap, raw), raw, sk.cap
+	local furnitureRaw = Office.furnitureRaw(g.office, skillId)
+	return Office.sharedBonus(staffRaw, furnitureRaw, sk.cap), staffRaw + furnitureRaw, sk.cap, staffRaw, furnitureRaw
 end
 
 function Staff.bonus(g: any, skillId: string): number
 	return (Staff.bonusDetail(g, skillId))
 end
 
--- Cuánto mejoraría cada habilidad del departamento si se suma `cand` a ese departamento (respeta los topes).
+-- Cuánto mejoraría cada habilidad del departamento si se suma `cand` a ese departamento: la mejora efectiva,
+-- con el tope compartido con el mobiliario (si los muebles y el personal ya llegan al tope, la mejora es 0).
 function Staff.previewHire(g: any, cand: any, deptId: string): { any }
 	local d = Staff.dept(deptId)
 	local out = {}
@@ -144,8 +150,8 @@ function Staff.deptSummary(g: any, deptId: string): any
 	end
 	local bonuses = {}
 	for _, k in d.skills do
-		local v, raw, cap = Staff.bonusDetail(g, k)
-		table.insert(bonuses, { skill = k, value = v, raw = raw, cap = cap, full = raw >= cap - 1e-9 })
+		local v, raw, cap, staffRaw, furnitureRaw = Staff.bonusDetail(g, k)
+		table.insert(bonuses, { skill = k, value = v, raw = raw, cap = cap, full = raw >= cap - 1e-9, staff = staffRaw, furniture = furnitureRaw, wasted = math.max(0, raw - cap) })
 	end
 	return { dept = d, members = members, count = #members, salaries = salaries, performance = #members > 0 and perf / #members or 0, bonuses = bonuses }
 end
@@ -189,6 +195,21 @@ function Staff.format(skillId: string, v: number): string
 		return "+" .. Util.num(v, 1) .. " pts"
 	end
 	return (v >= 0 and "+" or "") .. Util.num(v * 100, 1) .. " %"
+end
+
+-- Igual que Staff.format pero con hasta dos decimales sin ceros de más («+0,25 %», «+1,5 %», «+1 %»): para los
+-- aportes chicos del mobiliario.
+function Staff.formatFine(skillId: string, v: number): string
+	local sk = S.skills[skillId]
+	local n = (sk and sk.unit == "pts") and v or v * 100
+	local str = Util.num(math.floor(n * 100 + 0.5) / 100, 2)
+	if string.find(str, ",", 1, true) then
+		str = string.gsub(string.gsub(str, "0+$", ""), ",$", "")
+	end
+	if sk and sk.unit == "pts" then
+		return "+" .. str .. " pts"
+	end
+	return (v >= 0 and "+" or "") .. str .. " %"
 end
 
 -- Costo de la próxima búsqueda de candidatos del mes (el contador es compartido entre ambos tipos).

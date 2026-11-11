@@ -281,7 +281,7 @@ local function detail(g: any, kind: string): Frame
 		local realDays = math.ceil(nx.days / speed)
 		table.insert(rows, Ui.grid({
 			(Ui.kv("Costo", Util.money(nx.cost), { name = "CostoMejora", color = g.money >= nx.cost and T.tx or T.re2 })),
-			(Ui.kv("Duración", nx.days .. " días", { name = "DuracionMejora", sub = realDays < nx.days and ("≈ " .. realDays .. " con tu personal") or "de juego" })),
+			(Ui.kv("Duración", nx.days .. " días", { name = "DuracionMejora", sub = realDays < nx.days and ("≈ " .. realDays .. " con tu personal y mobiliario") or "de juego" })),
 		}, 2, nil, 8))
 		local req: { Instance? } = { Ui.lbl("Requisitos") }
 		local pending = 0

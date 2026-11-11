@@ -8,7 +8,10 @@
 	  id, name, category (CATEGORIES), desc, year (disponible desde; nunca desaparece), price (dinero del juego),
 	  size = studs (ancho, alto, largo) del modelo, nunca mayor que cells × CELL en planta (el modelo no
 	  sobresale de las casillas que ocupa), cells = { w, d } casillas que ocupa sin girar,
-	  rotations = giros permitidos en grados (múltiplos de 45; hoy todos admiten los 8), interaction = punto de uso del avatar o nil
+	  rotations = giros permitidos en grados (múltiplos de 45; hoy todos admiten los 8), interaction = punto de uso
+	  (avatar o empleados, etapa posterior) o nil. Convención: dx, dy en casillas desde el centro del mueble sin
+	  girar; facing = hacia dónde mira quien lo usa, en grados del plano de la habitación (0 = +x, 90 = +y);
+	  el frente de los modelos mira a −y (270). Todo gira con el mueble.
 	  ({ kind = "work" | "sit" | "rest" | "browse", dx, dy, facing } relativo al centro del mueble, en casillas),
 	  bonus = { skill = id de Catalog.STAFF.skills, value } o nil (comparte el tope de esa habilidad con el
 	  personal), model = nombre del futuro modelo en ServerStorage.CarEmpireAssets.Muebles (aún no existe).
@@ -43,20 +46,20 @@ OfficeCatalog.FURNITURE = {
 		name = "Escritorio de chapa", category = "escritorios", year = 1970, price = 1200,
 		desc = "Escritorio metálico con cajonera, típico de las oficinas de los setenta.",
 		size = { 4, 2.6, 2 }, cells = { 2, 1 }, rotations = ALL,
-		interaction = { kind = "work", dx = 0, dy = 1, facing = 180 },
+		interaction = { kind = "work", dx = 0, dy = 1, facing = 270 },
 		bonus = { skill = "organizacion", value = 0.01 }, model = "EscritorioMetal1970",
 	},
 	silla_oficina_1970 = {
 		name = "Silla de oficina tapizada", category = "asientos", year = 1970, price = 300,
 		desc = "Silla giratoria con tapizado de vinilo.",
 		size = { 2, 3, 2 }, cells = { 1, 1 }, rotations = ALL,
-		interaction = { kind = "sit", dx = 0, dy = 0, facing = 0 }, model = "SillaOficina1970",
+		interaction = { kind = "sit", dx = 0, dy = 0, facing = 270 }, model = "SillaOficina1970",
 	},
 	sofa_cuero_1970 = {
 		name = "Sofá de cuero", category = "asientos", year = 1970, price = 2200,
 		desc = "Sofá de tres cuerpos para la recepción o la dirección.",
 		size = { 6, 2.8, 2 }, cells = { 3, 1 }, rotations = ALL,
-		interaction = { kind = "rest", dx = 0, dy = 0, facing = 0 }, model = "SofaCuero1970",
+		interaction = { kind = "rest", dx = 0, dy = 0, facing = 270 }, model = "SofaCuero1970",
 	},
 	maquina_escribir_1970 = {
 		name = "Máquina de escribir eléctrica", category = "tecnologia", year = 1970, price = 900,
@@ -68,7 +71,7 @@ OfficeCatalog.FURNITURE = {
 		name = "Estantería de madera", category = "almacenamiento", year = 1970, price = 700,
 		desc = "Archivo de catálogos, planos y documentación técnica.",
 		size = { 4, 6, 1.4 }, cells = { 2, 1 }, rotations = ALL,
-		interaction = { kind = "browse", dx = 0, dy = 1, facing = 180 },
+		interaction = { kind = "browse", dx = 0, dy = 1, facing = 270 },
 		bonus = { skill = "conocimiento", value = 0.008 }, model = "EstanteriaMadera1970",
 	},
 	mesa_reuniones_1970 = {

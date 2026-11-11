@@ -102,3 +102,32 @@ Sin cambios de esquema (19). Los acabados ya vivían en `g.office.finishes[habit
 ### Ajustes de la etapa 3
 - **Tramos de pared:** `Office.wallRuns(habitación)` es la única regla de paredes (perímetro con una abertura en cada casilla de acceso pegada al borde). `Office.wallLength` suma esos tramos y lo usan el presupuesto del cliente y del servidor; `OfficeScene` arma las paredes con los mismos tramos. Antes se cobraba el perímetro completo; por ejemplo, la oficina principal del nivel 1 pasó de 36 a 34 tramos. Precios unitarios sin cambios.
 - **MaterialVariant:** `applySurface` siempre reescribe la variante. Si el acabado nuevo no tiene una, o no está cargada en MaterialService, se quita la anterior.
+
+## Etapa 4: bonificaciones del mobiliario (sin probar en Roblox Studio)
+
+Sin cambios de esquema (19) ni datos guardados nuevos: todo se calcula desde `g.office.placed`.
+- **Cálculo** (`Office.furnitureRaw`):
+  - Solo cuentan los muebles colocados en una habitación del plano actual; lo guardado no suma.
+  - Por tipo de mueble con n copias: `value × (1 − 0,5ⁿ) / (1 − 0,5)` (1 → 1 %, 2 → 1,5 %, 3 → 1,75 %).
+  - Determinista: depende solo de la cantidad de copias por tipo, y los tipos se suman en orden fijo.
+  - No cuentan los muebles desconocidos, los ids repetidos ni las habitaciones de otro nivel.
+  - Hay una caché por oficina que se invalida cuando cambian la revisión, el nivel o la cantidad de colocados.
+- **Combinación** (`Staff.bonusDetail`): `min(tope, personal + mobiliario)` con `Office.sharedBonus`.
+  - Devuelve además el aporte del personal y el del mobiliario por separado.
+  - Es el único lugar donde se combinan: `Rules.staff → Staff.bonus → Staff.bonusDetail`, así que toda la economía lo recibe una sola vez.
+  - `Staff.previewHire` y `Staff.deptSummary` usan el valor combinado, por lo que la mejora de una contratación es la efectiva hasta el tope compartido.
+  - Adaptación, capacitación y deuda salarial afectan solo al aporte del personal.
+- **Actividades ya iniciadas** (mismo criterio que el personal):
+  - Lo pagado o fijado al empezar no cambia: el costo de una obra (gestión), los PI y el dinero de una investigación (conocimiento, precisión) y las expansiones ya compradas.
+  - Los ritmos en curso sí se actualizan: el avance diario de las obras (organización) y el mantenimiento que se cobra cada mes (finanzas).
+  - Nada se recalcula hacia atrás.
+- **Interfaz:**
+  - Las tarjetas de muebles muestran la habilidad y su efecto, el beneficio base, la cantidad colocada, el aporte actual, lo que sumaría otra unidad de verdad (con el tope) y el aviso de tope alcanzado. La compra nunca se bloquea.
+  - La pestaña «Beneficios» del editor muestra, por departamento, personal, mobiliario, total sobre el tope y lo que se desperdicia.
+  - En Personal, cada bonificación muestra el desglose personal / mobiliario y el aviso de tope compartido.
+- **Interacciones (preparadas, sin NPC):**
+  - Convención: `facing` es hacia dónde mira quien usa el mueble (0 = +x, 90 = +y); los modelos miran a −y.
+  - `Office.checkInteraction` valida el catálogo.
+  - `Office.interactionSpots` devuelve el punto girado con el mueble (también a 45°), si es accesible, el motivo y el lugar de llegada.
+  - `Office.toWorld` pasa coordenadas de la habitación al mundo.
+  - Un punto inaccesible no cambia el beneficio.

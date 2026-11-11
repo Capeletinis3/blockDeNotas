@@ -73,7 +73,9 @@ local function bonusRow(b: any, color: Color3?): Frame
 			Ui.inline(Staff.format(b.skill, b.value) .. " <font color=\"#8C95A7\">/ " .. Staff.format(b.skill, b.cap) .. "</font>", { size = Ui.S.sm, weight = W.bold, color = b.value > 0 and T.tx or T.mut }),
 		}, 8, { v = "C" }),
 		bar,
-		Ui.text(b.full and "Límite alcanzado: más personal en esta habilidad no suma." or sk.effect, { size = Ui.S.xs, color = b.full and T.gr or T.mut }),
+		-- Personal y mobiliario comparten el tope de la habilidad.
+		Ui.text("Personal " .. Staff.formatFine(b.skill, b.staff or b.raw) .. " · Mobiliario " .. Staff.formatFine(b.skill, b.furniture or 0) .. ((b.wasted or 0) > 1e-9 and (" · se desperdicia " .. Staff.formatFine(b.skill, b.wasted)) or ""), { size = Ui.S.xs, color = T.tx2, name = "Desglose_" .. b.skill }),
+		Ui.text(b.full and "Límite alcanzado entre personal y mobiliario: más personal o muebles en esta habilidad no suman." or sk.effect, { size = Ui.S.xs, color = b.full and T.gr or T.mut }),
 	}, 4, { Name = "Bono_" .. b.skill })
 end
 
