@@ -252,6 +252,22 @@ panel: nombre, departamento y habitación, actividad, navegación, «Enfocar». 
   armarse el avatar ya no corresponde (cambio de empresa, despido, reasignación o el jugador se fue), se
   descarta y no se entrega.
 
+### Recuperación de plantillas de avatar
+
+- **Cliente** (`OfficeNPCManager`): si una plantilla no se puede armar, primero se la trata como falla temporal
+  (puede estar terminando de replicarse) y se reintenta localmente 3 veces (esperas de 1, 2 s) sin pedir nada.
+  Si sigue fallando, o declara otro UserId, es inválida: se pide regenerarla (evento `Avatares` con la lista y,
+  aparte, cuáles regenerar), como mucho cada 15 s y 3 veces por amigo mientras el editor está abierto. Con los
+  intentos agotados, 6 pedidos sin respuesta o el aviso `Agotado_` del servidor, ese amigo queda «avatar no
+  disponible» (se muestra en el contador y en el panel) hasta reabrir el editor. Nunca un personaje genérico.
+- **Servidor** (`EmployeeAvatars`): una regeneración se acepta aunque la plantilla siga vigente (no espera
+  MODEL_TTL), solo para empleados autorizados que también se piden en ese evento, nunca antes de 10 s desde el
+  último armado y hasta 3 por amigo cada 10 min; se respeta el límite por minuto. Antes de entregar se valida el
+  modelo (Model con HumanoidRootPart y cabeza); uno roto no se entrega y cuenta como falla. Tras 3 fallas seguidas
+  de un amigo en 10 min se deja de intentar (atributo `Agotado_<userId>`). La plantilla nueva reemplaza a la
+  anterior (nunca dos). Los controles de vigencia (empresa activa, despido, reasignación, jugador que se va)
+  siguen aplicando a las regeneraciones.
+
 ### Pendiente de verificar en Roblox Studio
 
 La lista real de amigos (`GetFriendsAsync`) y la creación de avatares en un servidor de Roblox; el aspecto de

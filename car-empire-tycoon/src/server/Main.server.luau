@@ -260,7 +260,7 @@ EmployeeAvatars.stillWanted = function(player: any, userId: number, token: any):
 	local s = sessions.list[player]
 	return s ~= nil and s.game ~= nil and not s.leaving and avatarToken(s) == token and FriendIdentity.isAssigned(s.game, userId)
 end
-AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any)
+AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any, rebuild: any)
 	local w = avatarWindow[player]
 	local now = os.clock()
 	if not w or now - w.at >= 2 then
@@ -273,9 +273,25 @@ AvatarEvent.OnServerEvent:Connect(function(player: Player, ids: any)
 	end
 	local s = sessions.list[player]
 	local want = s and s.game and FriendIdentity.avatarRequest(s.game, ids)
-	if want then
-		EmployeeAvatars.request(player, want, avatarToken(s))
+	if not want then
+		return
 	end
+	-- Regeneración (opcional): mismo formato estricto y solo de amigos que también se piden en este evento.
+	local set = nil
+	if rebuild ~= nil then
+		local rb = FriendIdentity.avatarRequest(s.game, rebuild)
+		if not rb then
+			return -- pedido mal formado o no autorizado: no se procesa nada
+		end
+		set = {}
+		for _, userId in rb do
+			if not table.find(want, userId) then
+				return
+			end
+			set[userId] = true
+		end
+	end
+	EmployeeAvatars.request(player, want, avatarToken(s), set)
 end)
 
 -- Compras permanentes con Developer Products: se acreditan solo después de guardarlas (Sessions.processReceipt).

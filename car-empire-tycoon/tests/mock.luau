@@ -1366,6 +1366,9 @@ function M.fakeR15(userId: any, opts: any?): any
 	animate.Parent = m
 	m.PrimaryPart = P.HumanoidRootPart
 	m:SetAttribute("fakeUser", userId)
+	if opts and opts.noRoot then
+		P.HumanoidRootPart:Destroy() -- modelo roto (lo que nunca debería entregarse)
+	end
 	return m
 end
 

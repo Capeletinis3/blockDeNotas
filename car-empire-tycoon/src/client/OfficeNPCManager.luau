@@ -40,6 +40,18 @@ Manager.UPDATE_HZ = 30 -- pasos por segundo de movimiento y animación (no se ca
 Manager.REQUEST_GAP = 1 -- segundos entre pedidos de avatares al servidor
 Manager.RETRY = 20 -- segundos antes de volver a pedir un avatar que no llegó
 Manager.REFRESH_AFTER = 1800 -- un avatar más viejo que esto se pide de nuevo al abrir el editor (actualizado)
+--[[ Recuperación de plantillas que no se pueden armar:
+	- Falla temporal (la plantilla todavía está llegando: le faltan piezas mientras se replica): se reintenta
+	  armarla acá LOCAL_RETRIES veces, esperando LOCAL_DELAY × intento segundos, sin pedir nada al servidor.
+	- Plantilla inválida (sigue fallando, o dice ser de otro UserId): se pide al servidor que la regenere, cada
+	  REBUILD_WAIT segundos como mucho y hasta MAX_REBUILDS veces por amigo mientras el editor está abierto.
+	- Sin avatar después de MAX_REQUESTS pedidos, o con los intentos agotados (o el servidor avisa Agotado_):
+	  ese amigo queda «avatar no disponible» hasta volver a abrir el editor. Nunca un personaje genérico. ]]
+Manager.LOCAL_RETRIES = 3
+Manager.LOCAL_DELAY = 1
+Manager.REBUILD_WAIT = 15
+Manager.MAX_REBUILDS = 3
+Manager.MAX_REQUESTS = 6
 
 local st = {
 	open = false,
@@ -57,7 +69,11 @@ local st = {
 	opens = 0,
 	friendOf = {} :: { [string]: number }, -- id de empleado → userId de su amigo
 	requested = {} :: { [number]: number }, -- userId → cuándo se pidió
-	badTemplate = setmetatable({}, { __mode = "v" }) :: { [number]: any }, -- userId → plantilla que no sirvió
+	buildFail = {} :: { [number]: any }, -- userId → { tpl, n, nextAt, invalid, askedAt }
+	rebuildAsked = {} :: { [number]: number }, -- userId → regeneraciones pedidas
+	requestCount = {} :: { [number]: number }, -- userId → pedidos comunes enviados
+	unavailable = {} :: { [number]: string }, -- userId → motivo (sin más pedidos hasta reabrir)
+	rebuildQueue = {} :: { string },
 	queue = {} :: { string },
 	lastRequest = -math.huge,
 	clock = 0,
@@ -114,34 +130,136 @@ end
 
 -- Pide al servidor los avatares en cola (un evento por lote, como mucho cada REQUEST_GAP segundos).
 local function flushRequests()
-	if #st.queue == 0 or st.clock - st.lastRequest < Manager.REQUEST_GAP then
+	if (#st.queue == 0 and #st.rebuildQueue == 0) or st.clock - st.lastRequest < Manager.REQUEST_GAP then
 		return
 	end
 	local remotes = ReplicatedStorage:FindFirstChild("CarEmpireRemotes")
 	local ev = remotes and remotes:FindFirstChild("Avatares")
+	-- Un evento: la lista de pedidos (incluye los que se piden regenerar) y, aparte, cuáles regenerar.
 	local ids = table.clone(st.queue)
-	table.clear(st.queue)
+	for _, id in st.rebuildQueue do
+		if not table.find(ids, id) then
+			table.insert(ids, id)
+		end
+	end
+	while #ids > 12 do
+		table.insert(st.queue, table.remove(ids) :: string) -- lo que no entra va en el próximo
+	end
+	local rebuild = {}
+	for _, id in st.rebuildQueue do
+		if table.find(ids, id) then
+			table.insert(rebuild, id)
+		end
+	end
+	for _, id in ids do
+		local k = table.find(st.queue, id)
+		if k then
+			table.remove(st.queue, k)
+		end
+		k = table.find(st.rebuildQueue, id)
+		if k then
+			table.remove(st.rebuildQueue, k)
+		end
+	end
 	st.lastRequest = st.clock
 	if ev then
 		st.requests += 1
 		pcall(function()
-			(ev :: any):FireServer(ids)
+			if #rebuild > 0 then
+				(ev :: any):FireServer(ids, rebuild)
+			else
+				(ev :: any):FireServer(ids)
+			end
 		end)
 	end
 end
 
+-- Aviso del servidor de que dejó de intentar ese avatar por un rato (fallas seguidas).
+local function serverGaveUp(userId: number): boolean
+	local f = templates()
+	return f ~= nil and type(f:GetAttribute("Agotado_" .. userId)) == "number"
+end
+
 local function want(employeeId: string, force: boolean?)
 	local userId = st.friendOf[employeeId]
-	if not userId then
+	if not userId or st.unavailable[userId] then
+		return
+	end
+	if serverGaveUp(userId) then
+		st.unavailable[userId] = "el servidor no pudo armarlo"
 		return
 	end
 	local at = st.requested[userId]
 	if force or not at or st.clock - at >= Manager.RETRY then
+		local n = (st.requestCount[userId] or 0) + 1
+		if n > Manager.MAX_REQUESTS then
+			st.unavailable[userId] = "sin respuesta del servidor"
+			return
+		end
+		st.requestCount[userId] = n
 		st.requested[userId] = st.clock
 		if not table.find(st.queue, employeeId) then
 			table.insert(st.queue, employeeId)
 		end
 	end
+end
+
+-- Pide regenerar la plantilla de un amigo (con espera y tope); al agotarse, «avatar no disponible».
+local function wantRebuild(employeeId: string, rec: any)
+	local userId = st.friendOf[employeeId]
+	if not userId or st.unavailable[userId] then
+		return
+	end
+	if rec.askedAt and st.clock - rec.askedAt < Manager.REBUILD_WAIT then
+		return
+	end
+	local n = st.rebuildAsked[userId] or 0
+	if n >= Manager.MAX_REBUILDS or serverGaveUp(userId) then
+		st.unavailable[userId] = "la plantilla del avatar no sirve"
+		return
+	end
+	st.rebuildAsked[userId] = n + 1
+	rec.askedAt = st.clock
+	if not table.find(st.rebuildQueue, employeeId) then
+		table.insert(st.rebuildQueue, employeeId)
+	end
+end
+
+--[[ Intenta armar el personaje con la plantilla. Devuelve el rig o nil. Distingue falla temporal (se reintenta
+	acá más tarde) de plantilla inválida (se pide regenerar). ]]
+local function tryBuild(id: string, npc: any, userId: number, template: Model): any
+	local rec = st.buildFail[userId]
+	if rec and rec.tpl ~= template then
+		rec = nil -- llegó otra plantilla (regenerada o actualizada): se empieza de cero
+		st.buildFail[userId] = nil
+	end
+	if rec and rec.invalid then
+		wantRebuild(id, rec)
+		return nil
+	end
+	if rec and st.clock < rec.nextAt then
+		return nil -- esperando el próximo reintento local
+	end
+	local ok, built = pcall(NPC.build, id, npc.name, npc.dept, template)
+	local rig = ok and built or nil
+	if rig and rig.userId == userId then
+		st.buildFail[userId] = nil
+		return rig
+	end
+	local mismatch = rig ~= nil -- se armó, pero es de otro UserId: inválida sin dudas
+	if rig then
+		NPC.destroy(rig)
+	end
+	rec = rec or { tpl = template, n = 0, nextAt = 0 }
+	st.buildFail[userId] = rec
+	rec.n += 1
+	if mismatch or rec.n >= Manager.LOCAL_RETRIES then
+		rec.invalid = true
+		wantRebuild(id, rec)
+	else
+		rec.nextAt = st.clock + Manager.LOCAL_DELAY * rec.n
+	end
+	return nil
 end
 
 -- Orientación en el mundo: el frente del personaje (−Z) mira hacia `heading` del plano (0 = +x, 90 = +y).
@@ -201,9 +319,6 @@ local function reconcile()
 			changed = true
 		end
 		local template = templateFor(userId)
-		if template and st.badTemplate[userId] == template then
-			template = nil -- plantilla que no se pudo armar: se espera una nueva (sin reintentar cada paso)
-		end
 		if rig and template and rig.builtAt ~= template:GetAttribute("builtAt") then
 			-- Llegó el avatar actualizado del amigo: se rearma solo el personaje (la actividad sigue igual).
 			NPC.destroy(rig)
@@ -212,22 +327,14 @@ local function reconcile()
 			changed = true
 		end
 		if not rig then
-			if template then
-				local ok, built = pcall(NPC.build, id, npc.name, npc.dept, template)
-				rig = ok and built or nil
-				if rig and rig.userId == userId then
+			if template and st.unavailable[userId] == nil then
+				rig = tryBuild(id, npc, userId :: number, template)
+				if rig then
 					rig.model.Parent = st.folder
 					st.rigs[id] = rig
 					changed = true
-				else
-					if rig then
-						NPC.destroy(rig) -- plantilla de otro amigo: no se usa
-					end
-					rig = nil
-					st.badTemplate[userId :: number] = template
-					want(id, true)
 				end
-			else
+			elseif not template then
 				want(id) -- todavía no llegó: se pide (y se reintenta), sin personaje genérico mientras tanto
 			end
 		elseif rig.name ~= npc.name or rig.dept ~= npc.dept then
@@ -374,6 +481,12 @@ function Manager.close()
 	st.empSig, st.selected, st.lastText, st.acc = "", nil, "", 0
 	table.clear(st.queue)
 	table.clear(st.friendOf)
+	-- Al reabrir el editor se puede volver a intentar (los límites del servidor siguen valiendo).
+	table.clear(st.buildFail)
+	table.clear(st.rebuildAsked)
+	table.clear(st.requestCount)
+	table.clear(st.unavailable)
+	table.clear(st.rebuildQueue)
 	local was = st.open
 	st.open = false
 	if was then
@@ -402,8 +515,8 @@ function Manager.shown(): boolean
 end
 
 --[[ Cantidades reales: (visibles ahora con su avatar, contratados en g.employees, avatares que todavía no
-	llegaron, puestos sin amigo asignado). ]]
-function Manager.counts(g: any?): (number, number, number, number)
+	llegaron, puestos sin amigo asignado, avatares no disponibles). ]]
+function Manager.counts(g: any?): (number, number, number, number, number)
 	local hired = g and g.employees and #g.employees or 0
 	local vacant = 0
 	for _, e in (g and g.employees) or {} do
@@ -411,17 +524,19 @@ function Manager.counts(g: any?): (number, number, number, number)
 			vacant += 1
 		end
 	end
-	local visible, loading = 0, 0
+	local visible, loading, unavailable = 0, 0, 0
 	if st.open and st.shown and st.world then
 		for _, id in st.world.order do
 			if st.rigs[id] then
 				visible += 1
+			elseif st.unavailable[st.friendOf[id] or 0] then
+				unavailable += 1
 			else
 				loading += 1
 			end
 		end
 	end
-	return visible, hired, loading, vacant
+	return visible, hired, loading, vacant, unavailable
 end
 
 function Manager.world(): any
@@ -493,7 +608,7 @@ function Manager.info(employeeId: string?): any
 			friend = e.friend
 		end
 	end
-	return { id = npc.id, name = npc.name, username = friend and friend.username, userId = userId, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state, avatar = st.rigs[npc.id] ~= nil }
+	return { id = npc.id, name = npc.name, username = friend and friend.username, userId = userId, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state, avatar = st.rigs[npc.id] ~= nil, avatarProblem = userId and st.unavailable[userId] or nil }
 end
 
 -- Posición en el mundo del empleado (para enfocar la cámara).

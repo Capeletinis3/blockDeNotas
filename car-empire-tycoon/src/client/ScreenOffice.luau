@@ -223,12 +223,15 @@ function Screen.updateStaff()
 	end
 	table.clear(staffLabels)
 	local shown = Npcs.shown()
-	local visible, hired, loading, vacant = Npcs.counts(App.g)
+	local visible, hired, loading, vacant, unavailable = Npcs.counts(App.g)
 	local toggle = Ui.toggle(shown, function()
 		Editor.setStaffShown(not Npcs.shown())
 	end)
 	toggle.Name = "MostrarEmpleados"
 	local extra = (shown and loading > 0) and (" · " .. loading .. (loading == 1 and " avatar cargando" or " avatares cargando")) or ""
+	if shown and unavailable > 0 then
+		extra ..= " · " .. unavailable .. (unavailable == 1 and " avatar no disponible" or " avatares no disponibles")
+	end
 	if vacant > 0 then
 		extra ..= " · " .. vacant .. (vacant == 1 and " puesto sin amigo" or " puestos sin amigo")
 	end

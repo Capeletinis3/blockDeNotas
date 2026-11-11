@@ -29,6 +29,15 @@ Avatars.MAX_CONCURRENT = 2
 Avatars.PER_MINUTE = 20
 Avatars.MAX_MODELS = 30
 Avatars.RETRY_AFTER = 60 -- segundos antes de reintentar un avatar que falló
+--[[ Regeneración pedida por el cliente (la plantilla entregada no se pudo armar allá): se rearma aunque el
+	modelo siga vigente, pero solo REBUILD_MAX veces por amigo cada REBUILD_WINDOW segundos y nunca antes de
+	REBUILD_GAP segundos desde el último armado. Después de FAIL_MAX fallas seguidas de un amigo dentro de
+	FAIL_WINDOW no se lo vuelve a intentar hasta que pase la ventana (sin reintentos infinitos). ]]
+Avatars.REBUILD_GAP = 10
+Avatars.REBUILD_MAX = 3
+Avatars.REBUILD_WINDOW = 600
+Avatars.FAIL_MAX = 3
+Avatars.FAIL_WINDOW = 600
 
 --[[ Comprobación de vigencia (la asigna Main.server): (player, userId, token) → ¿sigue siendo un empleado de la
 	empresa activa con la que se pidió? token identifica esa empresa abierta. Se consulta antes de empezar a
@@ -48,7 +57,41 @@ local descCache: { [number]: { desc: any, at: number } } = {}
 local queue: { any } = {}
 local active = 0
 local perPlayer: { [any]: any } = {}
-Avatars._stats = { built = 0, failed = 0, descFetched = 0, discarded = 0, skipped = 0 }
+Avatars._stats = { built = 0, failed = 0, descFetched = 0, discarded = 0, skipped = 0, rebuilt = 0, invalid = 0, refused = 0 }
+
+--[[ ¿El modelo armado sirve para animarlo en el cliente? Tiene que ser un Model con HumanoidRootPart y las
+	piezas del cuerpo unidas; si no, cuenta como falla (no se entrega una plantilla rota). ]]
+function Avatars.validModel(model: any): boolean
+	if typeof(model) ~= "Instance" or not model:IsA("Model") then
+		return false
+	end
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if not (root and root:IsA("BasePart")) then
+		return false
+	end
+	local parts = 0
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			parts += 1
+		end
+	end
+	return parts >= 2 and model:FindFirstChild("Head", true) ~= nil
+end
+
+-- Registra una falla de un amigo (ventana deslizante) y avisa al cliente en la carpeta.
+local function noteFail(st: any, folder: Instance, userId: number)
+	local f = st.fails[userId]
+	local now = os.time()
+	if not f or now - f.since >= Avatars.FAIL_WINDOW then
+		f = { n = 0, since = now }
+		st.fails[userId] = f
+	end
+	f.n += 1
+	folder:SetAttribute("Fallo_" .. userId, now)
+	if f.n >= Avatars.FAIL_MAX then
+		folder:SetAttribute("Agotado_" .. userId, now) -- el cliente deja de pedirlo por ahora
+	end
+end
 
 -- Llama al primer nombre de método que exista (las APIs con y sin sufijo Async según la versión del motor).
 local function callFirst(names: { string }, ...: any): (boolean, any)
@@ -86,7 +129,7 @@ end
 local function stateOf(player: any): any
 	local st = perPlayer[player]
 	if not st then
-		st = { windowStart = os.clock(), count = 0, building = {} }
+		st = { windowStart = os.clock(), count = 0, building = {}, rebuilds = {}, fails = {} }
 		perPlayer[player] = st
 	end
 	if os.clock() - st.windowStart >= 60 then
@@ -155,11 +198,19 @@ local function build(job: any)
 		Avatars._stats.discarded += 1
 		return
 	end
+	if model and not Avatars.validModel(model) then
+		-- Llegó algo que no sirve (sin raíz, sin cabeza…): se descarta y cuenta como falla.
+		Avatars._stats.invalid += 1
+		model:Destroy()
+		model = nil
+	end
 	if not model then
 		Avatars._stats.failed += 1
-		folder:SetAttribute("Fallo_" .. userId, os.time())
+		noteFail(st, folder, userId)
 		return
 	end
+	st.fails[userId] = nil
+	folder:SetAttribute("Agotado_" .. userId, nil)
 	prepare(model, userId)
 	local old = folder:FindFirstChild("Avatar_" .. userId)
 	if old then
@@ -206,18 +257,39 @@ end
 
 --[[ Pide los avatares de estos userId (ya validados por Main.server). Ignora los que ya están entregados y
 	vigentes, los que se están armando, los que fallaron hace poco y los que exceden el límite por minuto. ]]
-function Avatars.request(player: any, userIds: { number }, token: any?)
+--[[ rebuild = { [userId] = true } (opcional): amigos cuya plantilla el cliente no pudo armar y pide regenerar.
+	Ya validados por Main.server (empleados autorizados de la empresa activa). ]]
+function Avatars.request(player: any, userIds: { number }, token: any?, rebuild: { [number]: boolean }?)
 	local folder = Avatars.folderFor(player)
 	if not folder then
 		return
 	end
 	local st = stateOf(player)
+	local now = os.time()
 	for _, userId in userIds do
 		local have = folder:FindFirstChild("Avatar_" .. userId)
-		local fresh = have and os.time() - (have:GetAttribute("builtAt") or 0) < Avatars.MODEL_TTL
+		local builtAt = have and (have:GetAttribute("builtAt") or 0) or 0
+		local fresh = have ~= nil and now - builtAt < Avatars.MODEL_TTL
+		if fresh and rebuild and rebuild[userId] then
+			-- Regenerar una plantilla que el cliente no pudo usar, dentro de los límites.
+			local rb = st.rebuilds[userId]
+			if not rb or now - rb.since >= Avatars.REBUILD_WINDOW then
+				rb = { n = 0, since = now }
+				st.rebuilds[userId] = rb
+			end
+			if rb.n < Avatars.REBUILD_MAX and now - builtAt >= Avatars.REBUILD_GAP and not st.building[userId] then
+				rb.n += 1
+				fresh = false
+				Avatars._stats.rebuilt += 1
+			else
+				Avatars._stats.refused += 1
+			end
+		end
 		local failedAt = folder:GetAttribute("Fallo_" .. userId)
-		local recentFail = type(failedAt) == "number" and os.time() - failedAt < Avatars.RETRY_AFTER
-		if not fresh and not st.building[userId] and not recentFail and st.count < Avatars.PER_MINUTE then
+		local recentFail = type(failedAt) == "number" and now - failedAt < Avatars.RETRY_AFTER
+		local f = st.fails[userId]
+		local exhausted = f ~= nil and f.n >= Avatars.FAIL_MAX and now - f.since < Avatars.FAIL_WINDOW
+		if not fresh and not st.building[userId] and not recentFail and not exhausted and st.count < Avatars.PER_MINUTE then
 			st.count += 1
 			st.building[userId] = true
 			table.insert(queue, { player = player, userId = userId, token = token })
@@ -235,6 +307,11 @@ function Avatars.forget(player: any)
 			table.remove(queue, i)
 		end
 	end
+end
+
+-- Estado de límites de un jugador (para las pruebas).
+function Avatars._perPlayer(player: any): any
+	return stateOf(player)
 end
 
 -- Cuántos pedidos esperan (para las pruebas).

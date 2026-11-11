@@ -5524,6 +5524,227 @@ do
 		M.avatarsEnabled = false
 		noErrors("Servidor real")
 	end)
+
+	test("Recuperación de avatares (cliente): falla temporal, plantilla inválida, regeneración y sin reintentos infinitos", function()
+		local o = Office.new(1)
+		Scene.buildRooms(o)
+		local list = staff(4, "rc")
+		local folder = M.services.Players.LocalPlayer.PlayerGui:FindFirstChild("AvataresEmpleados")
+		local function put(e: any, tpl: any)
+			local old = folder:FindFirstChild("Avatar_" .. e.friend.userId)
+			if old then
+				old:Destroy()
+			end
+			tpl.Name = "Avatar_" .. e.friend.userId
+			if tpl:GetAttribute("userId") == nil then
+				tpl:SetAttribute("userId", e.friend.userId)
+			end
+			tpl:SetAttribute("builtAt", os.time())
+			tpl.Parent = folder
+			return tpl
+		end
+		-- 1) Falla temporal: la plantilla llega sin la raíz todavía (se está replicando) y se completa después.
+		local t1 = M.fakeR15(list[1].friend.userId)
+		local root1 = t1.HumanoidRootPart
+		root1.Parent = nil
+		put(list[1], t1)
+		-- 2) Plantilla inválida: sin raíz para siempre (hasta que el servidor la regenere).
+		local t2 = M.fakeR15(list[2].friend.userId)
+		t2.HumanoidRootPart:Destroy()
+		put(list[2], t2)
+		-- 3) Inválida que nunca se arregla (para el tope de reintentos).
+		local t3 = M.fakeR15(list[3].friend.userId)
+		t3.HumanoidRootPart:Destroy()
+		put(list[3], t3)
+		-- 4) Plantilla que dice ser de otro UserId: inválida enseguida.
+		local t4 = M.fakeR15(999)
+		t4:SetAttribute("userId", 999)
+		put(list[4], t4)
+		local u1, u2, u3, u4 = list[1].friend.userId, list[2].friend.userId, list[3].friend.userId, list[4].friend.userId
+		Mgr.open({ company = { id = "recupera" }, office = o, employees = list })
+		local S = Mgr._state
+		check(S.buildFail[u1] and S.buildFail[u1].n == 1 and not S.buildFail[u1].invalid, "falla temporal: primer intento fallido, sin darla por inválida")
+		check(S.buildFail[u4] and S.buildFail[u4].invalid and (S.rebuildAsked[u4] or 0) == 1, "otro UserId: inválida enseguida y se pide regenerar")
+		eq(npcModels(), 0, "ningún personaje genérico mientras tanto")
+		root1.Parent = t1 -- terminó de llegar
+		Mgr.step(Mgr.LOCAL_DELAY + 0.1)
+		check(Mgr.rig("rc1") ~= nil and S.buildFail[u1] == nil, "falla temporal: se recupera reintentando acá")
+		eq(S.rebuildAsked[u1], nil, "falla temporal: no se pidió regenerar al servidor")
+		-- La inválida agota los reintentos locales y pide regenerar.
+		for _ = 1, 8 do
+			Mgr.step(1)
+		end
+		check(S.buildFail[u2] and S.buildFail[u2].invalid and S.rebuildAsked[u2] == 1, "inválida: tras " .. Mgr.LOCAL_RETRIES .. " intentos se pide regenerar")
+		eq(#S.rebuildQueue, 0, "el pedido de regeneración se envió")
+		-- El servidor manda una plantilla nueva: se arma sola.
+		put(list[2], M.fakeR15(u2))
+		Mgr.step(0.1)
+		check(Mgr.rig("rc2") ~= nil and Mgr.rig("rc2").userId == u2 and S.buildFail[u2] == nil, "regenerada: el avatar aparece")
+		-- La que nunca se arregla: regeneraciones con espera y tope, después «no disponible».
+		local req0 = S.requests
+		for _ = 1, 120 do
+			Mgr.step(1)
+		end
+		check((S.rebuildAsked[u3] or 0) <= Mgr.MAX_REBUILDS and S.unavailable[u3] ~= nil, "sin arreglo: tope de " .. Mgr.MAX_REBUILDS .. " regeneraciones y queda no disponible (" .. tostring(S.unavailable[u3]) .. ")")
+		check(S.requests - req0 <= Mgr.MAX_REBUILDS * 2 + 2, "sin pedidos infinitos (" .. (S.requests - req0) .. " en 120 s)")
+		local req1 = S.requests
+		for _ = 1, 60 do
+			Mgr.step(1)
+		end
+		check(S.requests - req1 <= 1, "agotado: ya no se pide más")
+		local _, _, _, _, unav = Mgr.counts({ employees = list })
+		check(unav >= 1, "el contador cuenta los avatares no disponibles (" .. unav .. ")")
+		eq(Mgr.info("rc3").avatarProblem, S.unavailable[u3], "el panel del empleado lo explica")
+		-- Ninguna duplicación: un modelo por empleado.
+		local seen, dup = {}, false
+		for _, mdl in Scene.folder():FindFirstChild("Empleados"):GetChildren() do
+			local id = mdl:GetAttribute("employeeId")
+			dup = dup or seen[id] == true
+			seen[id] = true
+		end
+		check(not dup, "sin modelos duplicados")
+		-- Al cerrar y reabrir se puede intentar de nuevo (con los límites del servidor).
+		Mgr.close()
+		check(next(S.unavailable) == nil and next(S.buildFail) == nil and next(S.rebuildAsked) == nil, "cerrar limpia el estado de recuperación")
+		Scene.destroy()
+		for _, e in list do
+			local m = folder:FindFirstChild("Avatar_" .. e.friend.userId)
+			if m then
+				m:Destroy()
+			end
+		end
+		noErrors("Recuperación (cliente)")
+	end)
+
+	test("Recuperación de avatares (servidor real): regenerar sin esperar 30 min, límites, autorización, fallas del servidor y cancelación", function()
+		local EA = require("./.build-ui/server/EmployeeAvatars")
+		local saved = { EA.REBUILD_GAP, EA.REBUILD_MAX, EA.RETRY_AFTER, EA.FAIL_MAX, EA.PER_MINUTE }
+		EA.PER_MINUTE = 1000 -- el límite por minuto se prueba aparte: acá se encadenan muchas pruebas seguidas
+		local remote = M.services.ReplicatedStorage.CarEmpireRemotes.Avatares
+		M.avatarsEnabled = true
+		local sess = freshCompany("Recupera SA")
+		setFriends(sess, friendList(4, 840000))
+		hireUi(4)
+		App.go("oficina")
+		M.task.wait()
+		check(waitReal(function()
+			return npcModels() == 4 and EA.pending() == 0
+		end, 10), "los cuatro avatares llegan")
+		local folder = player.PlayerGui.AvataresEmpleados
+		local e1, e2 = App.g.employees[1], App.g.employees[2]
+		local u1 = e1.friend.userId
+		-- Antes: un pedido común de una plantilla vigente no la rearma (MODEL_TTL).
+		M.task.wait(2.1)
+		local c0 = M.avatarCalls.model
+		remote:FireServer({ e1.id })
+		M.task.wait(0.1)
+		eq(M.avatarCalls.model, c0, "pedido común de una vigente: no se rearma")
+		-- Regenerar: se rearma aunque esté vigente (pasado el intervalo mínimo).
+		EA.REBUILD_GAP = 0
+		local before = folder:FindFirstChild("Avatar_" .. u1)
+		remote:FireServer({ e1.id }, { e1.id })
+		check(waitReal(function()
+			local now = folder:FindFirstChild("Avatar_" .. u1)
+			return now ~= nil and now ~= before
+		end, 5), "regenerada sin esperar MODEL_TTL")
+		eq(M.avatarCalls.model, c0 + 1, "un solo armado")
+		local count = 0
+		for _, mdl in folder:GetChildren() do
+			if mdl.Name == "Avatar_" .. u1 then
+				count += 1
+			end
+		end
+		eq(count, 1, "sin plantillas duplicadas")
+		check(before.Parent == nil, "la anterior se reemplazó")
+		-- Intervalo mínimo: justo después de armarla, otra regeneración se rechaza.
+		EA.REBUILD_GAP = 10
+		M.task.wait(2.1)
+		local r0, c1 = EA._stats.refused, M.avatarCalls.model
+		remote:FireServer({ e1.id }, { e1.id })
+		M.task.wait(0.1)
+		check(EA._stats.refused == r0 + 1 and M.avatarCalls.model == c1, "dentro del intervalo mínimo: rechazada")
+		-- Tope por amigo: como mucho REBUILD_MAX regeneraciones en la ventana.
+		EA.REBUILD_GAP, EA.REBUILD_MAX = 0, 2
+		local c2 = M.avatarCalls.model
+		for _ = 1, 4 do
+			M.task.wait(2.1)
+			remote:FireServer({ e2.id }, { e2.id })
+			waitReal(function()
+				return EA.pending() == 0
+			end, 3)
+			M.task.wait(0.2)
+		end
+		check(M.avatarCalls.model - c2 <= 2, "tope de regeneraciones por amigo (" .. (M.avatarCalls.model - c2) .. ")")
+		-- Autorización: regenerar solo amigos de empleados de la empresa activa y pedidos en el mismo evento.
+		M.task.wait(2.1)
+		local c3 = M.avatarCalls.model
+		remote:FireServer({ e1.id }, { "e-ajeno" })
+		remote:FireServer({ e1.id }, { e2.id }) -- regenerar uno que no se pide
+		remote:FireServer({ e1.id }, 5)
+		remote:FireServer({ e1.id }, { { e1.id } })
+		M.task.wait(0.2)
+		eq(M.avatarCalls.model, c3, "regeneraciones no autorizadas o mal formadas: nada")
+		-- El servidor entrega algo roto: no se entrega, cuenta como falla y se corta tras FAIL_MAX.
+		EA.RETRY_AFTER, EA.FAIL_MAX = 0, 2
+		local e3 = App.g.employees[3]
+		local u3 = e3.friend.userId
+		M.avatarVariant = function(uid: number): any
+			return uid == u3 and { noRoot = true } or nil
+		end
+		local inv0, c4 = EA._stats.invalid, M.avatarCalls.model
+		for _ = 1, 4 do
+			M.task.wait(2.1)
+			remote:FireServer({ e3.id }, { e3.id })
+			waitReal(function()
+				return EA.pending() == 0
+			end, 3)
+			M.task.wait(0.2)
+		end
+		M.avatarVariant = nil
+		check(EA._stats.invalid > inv0, "modelo roto: no se entrega")
+		check(M.avatarCalls.model - c4 <= 2, "fallas seguidas: se corta tras FAIL_MAX (" .. (M.avatarCalls.model - c4) .. " armados)")
+		check(type(folder:GetAttribute("Agotado_" .. u3)) == "number", "el servidor avisa que dejó de intentarlo")
+		local tpl3 = folder:FindFirstChild("Avatar_" .. u3)
+		check(tpl3 == nil or tpl3:FindFirstChild("HumanoidRootPart") ~= nil, "nunca queda una plantilla rota entregada")
+		-- Cancelación: una regeneración en curso cuando se despide al empleado se descarta.
+		EA.REBUILD_GAP, EA.REBUILD_MAX = 0, 5
+		local e4 = App.g.employees[4]
+		local u4 = e4.friend.userId
+		local old4 = folder:FindFirstChild("Avatar_" .. u4)
+		M.avatarDelay = 0.5
+		M.task.wait(2.1)
+		local d0 = EA._stats.discarded + EA._stats.skipped
+		remote:FireServer({ e4.id }, { e4.id })
+		M.task.wait(0.05)
+		check(App.request("fire", { employeeId = e4.id }).ok, "despedir mientras se regenera")
+		M.task.wait(1)
+		M.avatarDelay = nil
+		check(EA._stats.discarded + EA._stats.skipped > d0, "la regeneración obsoleta se descarta")
+		local now4 = folder:FindFirstChild("Avatar_" .. u4)
+		check(now4 == nil or now4 == old4, "no se entrega un avatar del empleado despedido")
+		Mgr.step(0.5)
+		check(Mgr.npc(e4.id) == nil and Mgr.rig(e4.id) == nil, "su personaje ya no está")
+		-- Límite por minuto: con el tope en 1, una segunda regeneración en el mismo minuto se ignora.
+		EA.PER_MINUTE, EA.REBUILD_GAP, EA.REBUILD_MAX = 1, 0, 5
+		local st = EA._perPlayer and EA._perPlayer(player)
+		if st then
+			st.count, st.windowStart = 0, os.clock()
+		end
+		local c5 = M.avatarCalls.model
+		for _ = 1, 2 do
+			M.task.wait(2.1)
+			remote:FireServer({ e1.id }, { e1.id })
+			waitReal(function()
+				return EA.pending() == 0
+			end, 3)
+			M.task.wait(0.2)
+		end
+		check(st ~= nil and M.avatarCalls.model - c5 == 1, "límite por minuto respetado también al regenerar (" .. (M.avatarCalls.model - c5) .. ")")
+		EA.REBUILD_GAP, EA.REBUILD_MAX, EA.RETRY_AFTER, EA.FAIL_MAX, EA.PER_MINUTE = saved[1], saved[2], saved[3], saved[4], saved[5]
+		App.go("juego")
+		M.avatarsEnabled = false
+		noErrors("Recuperación (servidor)")
+	end)
 end
 
 T.finish()
