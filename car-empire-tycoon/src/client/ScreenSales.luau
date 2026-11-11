@@ -302,6 +302,10 @@ local function detail(g: any, l: any): Frame
 	if l.saleState == "produccion" then
 		table.insert(items, Ui.note("b", "Se vende cuando termina de fabricarse (" .. Util.round(Rules.lotProgress(l) * 100) .. " %): llegan las reseñas y elegís el precio acá."))
 	else
+		if l.saleState == "en venta" and l.sold == 0 then
+			-- Recién lanzado: las ventas corren con el tiempo del juego (con este menú abierto, la empresa está en pausa).
+			table.insert(items, Ui.text("A la venta: los autos se venden solos con el paso del tiempo. Mientras este menú está abierto la empresa está en pausa; volvé al juego para que empiecen las ventas.", { size = Ui.S.xs, color = T.tx2, lineHeight = 1.3, name = "AvisoVentasArrancan" }))
+		end
 		table.insert(items, Screen.priceEditor(g, l, function()
 			App.forceRender()
 		end))

@@ -5635,6 +5635,466 @@ do
 	end)
 end
 
+
+-- Etapa 6: primer ciclo jugable completo (integración con sesiones reales) -------------------------------------
+do
+	local START = Catalog.START.money
+	local VALID_SALE = { produccion = true, ["por lanzar"] = true, ["en venta"] = true }
+
+	-- Dinero que explican los movimientos registrados (libro + ventas y fabricación agregadas por mes).
+	local function flowTotal(g: any): number
+		local t = 0
+		for _, ds in g.stats.days do
+			for _, v in ds.flow do
+				t += v
+			end
+		end
+		return t
+	end
+
+	-- Estados imposibles: si algo no cierra, devuelve el motivo.
+	local function impossible(g: any): string?
+		if type(g.money) ~= "number" or g.money ~= g.money or g.money < 0 then
+			return "dinero inválido: " .. tostring(g.money)
+		end
+		if math.abs(g.money - (START + flowTotal(g))) > 0.5 then
+			return string.format("el dinero (%d) no coincide con los movimientos (%d)", g.money, START + flowTotal(g))
+		end
+		local perDesign, lines, sold = {}, {}, 0
+		local function noteDesign(id: string)
+			perDesign[id] = (perDesign[id] or 0) + 1
+			if perDesign[id] > 1 then
+				return "dos lotes del mismo diseño " .. id
+			end
+			return nil
+		end
+		for _, l in g.lots do
+			if not VALID_SALE[l.saleState] then
+				return "estado de venta imposible en un lote activo: " .. tostring(l.saleState)
+			end
+			if l.sold < 0 or l.produced < l.sold + l.discarded or l.produced > l.qty then
+				return string.format("unidades imposibles (%d fabricadas, %d vendidas, %d de %d)", l.produced, l.sold, l.discarded, l.qty)
+			end
+			if l.saleState == "produccion" and (l.sold > 0 or l.review ~= nil) then
+				return "ventas o reseñas antes de terminar de fabricar"
+			end
+			if l.saleState ~= "produccion" and (l.produced ~= l.qty or not l.review or #l.review.scores ~= 4) then
+				return "a la venta sin terminar de fabricar o sin sus cuatro reseñas"
+			end
+			if l.saleState == "en venta" and not (type(l.price) == "number" and l.price > 0) then
+				return "a la venta sin precio"
+			end
+			if l.costSpent ~= l.qty * l.unitCost then
+				return "costo cobrado distinto del lote"
+			end
+			if l.saleState == "produccion" then
+				if lines[l.line] then
+					return "dos lotes en la misma línea"
+				end
+				lines[l.line] = true
+			end
+			local why = noteDesign(l.designId)
+			if why then
+				return why
+			end
+			sold += l.sold
+		end
+		for _, h in g.lotHistory do
+			local why = noteDesign(h.designId or h.id)
+			if why then
+				return why
+			end
+			sold += h.sold or 0
+		end
+		if sold ~= g.counters.unitsSold then
+			return string.format("ventas contadas dos veces o perdidas (%d en lotes, contador %d)", sold, g.counters.unitsSold)
+		end
+		for _, d in g.designs do
+			if perDesign[d.id] and not d.lotLaunched then
+				return "diseño con lote sin marcar como fabricado"
+			end
+		end
+		return nil
+	end
+
+	local function server(uid: number, store: any?, clock: any?, job: string?): (any, any, any, any)
+		store = store or newStore()
+		clock = clock or { t = 1000, c = 0 }
+		local mgr, pushed = makeServer(store, job or "A", clock)
+		local p = { UserId = uid }
+		mgr:add(p)
+		return mgr, p, store, clock, pushed
+	end
+
+	-- Corre n segundos de juego y comprueba los estados en cada uno.
+	local function run(mgr: any, clock: any, g: any, n: number, untilFn: (() -> boolean)?): (boolean, string?)
+		for _ = 1, n do
+			ticks(mgr, clock, 1)
+			local why = impossible(g)
+			if why then
+				return false, why
+			end
+			if untilFn and untilFn() then
+				return true, nil
+			end
+		end
+		return untilFn == nil, untilFn and "no llegó a tiempo" or nil
+	end
+
+	local draftN = 0
+	-- El camino del editor: borrador guardado y finalizado (cada paso por la sesión real).
+	local function design(mgr: any, p: any, g: any, baseId: string, name: string): (any, any)
+		draftN += 1
+		local id = "borrador-ciclo-" .. draftN
+		local draft = draftFor(g, baseId, name)
+		local sv = mgr:request(p, "saveDraft", { draftId = id, draft = draft, step = 5, visited = 5, rev = 1, requestId = rid() })
+		assert(sv.ok, sv.msg)
+		local r = mgr:request(p, "finalizeDesign", { draftId = id, draft = draft, requestId = rid() })
+		return r, id
+	end
+
+	local function waitState(mgr: any, clock: any, g: any, lotId: string, state: string, limit: number?): (boolean, string?)
+		return run(mgr, clock, g, limit or 3000, function(): boolean
+			local l = findLot(g, lotId)
+			return (l and l.saleState == state) or (state == "agotado" and l == nil and findHist(g, lotId) ~= nil)
+		end)
+	end
+
+	test("[CJ1] Ciclo jugable 1–8: empresa de 1970, primer diseño con el capital inicial, incompleto, borrador, lote chico, fondos y duplicados", function()
+		local mgr, p, store, clock = server(7001)
+		local s = playThrough(mgr, p)
+		local g = s.game
+		-- 1. Empresa nueva de 1970 con lo necesario para el primer auto.
+		eq(Rules.date(g), "01/01/1970", "1. empieza el 01/01/1970")
+		eq(g.money, START, "1. capital inicial")
+		check(Rules.ownsLine(g, 1) and not Rules.ownsLine(g, 2) and not Rules.ownsLine(g, 3), "1. una línea al inicio; la 2 y la 3 bloqueadas")
+		check(DesignCalc.baseAvailable(g, Catalog.base("brisa")) == nil and DesignCalc.baseAvailable(g, Catalog.base("duna")) == nil, "1. sedán y coupé de 1970 disponibles")
+		local base = DesignCalc.newDraft(g, "brisa")
+		for _, cat in { "motor" } do
+			check(DesignCalc.partBlock(g, base, Catalog.part(cat, base.parts[cat])) == nil, "1. el motor inicial se puede usar")
+		end
+		check(impossible(g) == nil, "1. sin estados imposibles al empezar")
+		-- 3. Diseño incompleto o inválido: se explica y no se cobra nada.
+		local bad = draftFor(g, "brisa", "")
+		local m0 = g.money
+		local r = mgr:request(p, "saveDesign", { draft = bad, requestId = rid() })
+		check(not r.ok and string.find(r.msg, "nombre", 1, true) ~= nil, "3. sin nombre: se explica qué falta (" .. tostring(r.msg) .. ")")
+		local unknown = draftFor(g, "brisa", "Motor Raro")
+		unknown.parts.motor = "motor-inexistente"
+		r = mgr:request(p, "saveDesign", { draft = unknown, requestId = rid() })
+		check(not r.ok and string.find(r.msg, "desconocida", 1, true) ~= nil, "3. componente inexistente: rechazado con motivo (" .. tostring(r.msg) .. ")")
+		local locked
+		for _, pt in Catalog.partsOf("motor") do
+			if not locked and DesignCalc.partBlock(g, DesignCalc.newDraft(g, "brisa"), pt) ~= nil then
+				locked = pt
+			end
+		end
+		local future2 = draftFor(g, "brisa", "Motor Futuro")
+		future2.parts.motor = locked.id
+		r = mgr:request(p, "saveDesign", { draft = future2, requestId = rid() })
+		check(not r.ok and string.find(r.msg, locked.name, 1, true) ~= nil, "3. componente bloqueado (" .. locked.name .. "): rechazado con su requisito (" .. tostring(r.msg) .. ")")
+		-- Un componente que falta en la solicitud se completa con el predeterminado de la carrocería (compatibilidad
+		-- con clientes anteriores): el editor siempre envía todos, y nunca queda un auto incompleto.
+		local noMotor = draftFor(g, "brisa", "Sin Motor")
+		noMotor.parts.motor = nil
+		local filled = DesignCalc.sanitize(g, noMotor)
+		check(filled and filled.parts.motor == Catalog.base("brisa").defaults.motor, "3. componente omitido: se usa el predeterminado (el auto nunca queda incompleto)")
+		local future = draftFor(g, "brisa", "Del Futuro")
+		future.baseId = "no-existe"
+		r = mgr:request(p, "saveDesign", { draft = future, requestId = rid() })
+		check(not r.ok, "3. carrocería inexistente: rechazada")
+		eq(g.money, m0, "3. los rechazos no cobran")
+		eq(#g.designs, 0, "3. no se crea ningún diseño")
+		-- 4. Borrador: se guarda, se sale y se recupera en otra sesión.
+		local draft = draftFor(g, "brisa", "Primer Sedán")
+		draft.paint.primary = "#2E6BFF"
+		check(mgr:request(p, "saveDraft", { draftId = "borrador-primero", draft = draft, step = 3, visited = 3, rev = 1, requestId = rid() }).ok, "4. borrador guardado")
+		mgr:remove(p)
+		local mgr2, _, _, _ = makeServer(store, "B", clock)
+		mgr2:add(p)
+		check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "4. volver a entrar")
+		g = mgr2.list[p].game
+		local dr = Actions.findDraft(g, "borrador-primero")
+		check(dr and dr.step == 3 and dr.spec.name == "Primer Sedán" and dr.spec.paint.primary == "#2E6BFF", "4. el borrador vuelve igual (etapa, nombre y pintura)")
+		mgr = mgr2
+		-- 2 y 5. Finalizar: diseño válido con el capital inicial, id único, estadísticas y costo una sola vez.
+		local items = DesignCalc.devItems(g, dr.spec, DesignCalc.engineeringKind(nil, dr.spec))
+		local dev = 0
+		for _, it in items do
+			if not it.paid and not it.stock then
+				dev += it.cost
+			end
+		end
+		check(dev > 0 and dev < START, "2. el desarrollo es pagable con el capital inicial (" .. Util.money(dev) .. ")")
+		local fid = rid()
+		r = mgr:request(p, "finalizeDesign", { draftId = "borrador-primero", draft = dr.spec, requestId = fid })
+		check(r.ok and r.designId ~= nil, "5. diseño finalizado: " .. tostring(r.msg))
+		check(string.find(r.msg, "Producción", 1, true) ~= nil, "5. confirmación clara con el paso siguiente")
+		local d = g.designs[1]
+		eq(g.money, START - dev, "5. desarrollo cobrado una sola vez")
+		check(Actions.findDraft(g, "borrador-primero") == nil, "5. el borrador se retira")
+		eq(serde.encode("json", DesignCalc.computeDesign(g, d)), serde.encode("json", DesignCalc.computeDesign(g, draft)), "5. conserva las estadísticas de la configuración elegida")
+		eq(d.paint.primary, "#2E6BFF", "5. y su aspecto")
+		-- 8. Solicitud duplicada: mismo requestId → la misma respuesta; otro id → explicado, sin duplicar.
+		local again = mgr:request(p, "finalizeDesign", { draftId = "borrador-primero", draft = dr.spec, requestId = fid })
+		check(again.ok and again.designId == d.id, "8. reenvío idéntico: misma respuesta")
+		local other = mgr:request(p, "finalizeDesign", { draftId = "borrador-primero", draft = dr.spec, requestId = rid() })
+		check(not other.ok and string.find(other.msg, "ya se finalizó", 1, true) ~= nil, "8. otra confirmación: explicada, sin duplicar")
+		eq(#g.designs, 1, "8. un solo diseño")
+		eq(g.money, START - dev, "8. sin cobros extra")
+		r = design(mgr, p, g, "brisa", "Segundo Sedán")
+		check(r.ok and r.designId ~= d.id, "5. cada diseño recibe un id único")
+		local d2 = g.designs[2]
+		-- 7. Fondos insuficientes: no se cobra, no se marca y se explica cuánto alcanza.
+		local unit = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, d).unitCost)
+		local maxQty = math.floor(g.money / unit)
+		local m1 = g.money
+		r = mgr:request(p, "createLot", { designId = d.id, qty = maxQty + 1, requestId = rid() })
+		check(not r.ok and string.find(r.msg, "Fondos insuficientes", 1, true) ~= nil, "7. fondos insuficientes explicado")
+		check(g.money == m1 and #g.lots == 0 and not d.lotLaunched, "7. sin cobro, sin lote y el diseño sigue disponible")
+		check(maxQty >= 20, "el primer lote razonable (≥ 20 unidades) se puede pagar con el capital inicial (" .. maxQty .. ")")
+		-- 6. Lote chico, pagado al comenzar.
+		local lid = rid()
+		r = mgr:request(p, "createLot", { designId = d.id, qty = 10, requestId = lid })
+		check(r.ok, "6. lote de 10: " .. tostring(r.msg))
+		eq(m1 - g.money, 10 * unit, "6. se pagó completo al comenzar")
+		local again2 = mgr:request(p, "createLot", { designId = d.id, qty = 10, requestId = lid })
+		check(again2.ok and #g.lots == 1 and m1 - g.money == 10 * unit, "8. reenvío del lote: no se cobra ni crea dos veces")
+		check(impossible(g) == nil, "sin estados imposibles: " .. tostring(impossible(g)))
+		local _ = d2
+	end)
+
+	test("[CJ2] Ciclo jugable 9–18: producción, cuatro reseñas, precio, ventas parciales y completas, beneficios, archivo y segundo modelo", function()
+		local mgr, p, store, clock = server(7002)
+		local s = playThrough(mgr, p)
+		local g = s.game
+		local xp0, rep0 = g.xp, g.reputation
+		local r = design(mgr, p, g, "brisa", "Ciclo Uno")
+		check(r.ok, "diseño: " .. tostring(r.msg))
+		check(g.xp > xp0, "experiencia por diseñar")
+		local d = g.designs[1]
+		local m0 = g.money
+		r = mgr:request(p, "createLot", { designId = d.id, qty = 30, requestId = rid() })
+		check(r.ok, "lote de 30 con el capital inicial: " .. tostring(r.msg))
+		local lot = g.lots[1]
+		local cost = m0 - g.money
+		-- 9. Avance de producción sin ventas.
+		local ok, why = run(mgr, clock, g, 10)
+		check(ok, "9. " .. tostring(why))
+		check(lot.produced > 0 and lot.produced < lot.qty and lot.sold == 0, "9. avanza la fabricación y no se vende (" .. lot.produced .. "/30)")
+		check(not mgr:request(p, "launchSale", { lotId = lot.id, price = 5000, requestId = rid() }).ok, "12. no se vende antes de terminar")
+		check(not mgr:request(p, "closeSale", { lotId = lot.id, requestId = rid() }).ok, "la fabricación no se cancela")
+		-- 10. Al terminar: cuatro reseñas una sola vez.
+		ok, why = waitState(mgr, clock, g, lot.id, "por lanzar")
+		check(ok, "10. termina la fabricación: " .. tostring(why))
+		local rv = lot.review
+		eq(#rv.scores, 4, "10. cuatro críticos")
+		for _, sc in rv.scores do
+			check(type(sc.score) == "number" and sc.score >= 1 and sc.score <= 10 and type(sc.text) == "string" and #sc.text > 0, "10. nota y comentario de " .. tostring(sc.name))
+		end
+		local frozen = serde.encode("json", rv)
+		run(mgr, clock, g, 20)
+		eq(serde.encode("json", lot.review), frozen, "10. no se vuelven a generar")
+		local again = Rules.criticReviews(g, lot.design)
+		local same = #again.scores == 4
+		for i, sc in again.scores do
+			same = same and sc.critic == rv.scores[i].critic and math.abs(sc.score - rv.scores[i].score) <= 0.3
+		end
+		check(same, "10. corresponden a las características del auto (las mismas notas del cálculo, salvo el paso del tiempo)")
+		-- 11. Precio recomendado: el del cálculo del diseño; más barato vende más rápido.
+		eq(lot.refPrice, DesignCalc.computeDesign(g, d).price, "11. precio recomendado del cálculo")
+		check(lot.refPrice > lot.unitCost, "11. el recomendado deja margen")
+		-- 12. Inicio de ventas validado.
+		check(not mgr:request(p, "launchSale", { lotId = lot.id, price = -5, requestId = rid() }).ok, "12. precio inválido rechazado")
+		eq(Rules.validPrice(1.5), 2, "12. un precio con decimales se redondea al dólar (se puede cambiar después)")
+		check(Rules.validPrice(0) == nil and Rules.validPrice(0 / 0) == nil and Rules.validPrice(math.huge) == nil, "12. cero, NaN e infinito rechazados")
+		check(mgr:request(p, "launchSale", { lotId = lot.id, price = lot.refPrice, requestId = rid() }).ok, "12. a la venta al recomendado")
+		check(not mgr:request(p, "launchSale", { lotId = lot.id, price = lot.refPrice, requestId = rid() }).ok, "12. no se lanza dos veces")
+		-- 13. Venta parcial.
+		ok, why = run(mgr, clock, g, 3000, function(): boolean
+			local l = findLot(g, lot.id)
+			return l ~= nil and l.sold > 0
+		end)
+		check(ok, "13. primeras ventas: " .. tostring(why))
+		check(lot.sold < lot.produced and lot.revenue == lot.sold * lot.price, "13. venta parcial con ingresos exactos")
+		-- 14. Venta completa y 16. archivo.
+		local moneyBefore = g.money - lot.revenue
+		ok, why = waitState(mgr, clock, g, lot.id, "agotado")
+		check(ok, "14. se agota: " .. tostring(why))
+		local h = findHist(g, lot.id)
+		check(h and h.sold == 30 and h.saleState == "agotado", "14. las 30 vendidas, nunca más")
+		check(findLot(g, lot.id) == nil, "16. el lote sale de los activos")
+		check(#g.modelHistory >= 1, "16. queda en el historial de modelos")
+		-- 15. Beneficio = ingresos − costo del lote (sin cobrar de nuevo al vender).
+		eq(h.revenue - h.costSpent, h.revenue - cost, "15. el costo del lote se cobró una vez")
+		eq(g.money - moneyBefore, h.revenue, "15. los ingresos entraron completos")
+		check(h.revenue - h.costSpent > 0, "15. con ganancia al precio recomendado (" .. Util.money(h.revenue - h.costSpent) .. ")")
+		check(g.reputation >= rep0 and g.rp > 0, "PI y reputación según las reglas")
+		-- 18. Rechazo de un segundo lote del mismo diseño.
+		r = mgr:request(p, "createLot", { designId = d.id, qty = 5, requestId = rid() })
+		check(not r.ok and string.find(r.msg, "una sola vez", 1, true) ~= nil, "18. segundo lote del mismo diseño rechazado con explicación")
+		-- 17. Segundo modelo.
+		r = design(mgr, p, g, "duna", "Ciclo Dos")
+		check(r.ok, "17. segundo modelo diseñado con las ganancias: " .. tostring(r.msg))
+		local d2 = g.designs[#g.designs]
+		local unit2 = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, d2).unitCost)
+		local q2 = math.min(40, math.floor(g.money / unit2))
+		check(q2 >= 20, "17. alcanza para un segundo lote razonable (" .. q2 .. ")")
+		r = mgr:request(p, "createLot", { designId = d2.id, qty = q2, requestId = rid() })
+		check(r.ok, "17. segundo lote: " .. tostring(r.msg))
+		check(impossible(g) == nil, "sin estados imposibles: " .. tostring(impossible(g)))
+		local _ = store
+	end)
+
+	test("[CJ3] Ciclo jugable 19–22: velocidades, guardado en cada fase, empresas independientes y sin estados imposibles", function()
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "A", clock)
+		local p = { UserId = 7003 }
+		mgr:add(p)
+		local s = playThrough(mgr, p)
+		local g = s.game
+		-- 19. Velocidades: proporcionales y sin ventas ni fabricación duplicadas al cambiar.
+		check(design(mgr, p, g, "brisa", "Velocidad").ok, "diseño")
+		local d = g.designs[1]
+		check(mgr:request(p, "createLot", { designId = d.id, qty = 30, requestId = rid() }).ok, "lote")
+		local lot = g.lots[1]
+		local function produced(speed: number, secs: number): number
+			check(mgr:request(p, "setSpeed", { speed = speed, requestId = rid() }).ok, "velocidad " .. speed)
+			local b = lot.produced
+			local ok, why = run(mgr, clock, g, secs)
+			check(ok, "19. " .. tostring(why))
+			return lot.produced - b
+		end
+		local a1 = produced(1, 6)
+		local a3 = produced(3, 2)
+		check(math.abs(a3 - a1) <= 2, string.format("19. 2 s a 3× fabrican como 6 s a 1× (%d y %d)", a1, a3))
+		for i = 1, 30 do
+			mgr:request(p, "setSpeed", { speed = (i % 3) + 1, requestId = rid() })
+			local ok, why = run(mgr, clock, g, 1)
+			if not ok then
+				check(false, "19. cambios de velocidad: " .. tostring(why))
+				break
+			end
+		end
+		mgr:request(p, "setUiPause", { paused = true })
+		local frozen = { lot.produced, g.time.day, g.time.minute, g.money }
+		run(mgr, clock, g, 10)
+		check(lot.produced == frozen[1] and g.time.day == frozen[2] and g.time.minute == frozen[3] and g.money == frozen[4], "9 y 19. en pausa no avanza nada")
+		mgr:request(p, "setUiPause", { paused = false })
+		mgr:request(p, "setSpeed", { speed = 1, requestId = rid() })
+		-- 20. Guardar y recuperar en cada fase (fabricando, por lanzar, a la venta, agotado).
+		local function reload(label: string)
+			local snap = serde.encode("json", { g.money, g.time, g.lots, g.lotHistory, g.designs, g.counters, g.drafts })
+			mgr:remove(p)
+			mgr = makeServer(store, "R" .. label, clock)
+			mgr:add(p)
+			check(mgr:request(p, "selectSlot", { slot = "1" }).ok, "20. recargar (" .. label .. ")")
+			g = mgr.list[p].game
+			eq(serde.encode("json", { g.money, g.time, g.lots, g.lotHistory, g.designs, g.counters, g.drafts }), snap, "20. " .. label .. ": todo igual al recuperarlo")
+			check(impossible(g) == nil, "20. " .. label .. ": sin estados imposibles (" .. tostring(impossible(g)) .. ")")
+			lot = findLot(g, lot.id) or findHist(g, lot.id)
+		end
+		reload("fabricando")
+		local ok, why = waitState(mgr, clock, g, lot.id, "por lanzar")
+		check(ok, "termina: " .. tostring(why))
+		local review = serde.encode("json", lot.review)
+		reload("por lanzar")
+		eq(serde.encode("json", lot.review), review, "20. las reseñas no cambian al recargar")
+		check(mgr:request(p, "launchSale", { lotId = lot.id, price = lot.refPrice, requestId = rid() }).ok, "a la venta")
+		run(mgr, clock, g, 3000, function(): boolean
+			local l = findLot(g, lot.id)
+			return l ~= nil and l.sold > 0
+		end)
+		reload("a la venta")
+		ok, why = waitState(mgr, clock, g, lot.id, "agotado")
+		check(ok, "agotado: " .. tostring(why))
+		reload("agotado")
+		check(findHist(g, lot.id) ~= nil and findHist(g, lot.id).sold == 30, "20. el historial se conserva")
+		-- Sin progreso sin conexión: lo que pasa mientras no está no se calcula.
+		local before = serde.encode("json", { g.money, g.time })
+		mgr:remove(p)
+		clock.t += 100000
+		clock.c += 100000
+		mgr = makeServer(store, "Z", clock)
+		mgr:add(p)
+		mgr:request(p, "selectSlot", { slot = "1" })
+		g = mgr.list[p].game
+		eq(serde.encode("json", { g.money, g.time }), before, "20. nada se ejecuta dos veces ni sin conexión al volver")
+		-- 21. Empresas independientes: otra ranura con su propio ciclo.
+		local moneyA, designsA, histA = g.money, #g.designs, #g.lotHistory
+		check(mgr:request(p, "leaveCompany", {}).ok, "volver al menú")
+		check(mgr:request(p, "createCompany", { slot = "2", name = "Otra Empresa", color = "#FF8A3D", logo = "rayo" }).ok, "21. segunda empresa")
+		local g2 = mgr.list[p].game
+		check(g2.money == START and #g2.designs == 0 and #g2.lots == 0 and #g2.lotHistory == 0 and #g2.drafts == 0, "21. empieza de cero: sin dinero, diseños, lotes ni ventas de la otra")
+		check(design(mgr, p, g2, "duna", "De la Otra").ok, "21. diseña en la segunda")
+		check(mgr:request(p, "createLot", { designId = g2.designs[1].id, qty = 10, requestId = rid() }).ok, "21. fabrica en la segunda")
+		run(mgr, clock, g2, 20)
+		check(mgr:request(p, "leaveCompany", {}).ok, "volver al menú")
+		check(mgr:request(p, "selectSlot", { slot = "1" }).ok, "volver a la primera")
+		g = mgr.list[p].game
+		check(g.money == moneyA and #g.designs == designsA and #g.lotHistory == histA and #g.lots == 0, "21. la primera quedó intacta")
+		for _, dd in g.designs do
+			check(dd.name ~= "De la Otra", "21. sin diseños mezclados")
+		end
+		-- 22. Recorrido al azar (velocidades, pausas, lotes, ventas y recargas): nunca un estado imposible.
+		local seed = 4242
+		local function rnd(): number
+			seed = (seed * 16807) % 2147483647
+			return seed / 2147483647
+		end
+		local fails = nil
+		for step = 1, 900 do
+			local x = rnd()
+			if x < 0.03 then
+				mgr:request(p, "setSpeed", { speed = math.floor(rnd() * 3) + 1, requestId = rid() })
+			elseif x < 0.05 then
+				mgr:request(p, "setUiPause", { paused = rnd() < 0.5 })
+			elseif x < 0.07 and #g.designs < 8 and g.money > 30000 then
+				design(mgr, p, g, rnd() < 0.5 and "brisa" or "duna", "Azar " .. step)
+			elseif x < 0.10 then
+				for _, dd in g.designs do
+					if not dd.lotLaunched then
+						local unit = Rules.lotUnitCost(g, DesignCalc.computeDesign(g, dd).unitCost)
+						local q = math.floor(g.money / unit * rnd())
+						if q >= 1 then
+							mgr:request(p, "createLot", { designId = dd.id, qty = q, requestId = rid() })
+						end
+						break
+					end
+				end
+			elseif x < 0.13 then
+				for _, l in g.lots do
+					if l.saleState == "por lanzar" then
+						mgr:request(p, "launchSale", { lotId = l.id, price = math.floor(l.refPrice * (0.8 + rnd() * 0.6)), requestId = rid() })
+					elseif l.saleState == "en venta" and rnd() < 0.2 then
+						mgr:request(p, "setLotPrice", { lotId = l.id, price = math.floor(l.refPrice * (0.8 + rnd() * 0.6)), requestId = rid() })
+					end
+				end
+			elseif x < 0.135 then
+				for _, l in g.lots do
+					if l.saleState == "en venta" and l.sold > 0 and rnd() < 0.3 then
+						mgr:request(p, "closeSale", { lotId = l.id, requestId = rid() })
+					end
+				end
+			elseif x < 0.14 then
+				mgr:remove(p)
+				mgr = makeServer(store, "Q" .. step, clock)
+				mgr:add(p)
+				mgr:request(p, "selectSlot", { slot = "1" })
+				g = mgr.list[p].game
+			end
+			ticks(mgr, clock, 1)
+			local why2 = impossible(g)
+			if why2 then
+				fails = "paso " .. step .. ": " .. why2
+				break
+			end
+		end
+		check(fails == nil, "22. sin estados imposibles en 900 pasos al azar (" .. tostring(fails) .. ")")
+	end)
+end
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

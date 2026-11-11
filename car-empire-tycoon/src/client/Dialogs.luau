@@ -456,13 +456,14 @@ Dialogs.lot = function(box: Frame, params: any)
 	header(box, "Lote de «" .. d.name .. "» · línea " .. line)
 	local b = body(box)
 	local presets = {}
+	local afford = unit > 0 and math.floor(g.money / unit) or 0
 	for _, q in QTY_PRESETS do
+		-- Los atajos que no alcanza el dinero se ven apagados y dicen cuánto cuestan (se puede escribir igual).
 		table.insert(presets, Ui.opt(Util.num(q), qty == q, function()
 			st.qty, st.qtyText = q, tostring(q)
 			App.renderDialog()
-		end, { height = 34, name = "Cantidad_" .. q }))
+		end, { height = 34, name = "Cantidad_" .. q, disabled = q > afford, why = "No alcanza: " .. Util.num(q) .. " unidades cuestan " .. Util.money(q * unit) .. " y tenés " .. Util.money(g.money) }))
 	end
-	local afford = unit > 0 and math.floor(g.money / unit) or 0
 	table.insert(presets, Ui.opt("Máximo que alcanza (" .. Util.num(afford) .. ")", qty == afford and afford > 0, function()
 		st.qty, st.qtyText = afford, tostring(afford)
 		App.renderDialog()

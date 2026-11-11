@@ -5918,6 +5918,157 @@ do
 	end)
 end
 
+
+test("Etapa 6: ciclo jugable guiado por el botón principal con el capital inicial (sin callejones sin salida)", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		for k, v in App.profile.slots do
+			if v and v.name ~= nil then
+				App.request("deleteCompany", { slot = k, confirm = v.name })
+				slot = k
+				break
+			end
+		end
+	end
+	check(App.request("createCompany", { slot = slot, name = "Ciclo Guiado", color = "#3B82F6", logo = "pico" }).ok, "empresa nueva")
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	-- Sin tutorial: así el dinero es solo el capital inicial (sin recompensas) y se prueba la guía general.
+	App.request("setTutorial", { skipped = true })
+	App.go("juego")
+	M.task.wait()
+	eq(App.g.money, Catalog.START.money, "capital inicial intacto")
+	local function principal(): (string?, any)
+		local b = named("Principal")
+		return b and (M.find(b, "Diseñar otro modelo") and "otro" or M.find(b, "Diseñar") and "diseñar" or M.find(b, "Lanzar un lote") and "lote" or M.find(b, "Poner a la venta") and "vender" or "otro paso"), b
+	end
+	-- 1. Diseñar mi primer auto → editor.
+	local kind, btn = principal()
+	check(kind == "diseñar", "el botón principal propone diseñar el primer auto")
+	M.click(btn)
+	M.task.wait()
+	eq(App.ui.route, "editor", "abre el editor")
+	for _ = 1, 4 do
+		clickN("Siguiente")
+	end
+	local fin = named("FinalizarDiseno")
+	check(fin and fin:GetAttribute("disabled") == false, "finalizar habilitado con el capital inicial")
+	M.click(fin)
+	clickN("Confirmar")
+	check(waitFor(function()
+		return #App.g.designs == 1
+	end), "diseño finalizado")
+	eq(App.ui.route, "fabrica", "pasa a Producción")
+	local d = App.g.designs[1]
+	-- 2. Lote: los atajos que no alcanza el dinero aparecen apagados; el máximo pagable es razonable.
+	App.go("juego")
+	M.task.wait()
+	kind, btn = principal()
+	eq(kind, "lote", "el botón principal propone lanzar un lote")
+	M.click(btn)
+	M.task.wait()
+	clickN("Vehiculo_" .. d.id)
+	local unit = Rules.lotUnitCost(App.g, DesignCalc.computeDesign(App.g, d).unitCost)
+	local afford = math.floor(App.g.money / unit)
+	check(afford >= 20, "con el capital inicial alcanza para un primer lote razonable (" .. afford .. " unidades)")
+	for _, q in { 10, 50, 100, 500, 1000 } do
+		local b = named("Cantidad_" .. q)
+		eq(b and b:GetAttribute("disabled") == true, q > afford, "atajo " .. q .. (q > afford and " apagado (no alcanza)" or " disponible"))
+	end
+	M.type(named("Cantidad"), "30")
+	clickN("ContinuarLote")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return #App.g.lots == 1
+	end), "lote creado")
+	local lotId = App.g.lots[1].id
+	-- 3. Al terminar: las reseñas se abren solas y llevan a Ventas.
+	App.go("juego")
+	check(waitFor(function()
+		advance(1)
+		local top = App.topDialog()
+		return top ~= nil and top.kind == "reviews"
+	end, 600), "al terminar la fabricación se abren las reseñas")
+	local cards = 0
+	clickN("SaltarResenas")
+	M.task.wait()
+	eq(App.ui.route, "ventas", "las reseñas llevan a Ventas")
+	for _, x in App.g.lots do
+		if x.id == lotId then
+			cards = x.review and #x.review.scores or 0
+		end
+	end
+	eq(cards, 4, "cuatro reseñas guardadas")
+	-- 4. Precio recomendado y a la venta.
+	check(named("PrecioReferencia") ~= nil and named("PonerALaVenta") ~= nil, "Ventas ofrece el precio recomendado y Poner a la venta")
+	clickN("PrecioReferencia")
+	clickN("PonerALaVenta")
+	check(waitFor(function()
+		for _, x in App.g.lots do
+			if x.id == lotId then
+				return x.saleState == "en venta"
+			end
+		end
+		return false
+	end), "a la venta")
+	App.forceRender()
+	M.task.wait()
+	check(named("AvisoVentasArrancan") ~= nil, "Ventas explica que las ventas corren al volver al juego (menú en pausa)")
+	-- 5. Primeras ventas y agotado: avisos breves, sin diálogos. (Con el menú de Ventas abierto la empresa queda en
+	-- pausa, según la regla de los menús: se vuelve al juego para que corra el tiempo.)
+	App.go("juego")
+	M.task.wait()
+	local sawFirst, sawSold = false, false
+	for _ = 1, 600 do
+		advance(1)
+		for _, t in M.texts(App.toastLayer) do
+			if string.find(t, "Primeras ventas", 1, true) then
+				sawFirst = true
+			end
+			if string.find(t, "Agotado", 1, true) then
+				sawSold = true
+			end
+		end
+		if #App.g.lots == 0 then
+			break
+		end
+	end
+	check(sawFirst, "aviso de primeras ventas")
+	check(sawSold or #App.g.lots == 0, "aviso de lote agotado")
+	check(not dialogOpen(), "sin ventanas emergentes en el medio")
+	check(App.g.money > Catalog.START.money, "terminó con ganancia sobre el capital inicial (" .. Util.money(App.g.money - Catalog.START.money) .. ")")
+	-- 6. Todos los modelos ya fabricaron: el botón principal lleva a diseñar otro (no a un catálogo vacío).
+	App.go("juego")
+	M.task.wait()
+	kind, btn = principal()
+	eq(kind, "otro", "sin modelos por fabricar, el botón principal propone diseñar otro modelo")
+	M.click(btn)
+	M.task.wait()
+	eq(App.ui.route, "editor", "y abre el editor")
+	App.go("juego")
+	noErrors("Ciclo guiado")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

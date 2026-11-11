@@ -315,6 +315,7 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 			lot.saleAcc += rate * realMin
 			local n = math.min(math.floor(lot.saleAcc), avail)
 			if n > 0 then
+				local firstSale = lot.sold == 0
 				local revenue = n * lot.price
 				g.money += revenue
 				flow(g, "venta", revenue)
@@ -333,6 +334,12 @@ function Simulation.stepSales(g: any, ctx: any, minutes: number)
 				g.counters.marginTotal = (g.counters.marginTotal or 0) + n * (lot.price - lot.unitCost)
 				g.stats.month.sold += n
 				g.stats.month.rel += n * (lot.appeal - baseline)
+				-- Primeras ventas del lote (una vez: el paso de 0 a más ventas solo ocurre una vez). Es un aviso breve
+				-- en pantalla, sin guardarlo en la partida ni en las noticias. Si se agotó de golpe, alcanza con el aviso
+				-- de agotado.
+				if firstSale and Rules.lotAvailable(lot) > 0 and ctx and ctx.notify then
+					ctx.notify("ok", "Primeras ventas de " .. lot.design.name .. ": " .. Util.num(lot.sold) .. (lot.sold == 1 and " auto" or " autos") .. " a " .. money(lot.price) .. ". Se sigue vendiendo solo; podés ajustar el precio en Ventas.")
+				end
 				-- Lanzamiento exitoso: la primera vez que un diseño llega a launchSold ventas (una vez por diseño).
 				if lot.sold >= Catalog.ECON.launchSold and not g.launched[lot.designId] then
 					g.launched[lot.designId] = true

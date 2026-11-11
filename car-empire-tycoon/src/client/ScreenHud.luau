@@ -139,6 +139,17 @@ function Screen.nextAction(g: any): any
 		end
 	end
 	if #g.lots == 0 then
+		-- Cada modelo fabrica un solo lote: si todos ya tuvieron el suyo, lo que sigue es diseñar otro.
+		local ready = false
+		for _, d in g.designs do
+			if not d.template and not d.lotLaunched then
+				ready = true
+				break
+			end
+		end
+		if not ready then
+			return { label = "Diseñar otro modelo", sub = "Tus modelos ya fabricaron su lote: el próximo necesita un diseño nuevo", go = "editor", params = { fresh = true }, key = "1" }
+		end
 		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3" }
 	end
 	for _, l in g.lots do

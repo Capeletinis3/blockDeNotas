@@ -656,6 +656,7 @@ function Ui.opt(label: string, selected: boolean, onClick: () -> (), opts: { [st
 		Stroke = selected and { T.vi, 2 } or T.line,
 		Pad = o.pad or { 6, 10 },
 	})
+	b:SetAttribute("disabled", disabled) -- como en Ui.button: el estado queda a la vista de la interfaz y las pruebas
 	if not selected and not disabled then
 		b.MouseEnter:Connect(function()
 			local s = b:FindFirstChildOfClass("UIStroke")
