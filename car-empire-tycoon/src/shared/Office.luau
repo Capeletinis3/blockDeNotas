@@ -630,8 +630,54 @@ end
 function Office.roomArea(r: any): number
 	return r.w * r.d
 end
+--[[ Tramos de pared realmente construidos: por cada lado de la habitación, los tramos continuos (en casillas)
+	que quedan después de abrir una puerta en cada casilla de acceso pegada a ese borde. Es la única regla:
+	la usan el presupuesto (Office.wallLength, cliente y servidor) y la escena (OfficeScene arma las paredes
+	con estos mismos tramos).
+	Devuelve { left = { { desde, hasta } }, right, front, back }: left/right recorren y (0..d) sobre x = 0 y
+	x = w; front/back recorren x (0..w) sobre y = 0 e y = d. ]]
+function Office.wallRuns(r: any): any
+	local open = { left = {}, right = {}, front = {}, back = {} }
+	for _, a in r.access or {} do
+		if a[1] == 0 then
+			open.left[a[2]] = true
+		end
+		if a[1] == r.w - 1 then
+			open.right[a[2]] = true
+		end
+		if a[2] == 0 then
+			open.front[a[1]] = true
+		end
+		if a[2] == r.d - 1 then
+			open.back[a[1]] = true
+		end
+	end
+	local function runs(length: number, openAt: { [number]: boolean }): { { number } }
+		local out = {}
+		local start = nil
+		for i = 0, length do
+			local isOpen = i == length or openAt[i]
+			if not isOpen and start == nil then
+				start = i
+			elseif isOpen and start ~= nil then
+				table.insert(out, { start, i })
+				start = nil
+			end
+		end
+		return out
+	end
+	return { left = runs(r.d, open.left), right = runs(r.d, open.right), front = runs(r.w, open.front), back = runs(r.w, open.back) }
+end
+
+-- Largo de pared construida en tramos (1 tramo = 1 casilla de largo): perímetro menos las aberturas.
 function Office.wallLength(r: any): number
-	return 2 * (r.w + r.d)
+	local n = 0
+	for _, side in Office.wallRuns(r) do
+		for _, run in side do
+			n += run[2] - run[1]
+		end
+	end
+	return n
 end
 
 -- Cantidad de unidades de un acabado en una habitación según su unidad (superficie, largo o luminarias).

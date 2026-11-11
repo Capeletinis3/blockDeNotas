@@ -135,21 +135,6 @@ function Scene.furnitureCFrame(roomId: string, x: number, y: number, rot: number
 end
 
 -- Tramos de pared de un borde, cortados donde hay accesos pegados a ese borde (puertas).
-local function wallRuns(length: number, openAt: { [number]: boolean }): { { number } }
-	local runs = {}
-	local start = nil
-	for i = 0, length do
-		local open = i == length or openAt[i]
-		if not open and start == nil then
-			start = i
-		elseif open and start ~= nil then
-			table.insert(runs, { start, i })
-			start = nil
-		end
-	end
-	return runs
-end
-
 local function material(name: any): Enum.Material
 	local ok, m = pcall(function()
 		return (Enum.Material :: any)[name]
@@ -158,18 +143,24 @@ local function material(name: any): Enum.Material
 end
 
 -- MaterialVariant definitivo (si existe en MaterialService con ese nombre); si no, el material provisional.
+-- Siempre se reescribe la variante: si el acabado nuevo no tiene una (o no está cargada), se quita la del
+-- acabado anterior, así no queda, por ejemplo, la textura de parquet sobre un piso de alfombra.
 local function applySurface(p: BasePart, f: any, fallbackColor: string)
 	p.Material = material(f and f.material)
 	p.Color = Color3.fromHex((f and f.color) or fallbackColor)
-	if f and f.variant then
+	local variant = ""
+	if f and type(f.variant) == "string" and f.variant ~= "" then
 		pcall(function()
-			local ms = game:GetService("MaterialService")
-			if ms:FindFirstChild(f.variant) then
-				(p :: any).MaterialVariant = f.variant
+			if game:GetService("MaterialService"):FindFirstChild(f.variant, true) then
+				variant = f.variant
 			end
 		end)
 	end
+	pcall(function()
+		(p :: any).MaterialVariant = variant
+	end)
 end
+Scene._applySurface = applySurface
 
 local GRID_ALPHA = { normal = 0.55, tenue = 0.85, oculta = 1 }
 
@@ -195,23 +186,12 @@ local function buildRoom(folder: Folder, id: string, L: any)
 		table.insert(rec.lines, part(model, "Linea", Vector3.new(W, 0.02, 0.06), CFrame.new(L.ox + W / 2, y0 + 0.01, L.oz + j * CELL), lineColor, { Transparency = alpha, CastShadow = false }))
 	end
 	-- Accesos obligatorios (puertas y paso): siempre libres.
-	local openLeft, openRight, openFront, openBack = {}, {}, {}, {}
 	for _, a in r.access do
 		local p = part(model, "Acceso", Vector3.new(CELL - 0.1, 0.04, CELL - 0.1), CFrame.new(L.ox + (a[1] + 0.5) * CELL, y0 + 0.03, L.oz + (a[2] + 0.5) * CELL), Color3.fromHex("#3B8BFF"), { Transparency = 0.45, CastShadow = false, Material = Enum.Material.Neon })
 		p:SetAttribute("acceso", true)
-		if a[1] == 0 then
-			openLeft[a[2]] = true
-		end
-		if a[1] == r.w - 1 then
-			openRight[a[2]] = true
-		end
-		if a[2] == 0 then
-			openFront[a[1]] = true
-		end
-		if a[2] == r.d - 1 then
-			openBack[a[1]] = true
-		end
 	end
+	-- Tramos de pared: la misma regla que el presupuesto (Office.wallRuns), así lo que se cobra es lo que se ve.
+	local runs = Office.wallRuns(r)
 	-- Paredes bajas (sin techo), con una abertura donde hay un acceso pegado al borde. Cada tramo guarda su
 	-- cara interior para apoyar el revestimiento sin superponer superficies.
 	local H, T = Scene.WALL_H, 0.3
@@ -221,19 +201,19 @@ local function buildRoom(folder: Folder, id: string, L: any)
 		table.insert(state.walls, w)
 		table.insert(rec.walls, w)
 	end
-	for _, run in wallRuns(r.d, openLeft) do
+	for _, run in runs.left do
 		local len = (run[2] - run[1]) * CELL
 		wall(Vector3.new(T, H, len), Vector3.new(L.ox - T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(-1, 0, 0), len)
 	end
-	for _, run in wallRuns(r.d, openRight) do
+	for _, run in runs.right do
 		local len = (run[2] - run[1]) * CELL
 		wall(Vector3.new(T, H, len), Vector3.new(L.ox + W + T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(1, 0, 0), len)
 	end
-	for _, run in wallRuns(r.w, openFront) do
+	for _, run in runs.front do
 		local len = (run[2] - run[1]) * CELL
 		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz - T / 2), Vector3.new(0, 0, -1), len)
 	end
-	for _, run in wallRuns(r.w, openBack) do
+	for _, run in runs.back do
 		local len = (run[2] - run[1]) * CELL
 		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz + D + T / 2), Vector3.new(0, 0, 1), len)
 	end

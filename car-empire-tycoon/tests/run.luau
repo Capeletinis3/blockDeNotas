@@ -4132,6 +4132,31 @@ test("[ID] Investigación: recargo por adelanto exacto, tope de 5 años, cobro �
 end)
 
 
+-- Tramos de pared construidos, contados de forma independiente de Office: cada casilla del borde aporta un tramo
+-- por cada lado exterior que toca, salvo que sea un acceso (puerta abierta en ese lado).
+local function builtWalls(r: any): number
+	local access = {}
+	for _, a in r.access do
+		access[a[1] .. ":" .. a[2]] = true
+	end
+	local n = 0
+	for x = 0, r.w - 1 do
+		for _, y in { 0, r.d - 1 } do
+			if not access[x .. ":" .. y] then
+				n += 1
+			end
+		end
+	end
+	for y = 0, r.d - 1 do
+		for _, x in { 0, r.w - 1 } do
+			if not access[x .. ":" .. y] then
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
 -- [OF] Oficinas decorables (etapa 1: datos y servicios) ---------------------------------------------------
 local Office = require("./.build/shared/Office")
 local OfficeCatalog = require("./.build/shared/OfficeCatalog")
@@ -4351,7 +4376,7 @@ test("[OF] Acabados y ampliación: cotización por superficie/largo/luminarias, 
 	local o = g.office
 	local r1 = OfficeCatalog.room(1, "oficina_principal")
 	local cost, lines = Office.remodelQuote(o, "oficina_principal", { floor = "piso_parquet_1970", wall = "pared_beige_1970", lighting = "luz_calida_1970" }, 1970)
-	local exp = r1.w * r1.d * 40 + 2 * (r1.w + r1.d) * 15 + math.ceil(r1.w * r1.d / OfficeCatalog.LIGHT_AREA) * 120
+	local exp = r1.w * r1.d * 40 + builtWalls(r1) * 15 + math.ceil(r1.w * r1.d / OfficeCatalog.LIGHT_AREA) * 120
 	eq(cost, exp, "piso por casilla, paredes por tramo, luces por luminaria")
 	eq(#lines, 3, "tres líneas")
 	eq(o.finishes.oficina_principal.floor, "piso_cemento", "cotizar no cambia nada (previsualización gratis)")
@@ -4600,7 +4625,7 @@ test("[OF4] Remodelación por Sessions: cotización del servidor, sin recobros, 
 	end
 	-- 1/4. Varios materiales: total = suma de cantidades × precios del catálogo.
 	local F = OfficeCatalog.FINISHES
-	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + 2 * (room.w + room.d) * F.wall.pared_beige_1970.price + 2 * (room.w + room.d) * F.covering.madera_1970.price + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + builtWalls(room) * F.wall.pared_beige_1970.price + builtWalls(room) * F.covering.madera_1970.price + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
 	local m0 = g.money
 	local rev0 = g.office.rev
 	local id = rid()
@@ -4669,7 +4694,7 @@ test("[OF4] Remodelación por Sessions: cotización del servidor, sin recobros, 
 	eq(g.sede, 2, "oficinas nivel 2")
 	eq(g.office.finishes[R].lighting, "luz_calida_1970", "acabados conservados al ampliar")
 	eq(serde.encode("json", g.office.finishes.sala_reuniones), serde.encode("json", OfficeCatalog.DEFAULT_FINISH), "habitación nueva con acabados básicos")
-	r = req({ wall = "pared_beige_1970" }, { room = "sala_reuniones", quote = 2 * (8 + 6) * F.wall.pared_beige_1970.price })
+	r = req({ wall = "pared_beige_1970" }, { room = "sala_reuniones", quote = builtWalls(OfficeCatalog.room(2, "sala_reuniones")) * F.wall.pared_beige_1970.price })
 	check(r.ok, "remodelar la sala nueva: " .. tostring(r.msg))
 	eq(g.office.finishes[R].wall, "pared_beige_1970", "la principal sigue con su pintura")
 	eq(g.office.finishes.sala_reuniones.floor, "piso_cemento", "la sala solo cambia lo pedido")
@@ -4683,6 +4708,109 @@ test("[OF4] Remodelación por Sessions: cotización del servidor, sin recobros, 
 	-- 12. Otra empresa: sus acabados son los básicos.
 	check(mgr2:request(p, "createCompany", { slot = "2", name = "Otra Remo", color = "#42B8E5", logo = "rayo" }).ok, "otra empresa")
 	eq(mgr2.list[p].game.office.finishes[R].floor, "piso_cemento", "la otra empresa no comparte acabados")
+end)
+
+
+test("[OF5] Tramos de pared: el presupuesto cobra las paredes construidas (perímetro menos aberturas) en los cinco niveles", function()
+	local F = OfficeCatalog.FINISHES
+	for level = 1, 5 do
+		for _, r in OfficeCatalog.plan(level).rooms do
+			local built = builtWalls(r)
+			eq(Office.wallLength(r), built, "nivel " .. level .. " · " .. r.id .. ": tramos = paredes construidas")
+			check(built < 2 * (r.w + r.d), "nivel " .. level .. " · " .. r.id .. ": se descuentan las aberturas (" .. built .. " de " .. 2 * (r.w + r.d) .. ")")
+			-- Los tramos de cada lado no se superponen ni se salen del lado.
+			local runs = Office.wallRuns(r)
+			for side, list in runs do
+				local limit = (side == "left" or side == "right") and r.d or r.w
+				local last = -1
+				for _, run in list do
+					check(run[1] >= 0 and run[2] <= limit and run[1] < run[2] and run[1] > last, "nivel " .. level .. " · " .. r.id .. " · " .. side .. ": tramo válido")
+					last = run[2]
+				end
+			end
+			-- Cotización: cada unidad con su cantidad real y el precio del catálogo (sin cambios de precio).
+			local o = Office.new(level)
+			local cost, lines = Office.remodelQuote(o, r.id, { floor = "piso_parquet_1970", wall = "pared_beige_1970", covering = "madera_1970", lighting = "luz_calida_1970" }, 1970)
+			local qty = {}
+			for _, l in lines do
+				qty[l.kind] = l.qty
+			end
+			eq(qty.floor, r.w * r.d, "piso por casilla")
+			eq(qty.wall, built, "pintura por tramo construido")
+			eq(qty.covering, built, "revestimiento por tramo construido")
+			eq(qty.lighting, math.ceil(r.w * r.d / OfficeCatalog.LIGHT_AREA), "luminarias")
+			eq(cost, r.w * r.d * F.floor.piso_parquet_1970.price + built * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + qty.lighting * F.lighting.luz_calida_1970.price, "total")
+		end
+	end
+	eq(F.wall.pared_beige_1970.price, 15, "precio unitario de la pintura sin cambios")
+	eq(F.covering.madera_1970.price, 60, "precio unitario del revestimiento sin cambios")
+end)
+
+test("[OF5] Remodelación en los cinco niveles por Sessions: cobro exacto, duplicados, guardado y cambio de empresa", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 7201, Name = "niveles" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	local F = OfficeCatalog.FINISHES
+	local full = { floor = "piso_parquet_1970", wall = "pared_beige_1970", covering = "madera_1970", lighting = "luz_calida_1970" }
+	local function request(action: string, body: any): any
+		clock.c += 1 -- sin chocar con el límite de acciones por segundo
+		clock.t += 1
+		return mgr:request(p, action, body)
+	end
+	local paidTotal = 0
+	for level = 1, 5 do
+		g.sede = level
+		Office.remap(g.office, level)
+		g.money = 1e7
+		for _, r in OfficeCatalog.plan(level).rooms do
+			local installed = g.office.finishes[r.id]
+			if installed.floor == "piso_cemento" then
+				local expected = r.w * r.d * F.floor.piso_parquet_1970.price + builtWalls(r) * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + math.ceil(r.w * r.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+				local m0 = g.money
+				local id = rid()
+				local body = { room = r.id, changes = full, rev = g.office.rev, quote = expected, requestId = id, companyId = g.company.id }
+				local res = request("officeRemodel", body)
+				check(res.ok and res.paid == expected, "nivel " .. level .. " · " .. r.id .. ": " .. tostring(res.msg))
+				eq(g.money, m0 - expected, "nivel " .. level .. " · " .. r.id .. ": cobro exacto")
+				paidTotal += expected
+				-- Duplicado: misma solicitud, sin segundo cobro.
+				local dup = request("officeRemodel", body)
+				check(dup.duplicate and dup.paid == expected, "nivel " .. level .. " · " .. r.id .. ": duplicado reconocido")
+				eq(g.money, m0 - expected, "nivel " .. level .. " · " .. r.id .. ": sin cobro doble")
+			else
+				-- Habitación de un nivel anterior: conserva lo instalado y no se recobra.
+				eq(installed.lighting, "luz_calida_1970", "nivel " .. level .. " · " .. r.id .. ": acabados conservados al ampliar")
+				local res = request("officeRemodel", { room = r.id, changes = full, rev = g.office.rev, quote = 0, requestId = rid(), companyId = g.company.id })
+				check(not res.ok, "nivel " .. level .. " · " .. r.id .. ": lo instalado no se vuelve a cobrar")
+			end
+		end
+	end
+	-- Guardar, salir y cargar en otro servidor.
+	local finishes = serde.encode("json", g.office.finishes)
+	local money = g.money
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "volver a abrir")
+	local g2 = mgr2.list[p].game
+	eq(serde.encode("json", g2.office.finishes), finishes, "acabados de los cinco niveles conservados")
+	eq(g2.money, money, "dinero conservado")
+	-- Cambio de empresa: otra empresa empieza con los básicos y una operación de la primera no se aplica en ella.
+	clock.c += 5
+	check(mgr2:request(p, "createCompany", { slot = "2", name = "Niveles Dos", color = "#42B8E5", logo = "rayo" }).ok, "otra empresa")
+	local g3 = mgr2.list[p].game
+	eq(g3.office.finishes.oficina_principal.floor, "piso_cemento", "otra empresa con acabados propios")
+	local r1 = OfficeCatalog.room(1, "oficina_principal")
+	local q = r1.w * r1.d * F.floor.piso_parquet_1970.price
+	clock.c += 5
+	local cross = mgr2:request(p, "officeRemodel", { room = "oficina_principal", changes = { floor = "piso_parquet_1970" }, rev = g3.office.rev, quote = q, requestId = rid(), companyId = g2.company.id })
+	check(not cross.ok, "una operación de la primera empresa no se aplica en la segunda")
+	eq(g3.office.finishes.oficina_principal.floor, "piso_cemento", "la segunda empresa no cambia")
+	check(paidTotal > 0, "se cobraron remodelaciones en los cinco niveles")
 end)
 
 T.finish()

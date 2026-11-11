@@ -98,3 +98,7 @@ Sin cambios de esquema (19). Los acabados ya vivían en `g.office.finishes[habit
   - Selector Mobiliario / Remodelación.
   - Panel lateral con habitaciones (marca «sin confirmar»), las cuatro categorías y tarjetas de acabado: categoría, material, año, precio por unidad, cantidad para la habitación y costo.
   - Panel de presupuesto: actual → elegido, cantidad y costo por línea, total, dinero disponible y restante, y los botones Confirmar (con el costo), Restaurar selección y Cancelar cambios.
+
+### Ajustes de la etapa 3
+- **Tramos de pared:** `Office.wallRuns(habitación)` es la única regla de paredes (perímetro con una abertura en cada casilla de acceso pegada al borde). `Office.wallLength` suma esos tramos y lo usan el presupuesto del cliente y del servidor; `OfficeScene` arma las paredes con los mismos tramos. Antes se cobraba el perímetro completo; por ejemplo, la oficina principal del nivel 1 pasó de 36 a 34 tramos. Precios unitarios sin cambios.
+- **MaterialVariant:** `applySurface` siempre reescribe la variante. Si el acabado nuevo no tiene una, o no está cargada en MaterialService, se quita la anterior.

@@ -640,6 +640,31 @@ end)
 
 -- [P15] La interfaz se adapta a PC y celular: se construyen todas las pantallas en las cuatro resoluciones
 -- pedidas y se verifica que ningún panel ni el HUD se salgan del ancho de la pantalla.
+-- Tramos de pared construidos, contados de forma independiente de Office: cada casilla del borde aporta un tramo
+-- por cada lado exterior que toca, salvo que sea un acceso (puerta abierta en ese lado).
+local function builtWalls(r: any): number
+	local access = {}
+	for _, a in r.access do
+		access[a[1] .. ":" .. a[2]] = true
+	end
+	local n = 0
+	for x = 0, r.w - 1 do
+		for _, y in { 0, r.d - 1 } do
+			if not access[x .. ":" .. y] then
+				n += 1
+			end
+		end
+	end
+	for y = 0, r.d - 1 do
+		for _, x in { 0, r.w - 1 } do
+			if not access[x .. ":" .. y] then
+				n += 1
+			end
+		end
+	end
+	return n
+end
+
 local function overflow(): { string }
 	local out = {}
 	local vw = App.vw
@@ -3633,7 +3658,7 @@ test("Remodelación de interiores: vista previa gratis, presupuesto, confirmaci�
 	check(deskModel.Parent ~= nil and (deskModel:GetPivot().Position - deskCf.Position).Magnitude < 1e-6, "el escritorio sigue en su lugar")
 	eq(serde.encode("json", App.g.office.placed), furniture, "la distribución no cambia")
 	-- 4. Presupuesto: suma de los cambios efectivos con las medidas reales del plano.
-	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + 2 * (room.w + room.d) * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + builtWalls(room) * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
 	local cost = Editor.quote()
 	eq(cost, expected, "total del presupuesto")
 	check(named("Presupuesto_floor") ~= nil and named("RemodelacionTotal") ~= nil, "líneas y total en el panel")
@@ -3878,6 +3903,108 @@ test("Remodelación en oficinas de nivel 1 a 5: todas las habitaciones con todos
 	end
 	check(Scene._state.folder == nil, "la escena se libera")
 	noErrors("Remodelación por niveles")
+end)
+
+
+test("Remodelación en el editor, niveles 1 a 5: presupuesto igual a las paredes de la escena, cancelar, confirmar y MaterialVariant", function()
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Editor = require("./.build-ui/client/OfficeEditor")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	local F = OfficeCatalog.FINISHES
+	local CELL = OfficeCatalog.CELL
+	-- MaterialVariant: al pasar a un acabado sin variante se quita la anterior; con variante cargada se aplica.
+	local probe = M.Instance.new("Part")
+	probe.MaterialVariant = "ParquetViejo"
+	Scene._applySurface(probe, F.floor.piso_alfombra_1970, "#000000")
+	eq(probe.MaterialVariant, "", "sin variante en el acabado nuevo: se quita la anterior")
+	local ms = M.Instance.new("Folder")
+	ms.Name = "MaterialService"
+	M.services.MaterialService = ms
+	local mv = M.Instance.new("Folder")
+	mv.Name = "ParquetDefinitivo"
+	mv.Parent = ms
+	F.floor.piso_parquet_1970.variant = "ParquetDefinitivo"
+	Scene._applySurface(probe, F.floor.piso_parquet_1970, "#000000")
+	eq(probe.MaterialVariant, "ParquetDefinitivo", "variante cargada: se aplica")
+	F.floor.piso_alfombra_1970.variant = "AlfombraQueNoExiste"
+	Scene._applySurface(probe, F.floor.piso_alfombra_1970, "#000000")
+	eq(probe.MaterialVariant, "", "variante no cargada: se quita la anterior y queda el material provisional")
+	eq(probe.Material, M.Enum.Material.Fabric, "con el material del acabado")
+	F.floor.piso_parquet_1970.variant = nil
+	F.floor.piso_alfombra_1970.variant = nil
+	M.services.MaterialService = nil
+	-- Empresa en curso (de la prueba anterior) con dinero para remodelar.
+	if not App.g then
+		for k, v in App.profile.slots do
+			if v then
+				App.request("selectSlot", { slot = k })
+				break
+			end
+		end
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	local full = { floor = "piso_parquet_1970", wall = "pared_beige_1970", covering = "madera_1970", lighting = "luz_calida_1970" }
+	for level = 1, 5 do
+		local sess = Sessions.instance.list[player]
+		sess.game.sede = level
+		Office.remap(sess.game.office, level)
+		-- Habitaciones con acabados básicos, para presupuestar el cambio completo.
+		for _, r in OfficeCatalog.plan(level).rooms do
+			sess.game.office.finishes[r.id] = table.clone(OfficeCatalog.DEFAULT_FINISH)
+		end
+		sess.game.office.rev += 1
+		sess.game.money = 1e7
+		Sessions.instance:push(sess)
+		waitFor(function()
+			return App.g.office.level == level and App.g.money == 1e7
+		end)
+		App.go("oficina")
+		M.task.wait()
+		Editor.setSection("remodelacion")
+		for _, r in OfficeCatalog.plan(level).rooms do
+			-- Las paredes que arma la escena miden exactamente los tramos que se cobran.
+			local len = 0
+			for _, w in Scene.roomParts(r.id).walls do
+				len += w.len
+			end
+			eq(len, Office.wallLength(r) * CELL, "nivel " .. level .. " · " .. r.id .. ": paredes de la escena = tramos cobrados")
+			Editor.setRoom(r.id)
+			for k, v in full do
+				Editor.choose(k, v)
+			end
+			local expected = r.w * r.d * F.floor.piso_parquet_1970.price + builtWalls(r) * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + math.ceil(r.w * r.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+			eq(Editor.quote(), expected, "nivel " .. level .. " · " .. r.id .. ": presupuesto")
+		end
+		-- Cancelar: todas vuelven a lo instalado, sin cobrar.
+		local m0 = App.g.money
+		Editor.cancelRemodel()
+		for _, r in OfficeCatalog.plan(level).rooms do
+			check(not Editor.hasDraft(r.id), "nivel " .. level .. " · " .. r.id .. ": sin vista previa tras cancelar")
+			eq(Scene.lookOf(r.id), "piso_cemento|pared_blanca|sin_revestimiento|luz_fluorescente", "nivel " .. level .. " · " .. r.id .. ": aspecto instalado")
+		end
+		eq(App.g.money, m0, "nivel " .. level .. ": cancelar no cobra")
+		-- Confirmar la última habitación del plano: cobro exacto y acabados instalados.
+		local rooms = OfficeCatalog.plan(level).rooms
+		local last = rooms[#rooms]
+		Editor.setRoom(last.id)
+		for k, v in full do
+			Editor.choose(k, v)
+		end
+		local cost = Editor.quote()
+		local res = Editor.confirmRemodel()
+		check(res and res.ok and res.paid == cost, "nivel " .. level .. ": confirmación de " .. last.id)
+		eq(App.g.money, m0 - cost, "nivel " .. level .. ": cobro exacto")
+		eq(App.g.office.finishes[last.id].covering, "madera_1970", "nivel " .. level .. ": instalado")
+		App.go("juego")
+		M.task.wait()
+	end
+	noErrors("Remodelación por niveles en el editor")
 end)
 
 T.finish()
