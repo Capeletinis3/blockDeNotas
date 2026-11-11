@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local OfficeCatalog = require(Shared.OfficeCatalog)
+local Office = require(Shared.Office)
 
 local OfficeModels = require(script.Parent.OfficeModels)
 
@@ -24,7 +25,6 @@ Scene.WALL_H = 6
 Scene.WALL_ALPHA = 0.45 -- paredes normales
 Scene.WALL_FADED = 0.88 -- paredes entre la cámara y la habitación
 
-local FLOOR_COLORS = { piso_cemento = "#8E8C88", piso_parquet_1970 = "#9C6B43", piso_alfombra_1970 = "#5A6E8C" }
 local VALID, INVALID, SELECTED = Color3.fromHex("#42E58D"), Color3.fromHex("#FF5A64"), Color3.fromHex("#3B8BFF")
 
 local state = {
@@ -40,6 +40,11 @@ local state = {
 	highlight = nil :: Highlight?,
 	selectHl = nil :: Highlight?,
 	fade = nil :: number?,
+	lastYaw = nil :: number?,
+	roomParts = {} :: { [string]: any }, -- por habitación: piso, líneas, paredes, revestimiento, luminarias
+	grid = "normal",
+	roomBox = nil :: SelectionBox?,
+	highlighted = nil :: string?,
 }
 
 local function part(parent: Instance, name: string, size: Vector3, cf: CFrame, color: Color3, props: { [string]: any }?): Part
@@ -145,7 +150,32 @@ local function wallRuns(length: number, openAt: { [number]: boolean }): { { numb
 	return runs
 end
 
-local function buildRoom(folder: Folder, id: string, L: any, finish: any)
+local function material(name: any): Enum.Material
+	local ok, m = pcall(function()
+		return (Enum.Material :: any)[name]
+	end)
+	return (ok and m) or Enum.Material.SmoothPlastic
+end
+
+-- MaterialVariant definitivo (si existe en MaterialService con ese nombre); si no, el material provisional.
+local function applySurface(p: BasePart, f: any, fallbackColor: string)
+	p.Material = material(f and f.material)
+	p.Color = Color3.fromHex((f and f.color) or fallbackColor)
+	if f and f.variant then
+		pcall(function()
+			local ms = game:GetService("MaterialService")
+			if ms:FindFirstChild(f.variant) then
+				(p :: any).MaterialVariant = f.variant
+			end
+		end)
+	end
+end
+
+local GRID_ALPHA = { normal = 0.55, tenue = 0.85, oculta = 1 }
+
+-- Geometría fija de una habitación (piso, cuadrícula, accesos, paredes y rótulo). Los acabados se aplican
+-- aparte (Scene.applyLook), sin rearmar nada de esto.
+local function buildRoom(folder: Folder, id: string, L: any)
 	local r = L.room
 	local model = Instance.new("Model")
 	model.Name = "Habitacion_" .. id
@@ -153,15 +183,16 @@ local function buildRoom(folder: Folder, id: string, L: any, finish: any)
 	local W, D = r.w * CELL, r.d * CELL
 	local y0 = Scene.ORIGIN.Y
 	local center = Vector3.new(L.ox + W / 2, y0, L.oz + D / 2)
-	local floorColor = Color3.fromHex(FLOOR_COLORS[finish and finish.floor or ""] or "#8E8C88")
-	part(model, "Piso", Vector3.new(W, 0.4, D), CFrame.new(center - Vector3.new(0, 0.2, 0)), floorColor)
+	local rec = { model = model, floor = nil :: any, lines = {}, walls = {}, cover = {}, lights = nil :: any, look = "", room = r, L = L }
+	rec.floor = part(model, "Piso", Vector3.new(W, 0.4, D), CFrame.new(center - Vector3.new(0, 0.2, 0)), Color3.fromHex("#8E8C88"), { Material = Enum.Material.Concrete })
 	-- Cuadrícula de casillas.
 	local lineColor = Color3.fromHex("#DDE6F5")
+	local alpha = GRID_ALPHA[state.grid] or GRID_ALPHA.normal
 	for i = 0, r.w do
-		part(model, "Linea", Vector3.new(0.06, 0.02, D), CFrame.new(L.ox + i * CELL, y0 + 0.01, L.oz + D / 2), lineColor, { Transparency = 0.55, CastShadow = false })
+		table.insert(rec.lines, part(model, "Linea", Vector3.new(0.06, 0.02, D), CFrame.new(L.ox + i * CELL, y0 + 0.01, L.oz + D / 2), lineColor, { Transparency = alpha, CastShadow = false }))
 	end
 	for j = 0, r.d do
-		part(model, "Linea", Vector3.new(W, 0.02, 0.06), CFrame.new(L.ox + W / 2, y0 + 0.01, L.oz + j * CELL), lineColor, { Transparency = 0.55, CastShadow = false })
+		table.insert(rec.lines, part(model, "Linea", Vector3.new(W, 0.02, 0.06), CFrame.new(L.ox + W / 2, y0 + 0.01, L.oz + j * CELL), lineColor, { Transparency = alpha, CastShadow = false }))
 	end
 	-- Accesos obligatorios (puertas y paso): siempre libres.
 	local openLeft, openRight, openFront, openBack = {}, {}, {}, {}
@@ -181,32 +212,30 @@ local function buildRoom(folder: Folder, id: string, L: any, finish: any)
 			openBack[a[1]] = true
 		end
 	end
-	-- Paredes bajas (sin techo), con una abertura donde hay un acceso pegado al borde.
-	local wallColor = Color3.fromHex("#E8E6E1")
-	local wf = finish and OfficeCatalog.finish("wall", finish.wall)
-	if wf and wf.color then
-		wallColor = Color3.fromHex(wf.color)
-	end
+	-- Paredes bajas (sin techo), con una abertura donde hay un acceso pegado al borde. Cada tramo guarda su
+	-- cara interior para apoyar el revestimiento sin superponer superficies.
 	local H, T = Scene.WALL_H, 0.3
-	local function wall(size: Vector3, pos: Vector3, normal: Vector3)
-		local p = part(model, "Pared", size, CFrame.new(pos), wallColor, { Transparency = Scene.WALL_ALPHA, CastShadow = false })
-		table.insert(state.walls, { part = p, normal = normal })
+	local function wall(size: Vector3, pos: Vector3, normal: Vector3, len: number)
+		local p = part(model, "Pared", size, CFrame.new(pos), Color3.fromHex("#E8E6E1"), { Transparency = Scene.WALL_ALPHA, CastShadow = false })
+		local w = { part = p, normal = normal, len = len, inner = pos - normal * (T / 2), cover = nil :: any }
+		table.insert(state.walls, w)
+		table.insert(rec.walls, w)
 	end
 	for _, run in wallRuns(r.d, openLeft) do
 		local len = (run[2] - run[1]) * CELL
-		wall(Vector3.new(T, H, len), Vector3.new(L.ox - T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(-1, 0, 0))
+		wall(Vector3.new(T, H, len), Vector3.new(L.ox - T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(-1, 0, 0), len)
 	end
 	for _, run in wallRuns(r.d, openRight) do
 		local len = (run[2] - run[1]) * CELL
-		wall(Vector3.new(T, H, len), Vector3.new(L.ox + W + T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(1, 0, 0))
+		wall(Vector3.new(T, H, len), Vector3.new(L.ox + W + T / 2, y0 + H / 2, L.oz + run[1] * CELL + len / 2), Vector3.new(1, 0, 0), len)
 	end
 	for _, run in wallRuns(r.w, openFront) do
 		local len = (run[2] - run[1]) * CELL
-		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz - T / 2), Vector3.new(0, 0, -1))
+		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz - T / 2), Vector3.new(0, 0, -1), len)
 	end
 	for _, run in wallRuns(r.w, openBack) do
 		local len = (run[2] - run[1]) * CELL
-		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz + D + T / 2), Vector3.new(0, 0, 1))
+		wall(Vector3.new(len, H, T), Vector3.new(L.ox + run[1] * CELL + len / 2, y0 + H / 2, L.oz + D + T / 2), Vector3.new(0, 0, 1), len)
 	end
 	-- Nombre de la habitación.
 	local anchor = part(model, "Rotulo", Vector3.new(0.2, 0.2, 0.2), CFrame.new(center + Vector3.new(0, H + 1.5, 0)), Color3.new(0, 0, 0), { Transparency = 1, CastShadow = false })
@@ -224,18 +253,162 @@ local function buildRoom(folder: Folder, id: string, L: any, finish: any)
 	t.TextSize = 16
 	t.Font = Enum.Font.GothamBold
 	t.Parent = bb
+	state.roomParts[id] = rec
 end
 
-local function finishesSig(office: any): string
-	local parts = {}
-	for _, id in state.order do
-		local f = office.finishes and office.finishes[id]
-		table.insert(parts, id .. "=" .. (f and (tostring(f.floor) .. "/" .. tostring(f.wall)) or "-"))
+Scene.MAX_LIGHTS = 4 -- luces locales por habitación (las demás luminarias son solo visuales)
+Scene.COVER_ALPHA = 0.1
+
+-- Posiciones de n luminarias repartidas en la habitación (centros de una grilla regular).
+local function fixtureSpots(r: any, n: number): { { number } }
+	local cols = math.max(1, math.min(n, math.ceil(math.sqrt(n * r.w / r.d))))
+	local rows = math.ceil(n / cols)
+	local out = {}
+	for i = 0, n - 1 do
+		local cx, cy = i % cols, i // cols
+		table.insert(out, { (cx + 0.5) * r.w / cols, (cy + 0.5) * r.d / rows })
 	end
-	return table.concat(parts, ",")
+	return out
 end
 
--- (Re)arma las habitaciones si cambió el nivel o los acabados.
+--[[ Aplica los acabados visibles de una habitación (instalados o en vista previa). Solo cambia lo que difiere
+	del aspecto actual de esa habitación: piso (material y color), pintura, revestimiento (bandas apoyadas en
+	la cara interior de cada pared) y luminarias con sus luces locales. No toca los muebles ni otras
+	habitaciones. ]]
+function Scene.applyLook(roomId: string, finish: any)
+	local rec = state.roomParts[roomId]
+	if not rec or type(finish) ~= "table" then
+		return
+	end
+	local fl = OfficeCatalog.finish("floor", finish.floor)
+	local wl = OfficeCatalog.finish("wall", finish.wall)
+	local cv = OfficeCatalog.finish("covering", finish.covering)
+	local lt = OfficeCatalog.finish("lighting", finish.lighting)
+	local sig = table.concat({ tostring(finish.floor), tostring(finish.wall), tostring(finish.covering), tostring(finish.lighting) }, "|")
+	if rec.look == sig then
+		return
+	end
+	local old = string.split(rec.look, "|")
+	rec.look = sig
+	if old[1] ~= tostring(finish.floor) then
+		applySurface(rec.floor, fl, "#8E8C88")
+	end
+	if old[2] ~= tostring(finish.wall) then
+		for _, w in rec.walls do
+			local tr = w.part.Transparency
+			applySurface(w.part, wl, "#E8E6E1")
+			w.part.Transparency = tr
+		end
+	end
+	if old[3] ~= tostring(finish.covering) then
+		for _, w in rec.walls do
+			if w.cover then
+				w.cover:Destroy()
+				w.cover = nil
+			end
+		end
+		if cv and cv.material ~= "" and cv.height then
+			local t = 0.12
+			for _, w in rec.walls do
+				local n = w.normal
+				local along = math.abs(n.X) > 0.5 and Vector3.new(t, cv.height, w.len) or Vector3.new(w.len, cv.height, t)
+				local pos = Vector3.new(w.inner.X, Scene.ORIGIN.Y + cv.height / 2, w.inner.Z) - n * (t / 2 + 0.01)
+				local c = part(rec.model, "Revestimiento", along, CFrame.new(pos), Color3.new(1, 1, 1), { CastShadow = false })
+				applySurface(c, cv, "#7A4E2D")
+				w.cover = c
+			end
+		end
+		state.fade = nil
+		Scene.fadeWalls(state.lastYaw or 45)
+	end
+	if old[4] ~= tostring(finish.lighting) then
+		if rec.lights then
+			rec.lights:Destroy()
+			rec.lights = nil
+		end
+		if lt then
+			local holder = Instance.new("Model")
+			holder.Name = "Luminarias"
+			holder.Parent = rec.model
+			rec.lights = holder
+			local r, L = rec.room, rec.L
+			local n = Office.finishQuantity(r, lt)
+			local spots = fixtureSpots(r, n)
+			local step = math.max(1, math.ceil(n / Scene.MAX_LIGHTS))
+			local y = Scene.ORIGIN.Y + Scene.WALL_H - 0.3
+			for i, sp in spots do
+				local pos = Vector3.new(L.ox + sp[1] * CELL, y, L.oz + sp[2] * CELL)
+				local fx
+				if lt.fixture == "plafon" then
+					fx = part(holder, "Plafon", Vector3.new(0.18, 1.3, 1.3), CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90)), Color3.fromHex(lt.color or "#FFD7A0"), { Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, CastShadow = false })
+				else
+					fx = part(holder, "Tubo", Vector3.new(1.8, 0.14, 0.35), CFrame.new(pos), Color3.fromHex(lt.color or "#EAF2FF"), { Material = Enum.Material.Neon, CastShadow = false })
+				end
+				if (i - 1) % step == 0 and lt.light then
+					local pl = Instance.new("PointLight")
+					pl.Color = Color3.fromHex(lt.light.color)
+					pl.Brightness = lt.light.brightness
+					-- Alcance suficiente para que pocas luces cubran la habitación.
+					pl.Range = math.min(60, math.max(lt.light.range, math.sqrt(r.w * r.d / math.min(n, Scene.MAX_LIGHTS)) * CELL))
+					pl.Shadows = false
+					pl.Parent = fx
+				end
+			end
+		end
+	end
+end
+
+-- Aspecto aplicado ahora a una habitación (ids de acabado), para verificar.
+function Scene.lookOf(roomId: string): string?
+	local rec = state.roomParts[roomId]
+	return rec and rec.look or nil
+end
+
+function Scene.roomParts(roomId: string): any
+	return state.roomParts[roomId]
+end
+
+-- Cuadrícula: "normal" (colocar muebles), "tenue" (remodelación) u "oculta".
+function Scene.setGrid(mode: string)
+	if state.grid == mode then
+		return
+	end
+	state.grid = mode
+	local alpha = GRID_ALPHA[mode] or GRID_ALPHA.normal
+	for _, rec in state.roomParts do
+		for _, l in rec.lines do
+			l.Transparency = alpha
+		end
+	end
+end
+
+-- Resalta una habitación (borde azul alrededor del piso). nil = ninguna.
+function Scene.highlightRoom(roomId: string?)
+	local rec = roomId and state.roomParts[roomId]
+	if not rec then
+		if state.roomBox then
+			state.roomBox.Adornee = nil
+		end
+		state.highlighted = nil
+		return
+	end
+	local box = state.roomBox
+	if not box then
+		local b = Instance.new("SelectionBox")
+		b.Name = "HabitacionElegida"
+		b.Color3 = Color3.fromHex("#3B8BFF")
+		b.LineThickness = 0.18
+		b.SurfaceTransparency = 0.85
+		b.SurfaceColor3 = Color3.fromHex("#3B8BFF")
+		state.roomBox = b
+		box = b
+	end
+	box.Parent = state.folder
+	box.Adornee = rec.floor
+	state.highlighted = roomId
+end
+
+-- (Re)arma la geometría de las habitaciones solo si cambió el nivel; los acabados se aplican con applyLook.
 function Scene.buildRooms(office: any)
 	if not state.folder then
 		local f = Instance.new("Folder")
@@ -246,32 +419,38 @@ function Scene.buildRooms(office: any)
 	local level = office.level or 1
 	if level ~= state.level then
 		state.rooms, state.order = Scene.layout(level)
+		state.level = level
+		local old = folder:FindFirstChild("Habitaciones")
+		if old then
+			old:Destroy()
+		end
+		table.clear(state.walls)
+		table.clear(state.roomParts)
+		state.fade = nil
+		state.highlighted = nil
+		if state.roomBox then
+			state.roomBox.Adornee = nil
+		end
+		local holder = Instance.new("Folder")
+		holder.Name = "Habitaciones"
+		holder.Parent = folder
+		for _, id in state.order do
+			buildRoom(holder, id, state.rooms[id])
+		end
+		-- Luz de relleno tenue, para que la oficina se vea a cualquier hora (las de cada habitación marcan el
+		-- ambiente).
+		local c = Scene.bounds()
+		local lamp = part(holder, "LuzGeneral", Vector3.new(0.2, 0.2, 0.2), CFrame.new(c + Vector3.new(0, 30, 0)), Color3.new(0, 0, 0), { Transparency = 1, CastShadow = false })
+		local light = Instance.new("PointLight")
+		light.Range = 60
+		light.Brightness = 0.5
+		light.Shadows = false
+		light.Parent = lamp
 	end
-	local sig = level .. "|" .. finishesSig(office)
-	if sig == state.sig and level == state.level then
-		return
-	end
-	state.level, state.sig = level, sig
-	local old = folder:FindFirstChild("Habitaciones")
-	if old then
-		old:Destroy()
-	end
-	table.clear(state.walls)
-	state.fade = nil
-	local holder = Instance.new("Folder")
-	holder.Name = "Habitaciones"
-	holder.Parent = folder
+	-- Acabados instalados (el editor aplica encima los de la vista previa).
 	for _, id in state.order do
-		buildRoom(holder, id, state.rooms[id], office.finishes and office.finishes[id])
+		Scene.applyLook(id, (office.finishes and office.finishes[id]) or OfficeCatalog.DEFAULT_FINISH)
 	end
-	-- Luz propia, para que la oficina se vea igual a cualquier hora del juego.
-	local c = Scene.bounds()
-	local lamp = part(holder, "LuzGeneral", Vector3.new(0.2, 0.2, 0.2), CFrame.new(c + Vector3.new(0, 30, 0)), Color3.new(0, 0, 0), { Transparency = 1, CastShadow = false })
-	local light = Instance.new("PointLight")
-	light.Range = 60
-	light.Brightness = 1.2
-	light.Shadows = false
-	light.Parent = lamp
 end
 
 -- Incluye el nivel: al ampliar, las habitaciones cambian de lugar y los muebles se reubican.
@@ -405,6 +584,7 @@ end
 	la cámara en grados (la cámara está en dirección (sin yaw, cos yaw) desde el centro). Solo recalcula si el
 	ángulo cambió de verdad. ]]
 function Scene.fadeWalls(yaw: number)
+	state.lastYaw = yaw
 	local key = math.floor(yaw / 5 + 0.5)
 	if state.fade == key then
 		return
@@ -415,6 +595,10 @@ function Scene.fadeWalls(yaw: number)
 	for _, w in state.walls do
 		local facing = w.normal:Dot(toCam) > 0.25
 		w.part.Transparency = facing and Scene.WALL_FADED or Scene.WALL_ALPHA
+		if w.cover then
+			-- El revestimiento acompaña a su pared: no tapa la vista cuando la pared se aclara.
+			w.cover.Transparency = facing and Scene.WALL_FADED or Scene.COVER_ALPHA
+		end
 	end
 end
 
@@ -443,7 +627,9 @@ function Scene.destroy()
 	table.clear(state.order)
 	table.clear(state.walls)
 	table.clear(state.furniture)
+	table.clear(state.roomParts)
 	state.preview, state.previewSig, state.highlight, state.selectHl, state.fade = nil, "", nil, nil, nil
+	state.roomBox, state.highlighted, state.grid, state.lastYaw = nil, nil, "normal", nil
 end
 
 Scene._state = state

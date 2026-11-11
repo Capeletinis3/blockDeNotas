@@ -24,10 +24,97 @@ local Screen = {}
 
 local ui = { tab = "catalogo", cat = "todas" }
 local bar: Frame? = nil
+local remodelBar: (any, { Instance? }, { Instance? }) -> ()
 
 local function itemName(id: string?): string
 	local it = id and OfficeCatalog.item(id)
 	return it and it.name or "Mueble"
+end
+
+local function kindName(kind: string): string
+	for _, k in OfficeCatalog.FINISH_KINDS do
+		if k.id == kind then
+			return k.name
+		end
+	end
+	return kind
+end
+
+local function unitText(unit: string, n: number): string
+	local u = OfficeCatalog.FINISH_UNITS[unit] or { unit, unit }
+	return Util.num(n) .. " " .. (n == 1 and u[1] or u[2])
+end
+
+--[[ Panel de presupuesto de Remodelación: habitación, acabados actuales y elegidos, cantidad y precio de cada
+	cambio, total, dinero disponible y restante, y las tres acciones. Todo con Office.remodelQuote (el mismo
+	cálculo que hace el servidor). ]]
+remodelBar = function(o: any, rows: { Instance? }, actions: { Instance? })
+	local st = Editor.state()
+	local g = App.g
+	local r = st.room and OfficeCatalog.room(o.level, st.room)
+	if not r then
+		table.insert(rows, Ui.text("Elegí una habitación (en la lista o haciendo clic en la oficina).", { size = Ui.S.sm, color = T.tx2 }))
+		return
+	end
+	local inst = Editor.installed(r.id)
+	local look = Editor.look(r.id)
+	local cost, lines = Editor.quote(r.id)
+	local byKind = {}
+	if cost then
+		for _, l in lines do
+			byKind[l.kind] = l
+		end
+	end
+	table.insert(rows, Ui.row({
+		Ui.grow(Ui.col({
+			Ui.text("Remodelación de oficina · " .. r.name, { size = Ui.S.base, weight = W.bold, name = "RemodelacionTitulo" }),
+			Ui.text(r.w .. " × " .. r.d .. " casillas (" .. r.w * OfficeCatalog.CELL .. " × " .. r.d * OfficeCatalog.CELL .. " studs) · piso " .. unitText("casilla", Office.roomArea(r)) .. " · paredes " .. unitText("tramo", Office.wallLength(r)), { size = Ui.S.xs, color = T.mut, name = "RemodelacionMedidas" }),
+		}, 2)),
+		Ui.button(st.gridHidden and "Mostrar cuadrícula" or "Ocultar cuadrícula", "q", function()
+			Editor.toggleGrid()
+		end, { small = true, name = "AlternarCuadricula" }),
+	}, 8))
+	for _, k in OfficeCatalog.FINISH_KINDS do
+		local now = OfficeCatalog.finish(k.id, inst[k.id])
+		local sel = OfficeCatalog.finish(k.id, look[k.id])
+		local l = byKind[k.id]
+		table.insert(rows, Ui.row({
+			Ui.inline(k.name, { size = Ui.S.sm, weight = W.semi, color = T.tx2, width = 118 }),
+			Ui.grow(Ui.text((now and now.name or "—") .. (l and ("  →  " .. (sel and sel.name or "—")) or "  ·  sin cambios"), { size = Ui.S.sm, color = l and T.tx or T.mut })),
+			Ui.inline(l and (unitText(l.unit, l.qty) .. " × " .. Util.money(sel and sel.price or 0)) or "", { size = Ui.S.xs, color = T.mut }),
+			Ui.inline(l and Util.money(l.cost) or "—", { size = Ui.S.sm, weight = W.bold, width = 96, align = "R", color = l and T.tx or T.mut }),
+		}, 10, { Name = "Presupuesto_" .. k.id }))
+	end
+	local total = cost or 0
+	local left = g.money - total
+	table.insert(rows, Ui.row({
+		Ui.grow(Ui.text("Total " .. Util.money(total) .. " · disponible " .. Util.money(g.money) .. " · quedaría " .. Util.money(left), { size = Ui.S.sm, weight = W.bold, color = left < 0 and T.re2 or T.tx, name = "RemodelacionTotal" })),
+	}, 8))
+	local others = {}
+	for _, x in OfficeCatalog.plan(o.level).rooms do
+		if x.id ~= r.id and Editor.hasDraft(x.id) then
+			table.insert(others, x.name)
+		end
+	end
+	if #others > 0 then
+		table.insert(rows, Ui.text("También hay vista previa sin confirmar en: " .. table.concat(others, ", ") .. ". Se confirma por habitación; al salir del editor se descarta.", { size = Ui.S.xs, color = T.ye }))
+	end
+	local has = Editor.hasDraft(r.id)
+	local why = (not has and "Elegí al menos un acabado distinto del instalado") or (not cost and tostring(lines)) or (left < 0 and ("Fondos insuficientes: faltan " .. Util.money(-left))) or (st.busy and "Esperá la respuesta") or nil
+	if has and left < 0 then
+		table.insert(rows, Ui.note("r", "Fondos insuficientes: la remodelación cuesta " .. Util.money(total) .. " y tenés " .. Util.money(g.money) .. "."))
+	end
+	table.insert(actions, Ui.button("Confirmar remodelación · " .. Util.money(total), "p", function()
+		task.spawn(Editor.confirmRemodel)
+	end, { small = true, name = "ConfirmarRemodelacion", disabled = why ~= nil, why = why }))
+	table.insert(actions, Ui.button("Restaurar selección", "default", function()
+		Editor.restoreRoom()
+		App.forceRender()
+	end, { small = true, name = "RestaurarSeleccion", disabled = not has, why = "La habitación ya se ve como está instalada" }))
+	table.insert(actions, Ui.button("Cancelar cambios", "q", function()
+		Editor.cancelRemodel()
+		App.forceRender()
+	end, { small = true, name = "CancelarRemodelacion" }))
 end
 
 -- Barra contextual (se rearma sola cuando cambia el modo, la posición o la respuesta del servidor).
@@ -45,7 +132,9 @@ function Screen.updateBar()
 	local o = Editor.office()
 	local rows: { Instance? } = {}
 	local actions: { Instance? } = {}
-	if st.mode == "place" or st.mode == "move" then
+	if st.section == "remodelacion" and o then
+		remodelBar(o, rows, actions)
+	elseif st.mode == "place" or st.mode == "move" then
 		local n = o and Office.count(o, st.item) or 0
 		local item = OfficeCatalog.item(st.item)
 		local cost = st.mode == "move" and "Mover es gratis" or (n > 0 and ("Gratis · en inventario: " .. n) or ("Se compra al confirmar · " .. Util.money(item and item.price or 0)))
@@ -97,9 +186,9 @@ function Screen.updateBar()
 			Ui.button("Reintentar", "p", function()
 				task.spawn(Editor.retry)
 			end, { small = true, name = "ReintentarOperacion", disabled = st.busy, why = "Esperá la respuesta" }),
-			Ui.button("Actualizar estado", "default", function()
-				task.spawn(Editor.dropPending)
-			end, { small = true, name = "DescartarReintento", disabled = st.busy, why = "Esperá la respuesta" }),
+			Ui.button("Actualizar vista", "default", function()
+				task.spawn(Editor.refreshState)
+			end, { small = true, name = "ActualizarVista", disabled = st.busy, why = "Esperá la respuesta" }),
 		}, 8))
 		actions = {}
 	end
@@ -148,10 +237,78 @@ local function itemCard(g: any, o: any, item: any, year: number): Frame
 	}, { gap = 6, pad = 12, name = "Mueble_" .. item.id, stroke = on and { T.vi, 2 } or nil })
 end
 
+-- Tarjeta de un acabado: categoría, material, año, precio por unidad, cantidad para la habitación y costo.
+local function finishCard(_g: any, o: any, kind: string, f: any, year: number): Frame
+	local st = Editor.state()
+	local r = OfficeCatalog.room(o.level, st.room)
+	local installed = Editor.installed(st.room)[kind] == f.id
+	local previewing = not installed and Editor.look(st.room)[kind] == f.id
+	local open = Office.available(f, year)
+	local qty = r and Office.finishQuantity(r, f) or 0
+	local chip = (installed and Ui.chip("Instalado", "cg", { name = "Instalado_" .. f.id })) or (previewing and Ui.chip("En vista previa", "cb", { name = "Previsto_" .. f.id })) or (not open and Ui.chip("Desde " .. f.year, "cy")) or nil
+	local u = OfficeCatalog.FINISH_UNITS[f.unit] or { f.unit, f.unit }
+	return Ui.card({
+		Ui.row({
+			Ui.grow(Ui.col({
+				Ui.text(f.name, { size = Ui.S.base, weight = W.bold }),
+				Ui.text(kindName(kind) .. " · " .. (f.materialName or f.material) .. " · desde " .. f.year, { size = Ui.S.xs, color = T.mut }),
+			}, 2)),
+			chip,
+		}, 8, { v = "T" }),
+		Ui.between(Util.money(f.price) .. " por " .. u[1], unitText(f.unit, qty) .. " · " .. (installed and "ya instalado" or Util.money(qty * f.price)), { size = Ui.S.xs, name = "Costo_" .. f.id }),
+		Ui.button(installed and "Instalado" or (previewing and "En vista previa" or "Probar"), (installed or previewing) and "default" or "p", function()
+			Editor.choose(kind, f.id)
+			App.forceRender()
+		end, { small = true, fill = true, name = "Probar_" .. f.id, disabled = not open or installed, why = installed and "Ya está instalado" or ("Disponible desde " .. f.year) }),
+	}, { gap = 6, pad = 12, name = "Acabado_" .. f.id, stroke = previewing and { T.vi, 2 } or nil })
+end
+
+local function remodelPanel(g: any, o: any): { Instance? }
+	local st = Editor.state()
+	local year = Rules.year(g)
+	local items: { Instance? } = {}
+	local rooms = {}
+	for _, r in OfficeCatalog.plan(o.level).rooms do
+		local label = r.name .. " · " .. r.w .. "×" .. r.d .. (Editor.hasDraft(r.id) and " · sin confirmar" or "")
+		table.insert(rooms, Ui.opt(label, st.room == r.id, function()
+			Editor.setRoom(r.id)
+			App.forceRender()
+		end, { name = "Habitacion_" .. r.id, fill = true, height = 34, align = "L" }))
+	end
+	table.insert(items, Ui.col({ Ui.lbl("Habitación a remodelar"), Ui.col(rooms, 6) }, 6))
+	local kinds = {}
+	for _, k in OfficeCatalog.FINISH_KINDS do
+		table.insert(kinds, Ui.opt(k.name, st.kind == k.id, function()
+			Editor.setKind(k.id)
+			App.forceRender()
+		end, { height = 30, size = Ui.S.sm, name = "Tipo_" .. k.id }))
+	end
+	table.insert(items, Ui.row(kinds, 6, { wrap = true }))
+	table.insert(items, Ui.text("Probar un acabado es gratis y no cambia nada guardado. Se paga al confirmar la remodelación de la habitación.", { size = Ui.S.xs, color = T.mut }))
+	for _, f in OfficeCatalog.finishList(st.kind) do
+		table.insert(items, finishCard(g, o, st.kind, f, year))
+	end
+	return items
+end
+
 local function sidePanel(g: any, o: any): Frame
 	local year = Rules.year(g)
 	local st = Editor.state()
 	local items: { Instance? } = {}
+	if st.section == "remodelacion" then
+		items = remodelPanel(g, o)
+		return Ui.new("Frame", {
+			Name = "LateralOficina",
+			Active = true,
+			BackgroundColor3 = T.panel,
+			BackgroundTransparency = 0.05,
+			Corner = 12,
+			Stroke = T.line,
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -16, 0, 84),
+			Size = UDim2.new(0, App.isPhone() and math.min(320, App.vw - 32) or 360, 1, -100),
+		}, { Ui.scroll(items, { name = "PanelOficina", gap = 10, pad = { 12, 12, 12, 12 } }) })
+	end
 	-- Habitaciones del plano actual.
 	local rooms = {}
 	for _, r in OfficeCatalog.plan(o.level).rooms do
@@ -276,6 +433,14 @@ function Screen.build(content: Frame)
 			Ui.text("Oficinas centrales · " .. sede.office, { size = Ui.S.h3, weight = W.bold, name = "TituloOficina" }),
 			Ui.text("Nivel " .. o.level .. " · " .. #OfficeCatalog.plan(o.level).rooms .. " habitaciones · " .. #o.placed .. " muebles colocados", { size = Ui.S.xs, color = T.mut }),
 		}, 2)),
+		Ui.opt("Mobiliario", Editor.state().section == "mobiliario", function()
+			Editor.setSection("mobiliario")
+			App.forceRender()
+		end, { name = "SeccionMobiliario", height = 36 }),
+		Ui.opt("Remodelación", Editor.state().section == "remodelacion", function()
+			Editor.setSection("remodelacion")
+			App.forceRender()
+		end, { name = "SeccionRemodelacion", height = 36 }),
 		money,
 		Ui.button("Encuadrar", "default", function()
 			Camera.frame(Editor.state().room)

@@ -4576,6 +4576,115 @@ test("[OF3] Acciones de oficina por Sessions: compra única, reenvíos, rechazos
 	eq(g2.money, mb, "sin cobro")
 end)
 
+
+test("[OF4] Remodelación por Sessions: cotización del servidor, sin recobros, rechazos sin cambios, reenvíos, persistencia y ampliación", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 7101, Name = "remo" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	g.money = 50000
+	local R = "oficina_principal"
+	local room = OfficeCatalog.room(g.office.level, R)
+	-- Un mueble colocado: la remodelación no lo toca.
+	check(mgr:request(p, "officePlace", { item = "escritorio_metal_1970", room = R, x = 5, y = 2.5, rot = 0, requestId = rid() }).ok, "escritorio colocado")
+	local furniture = serde.encode("json", g.office.placed)
+	local function req(changes: any, extra: any?): any
+		local body = { room = R, changes = changes, rev = g.office.rev, quote = select(1, Office.remodelQuote(g.office, R, changes, Rules.year(g))), requestId = rid(), companyId = g.company.id }
+		for k, v in extra or {} do
+			body[k] = v
+		end
+		return mgr:request(p, "officeRemodel", body)
+	end
+	-- 1/4. Varios materiales: total = suma de cantidades × precios del catálogo.
+	local F = OfficeCatalog.FINISHES
+	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + 2 * (room.w + room.d) * F.wall.pared_beige_1970.price + 2 * (room.w + room.d) * F.covering.madera_1970.price + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+	local m0 = g.money
+	local rev0 = g.office.rev
+	local id = rid()
+	local changes = { floor = "piso_parquet_1970", wall = "pared_beige_1970", covering = "madera_1970", lighting = "luz_calida_1970" }
+	local r = mgr:request(p, "officeRemodel", { room = R, changes = changes, rev = g.office.rev, quote = expected, requestId = id, companyId = g.company.id })
+	check(r.ok and r.paid == expected, tostring(r.msg))
+	eq(g.money, m0 - expected, "cobra el total exacto")
+	eq(g.office.finishes[R].floor, "piso_parquet_1970", "piso instalado")
+	eq(g.office.finishes[R].lighting, "luz_calida_1970", "iluminación instalada")
+	eq(g.office.rev, rev0 + 1, "sube la revisión de la oficina")
+	eq(serde.encode("json", g.office.placed), furniture, "los muebles no cambian")
+	check(s.pendingSave, "pide el guardado")
+	-- 9. Reenvío con el mismo requestId: respuesta original, sin segundo cobro.
+	local again = mgr:request(p, "officeRemodel", { room = R, changes = changes, rev = rev0, quote = expected, requestId = id, companyId = g.company.id })
+	check(again.duplicate and again.ok and again.paid == expected, "reenvío reconocido")
+	eq(g.money, m0 - expected, "un solo cobro")
+	-- 5. Lo instalado no se vuelve a cobrar.
+	local mA = g.money
+	r = req({ floor = "piso_parquet_1970" })
+	check(not r.ok, "sin cambios efectivos no hay cobro")
+	eq(g.money, mA, "sin cobro")
+	-- Volver a un acabado gratis: 0 y sin reembolso.
+	r = req({ floor = "piso_cemento" })
+	check(r.ok and r.paid == 0, "volver al cemento cuesta 0")
+	eq(g.money, mA, "sin reembolso")
+	-- Rechazos sin cambios.
+	local before, mB = serde.encode("json", g.office), g.money
+	local function bad(what: string, body: any)
+		body.requestId = body.requestId or rid()
+		local res = mgr:request(p, "officeRemodel", body)
+		check(not res.ok, "rechaza " .. what .. ": " .. tostring(res.msg))
+	end
+	local rev = g.office.rev
+	bad("categoría desconocida", { room = R, changes = { techo = "x" }, rev = rev, quote = 0 })
+	bad("id falso", { room = R, changes = { floor = "piso_oro" }, rev = rev, quote = 0 })
+	bad("id de otra categoría", { room = R, changes = { floor = "pared_beige_1970" }, rev = rev, quote = 0 })
+	bad("id no textual", { room = R, changes = { floor = 5 }, rev = rev, quote = 0 })
+	bad("cambios no tabla", { room = R, changes = "piso", rev = rev, quote = 0 })
+	bad("habitación de otro nivel", { room = "direccion", changes = { floor = "piso_alfombra_1970" }, rev = rev, quote = 0 })
+	bad("habitación falsa", { room = "x", changes = { floor = "piso_alfombra_1970" }, rev = rev, quote = 0 })
+	local carpet = room.w * room.d * F.floor.piso_alfombra_1970.price
+	bad("presupuesto desactualizado (precio del cliente)", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = rev, quote = 1 })
+	bad("revisión vieja", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = rev - 1, quote = carpet })
+	bad("sin revisión", { room = R, changes = { floor = "piso_alfombra_1970" }, quote = carpet })
+	bad("otra empresa", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = rev, quote = carpet, companyId = "c-otra" })
+	-- 6. Material de un año futuro (registro de prueba).
+	F.floor.prueba_1999 = { id = "prueba_1999", name = "Futuro", year = 1999, price = 1, unit = "casilla", material = "Marble", materialName = "x" }
+	bad("material futuro", { room = R, changes = { floor = "prueba_1999" }, rev = rev, quote = room.w * room.d })
+	F.floor.prueba_1999 = nil
+	-- 7. Fondos insuficientes.
+	g.money = carpet - 1
+	bad("fondos insuficientes", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = rev, quote = carpet })
+	eq(g.money, carpet - 1, "sin cobro")
+	g.money = mB
+	eq(serde.encode("json", g.office), before, "ningún rechazo cambió la oficina")
+	eq(g.money, mB, "ni el dinero")
+	-- 11. Independencia entre habitaciones (nivel 2: la sala de reuniones no se toca al remodelar la principal).
+	-- 13. Ampliación: la obra terminada conserva los acabados y la sala nueva empieza con los básicos.
+	g.money = 1e9
+	g.counters.unitsSold = 1e6
+	g.reputation = 5
+	clock.c += 30 -- pasa el límite de acciones por minuto
+	clock.t += 30
+	check(mgr:request(p, "upgradeFacility", { kind = "offices", requestId = rid() }).ok, "obra de oficinas")
+	Simulation.simulate(g, s.ctx, Catalog.RULES.gameDayMinutes * 400)
+	eq(g.sede, 2, "oficinas nivel 2")
+	eq(g.office.finishes[R].lighting, "luz_calida_1970", "acabados conservados al ampliar")
+	eq(serde.encode("json", g.office.finishes.sala_reuniones), serde.encode("json", OfficeCatalog.DEFAULT_FINISH), "habitación nueva con acabados básicos")
+	r = req({ wall = "pared_beige_1970" }, { room = "sala_reuniones", quote = 2 * (8 + 6) * F.wall.pared_beige_1970.price })
+	check(r.ok, "remodelar la sala nueva: " .. tostring(r.msg))
+	eq(g.office.finishes[R].wall, "pared_beige_1970", "la principal sigue con su pintura")
+	eq(g.office.finishes.sala_reuniones.floor, "piso_cemento", "la sala solo cambia lo pedido")
+	-- 10. Guardar, salir y cargar en otro servidor.
+	local finishes = serde.encode("json", g.office.finishes)
+	mgr:remove(p)
+	local mgr2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "volver a abrir")
+	eq(serde.encode("json", mgr2.list[p].game.office.finishes), finishes, "acabados conservados al cargar")
+	-- 12. Otra empresa: sus acabados son los básicos.
+	check(mgr2:request(p, "createCompany", { slot = "2", name = "Otra Remo", color = "#42B8E5", logo = "rayo" }).ok, "otra empresa")
+	eq(mgr2.list[p].game.office.finishes[R].floor, "piso_cemento", "la otra empresa no comparte acabados")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

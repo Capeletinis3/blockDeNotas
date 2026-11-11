@@ -3523,6 +3523,363 @@ test("Editor de oficinas (estabilización): inventario inicial, cursor fuera de 
 	noErrors("Estabilización del editor de oficinas")
 end)
 
+
+test("Remodelación de interiores: vista previa gratis, presupuesto, confirmación, rechazos, reintentos, persistencia, empresas, ampliación y escena", function()
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Editor = require("./.build-ui/client/OfficeEditor")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	local F = OfficeCatalog.FINISHES
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	-- Empresa nueva (se libera una ranura de pruebas anteriores si hace falta).
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		for k, v in App.profile.slots do
+			if v and (v.name == "Muebles Uno" or v.name == "Oficinas SA") then
+				App.request("deleteCompany", { slot = k, confirm = v.name })
+				slot = k
+				break
+			end
+		end
+	end
+	check(slot ~= nil, "ranura libre")
+	check(App.request("createCompany", { slot = slot, name = "Remodela Uno", color = "#FF8A3D", logo = "pico" }).ok, "empresa creada")
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = 5000
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.money == 5000
+	end)
+	App.go("oficina")
+	M.task.wait()
+	local R = "oficina_principal"
+	local room = OfficeCatalog.room(App.g.office.level, R)
+	-- Un mueble colocado antes de remodelar.
+	Editor.startPlace("escritorio_metal_1970")
+	Editor.hover(R, 5, 2.5)
+	check(Editor.confirm().ok, "escritorio colocado")
+	Editor.cancel()
+	local furniture = serde.encode("json", App.g.office.placed)
+	local deskModel = Scene.furnitureModel(App.g.office.placed[1].id)
+	local deskCf = deskModel:GetPivot()
+	-- Sección Remodelación.
+	clickN("SeccionRemodelacion")
+	M.task.wait()
+	eq(Editor.state().section, "remodelacion", "sección Remodelación")
+	check(named("Tipo_floor") and named("Tipo_wall") and named("Tipo_covering") and named("Tipo_lighting"), "cuatro categorías")
+	check(named("RemodelacionTitulo") ~= nil and named("RemodelacionMedidas") ~= nil, "habitación y medidas en el presupuesto")
+	eq(Scene._state.highlighted, R, "la habitación elegida se resalta")
+	-- 2. Vista previa: cambia la escena, no el dinero, ni g.office.finishes, ni se envía nada.
+	local money0, finishes0 = App.g.money, serde.encode("json", App.g.office.finishes)
+	local inv0 = M.stats.invokes
+	clickN("Probar_piso_parquet_1970")
+	M.task.wait()
+	eq(Scene.roomParts(R).floor.Material, M.Enum.Material.WoodPlanks, "el piso de la escena pasa a parquet")
+	eq(App.g.money, money0, "sin cobro")
+	eq(serde.encode("json", App.g.office.finishes), finishes0, "sin tocar los acabados guardados")
+	eq(M.stats.invokes, inv0, "sin solicitudes al servidor")
+	check(named("Previsto_piso_parquet_1970") ~= nil, "la tarjeta marca la vista previa")
+	-- Reemplazar la elección cuantas veces se quiera.
+	Editor.choose("floor", "piso_alfombra_1970")
+	eq(Scene.roomParts(R).floor.Material, M.Enum.Material.Fabric, "alfombra")
+	Editor.choose("floor", "piso_parquet_1970")
+	-- 16. Los cuatro tipos se ven en la escena.
+	Editor.choose("wall", "pared_beige_1970")
+	Editor.choose("covering", "madera_1970")
+	Editor.choose("lighting", "luz_calida_1970")
+	local rp = Scene.roomParts(R)
+	eq(rp.walls[1].part.Color, M.Color3.fromHex(F.wall.pared_beige_1970.color), "pintura beige en las paredes")
+	local covers, wood = 0, 0
+	for _, w in rp.walls do
+		if w.cover then
+			covers += 1
+			if w.cover.Material == M.Enum.Material.Wood then
+				wood += 1
+			end
+		end
+	end
+	check(covers == #rp.walls and wood == covers, "revestimiento de madera en cada tramo de pared (" .. covers .. ")")
+	local fixtures, lights = 0, 0
+	for _, d in rp.lights:GetDescendants() do
+		if d.Name == "Plafon" then
+			fixtures += 1
+		elseif d.ClassName == "PointLight" then
+			lights += 1
+			check(d.Color == M.Color3.fromHex(F.lighting.luz_calida_1970.light.color), "luz cálida")
+		end
+	end
+	eq(fixtures, Office.finishQuantity(room, F.lighting.luz_calida_1970), "una luminaria por cada una presupuestada")
+	check(lights >= 1 and lights <= Scene.MAX_LIGHTS, "pocas luces locales (" .. lights .. ")")
+	eq(M.services.Lighting.Brightness, M.services.Lighting.Brightness, "sin tocar Lighting")
+	-- 14. Los muebles no se mueven al cambiar materiales.
+	check(deskModel.Parent ~= nil and (deskModel:GetPivot().Position - deskCf.Position).Magnitude < 1e-6, "el escritorio sigue en su lugar")
+	eq(serde.encode("json", App.g.office.placed), furniture, "la distribución no cambia")
+	-- 4. Presupuesto: suma de los cambios efectivos con las medidas reales del plano.
+	local expected = room.w * room.d * F.floor.piso_parquet_1970.price + 2 * (room.w + room.d) * (F.wall.pared_beige_1970.price + F.covering.madera_1970.price) + math.ceil(room.w * room.d / OfficeCatalog.LIGHT_AREA) * F.lighting.luz_calida_1970.price
+	local cost = Editor.quote()
+	eq(cost, expected, "total del presupuesto")
+	check(named("Presupuesto_floor") ~= nil and named("RemodelacionTotal") ~= nil, "líneas y total en el panel")
+	-- 7. Fondos insuficientes: no se puede confirmar.
+	check(expected > App.g.money, "la remodelación completa supera el dinero (" .. expected .. ")")
+	local btn = named("ConfirmarRemodelacion")
+	check(btn ~= nil and btn:GetAttribute("disabled") == true, "botón deshabilitado")
+	inv0 = M.stats.invokes
+	local r = Editor.confirmRemodel()
+	check(r and not r.ok and string.find(r.msg, "Fondos", 1, true) ~= nil, "explica los fondos insuficientes")
+	eq(M.stats.invokes, inv0, "ni siquiera se envía")
+	-- 3. Restaurar selección y cancelar: vuelve lo instalado, sin cobrar.
+	clickN("RestaurarSeleccion")
+	M.task.wait()
+	eq(Scene.roomParts(R).floor.Material, M.Enum.Material.Concrete, "restaurar: vuelve el cemento")
+	check(not Editor.hasDraft(R), "sin vista previa")
+	Editor.choose("floor", "piso_parquet_1970")
+	Editor.setRoom("oficina_principal")
+	clickN("CancelarRemodelacion")
+	M.task.wait()
+	eq(Scene.roomParts(R).floor.Material, M.Enum.Material.Concrete, "cancelar: vuelve el aspecto instalado")
+	eq(App.g.money, money0, "sin cobro")
+	-- 1/4. Remodelar con varios materiales y pagar el total exacto.
+	sess.game.money = 100000
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.money == 100000
+	end)
+	Editor.choose("floor", "piso_parquet_1970")
+	Editor.choose("wall", "pared_beige_1970")
+	Editor.choose("covering", "madera_1970")
+	Editor.choose("lighting", "luz_calida_1970")
+	r = Editor.confirmRemodel()
+	check(r and r.ok and r.paid == expected, "remodelación confirmada: " .. tostring(r and r.msg))
+	eq(App.g.money, 100000 - expected, "pagó el total exacto una vez")
+	eq(App.g.office.finishes[R].floor, "piso_parquet_1970", "acabados instalados")
+	check(not Editor.hasDraft(R), "la vista previa queda instalada")
+	eq(serde.encode("json", App.g.office.placed), furniture, "los muebles siguen igual")
+	-- 5. Lo instalado no se cobra de nuevo.
+	App.forceRender()
+	M.task.wait()
+	Editor.setKind("floor")
+	App.forceRender()
+	M.task.wait()
+	check(named("Instalado_piso_parquet_1970") ~= nil, "el parquet figura instalado")
+	check(not Editor.choose("floor", "piso_parquet_1970") or not Editor.hasDraft(R), "elegir lo instalado no genera cambios")
+	r = Editor.confirmRemodel()
+	check(r and not r.ok, "sin cambios no hay nada que cobrar")
+	eq(App.g.money, 100000 - expected, "sin cobro")
+	-- 6. Material futuro: bloqueado en el catálogo y rechazado.
+	F.floor.prueba_2001 = { id = "prueba_2001", name = "Porcelanato", year = 2001, price = 10, unit = "casilla", material = "Marble", materialName = "Cerámica" }
+	App.forceRender()
+	M.task.wait()
+	local fb = named("Probar_prueba_2001")
+	check(fb ~= nil and fb:GetAttribute("disabled") == true, "material futuro bloqueado (y el editor lo muestra sin cambios en el código)")
+	check(not Editor.choose("floor", "prueba_2001"), "no se puede probar")
+	check(not App.request("officeRemodel", { room = R, changes = { floor = "prueba_2001" }, rev = App.g.office.rev, quote = room.w * room.d * 10, companyId = App.g.company.id }).ok, "el servidor lo rechaza")
+	F.floor.prueba_2001 = nil
+	-- 8. Identificadores falsos.
+	local m1 = App.g.money
+	check(not App.request("officeRemodel", { room = R, changes = { floor = "piso_falso" }, rev = App.g.office.rev, quote = 0 }).ok, "id falso")
+	check(not App.request("officeRemodel", { room = "falsa", changes = { floor = "piso_alfombra_1970" }, rev = App.g.office.rev, quote = 0 }).ok, "habitación falsa")
+	check(not App.request("officeRemodel", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = App.g.office.rev, quote = 1 }).ok, "precio inventado por el cliente")
+	eq(App.g.money, m1, "ningún rechazo cobra")
+	-- 9. Reintento sin cobro doble: se pierde la respuesta de una remodelación que el servidor aplicó.
+	local rf = M.services.ReplicatedStorage.CarEmpireRemotes.Request
+	local orig = rawget(rf, "__props").OnServerInvoke
+	rawget(rf, "__props").OnServerInvoke = function(pl, action, body)
+		local res = orig(pl, action, body)
+		rawget(rf, "__props").OnServerInvoke = orig
+		error("respuesta perdida")
+		return res
+	end
+	local alfombra = room.w * room.d * F.floor.piso_alfombra_1970.price
+	Editor.choose("floor", "piso_alfombra_1970")
+	r = Editor.confirmRemodel()
+	check(r and r.noResponse and Editor.state().pending ~= nil, "operación incierta guardada con su id")
+	waitFor(function()
+		return App.g.money == m1 - alfombra
+	end)
+	eq(App.g.money, m1 - alfombra, "el servidor la aplicó una vez")
+	-- 11. Pendiente por empresa: cambiar de empresa no la pierde ni la mezcla.
+	local pendingId = Editor.state().pending.requestId
+	App.go("juego")
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	local other
+	for k, v in App.profile.slots do
+		if v and k ~= slot then
+			other = k
+			break
+		end
+	end
+	if other then
+		App.request("selectSlot", { slot = other })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+		App.go("oficina")
+		M.task.wait()
+		check(Editor.state().pending == nil, "la otra empresa no hereda la operación incierta")
+		check(not Editor.hasDraft(R), "ni vistas previas")
+		-- 12. Independencia entre empresas: sus acabados son los propios.
+		eq(App.g.office.finishes[R].floor, "piso_cemento", "la otra empresa conserva sus propios acabados (no la alfombra)")
+		eq(Scene.lookOf(R), table.concat({ App.g.office.finishes[R].floor, App.g.office.finishes[R].wall, App.g.office.finishes[R].covering, App.g.office.finishes[R].lighting }, "|"), "la escena muestra los de esta empresa")
+		-- Un reintento de la otra empresa llegando acá se rechaza (companyId).
+		local wrong = App.request("officeRemodel", { room = R, changes = { floor = "piso_alfombra_1970" }, rev = App.g.office.rev, quote = alfombra, companyId = "c-otra-empresa" })
+		check(not wrong.ok, "una operación de otra empresa no se aplica")
+		App.go("juego")
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	App.request("selectSlot", { slot = slot })
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	App.go("oficina")
+	M.task.wait()
+	check(Editor.state().pending ~= nil and Editor.state().pending.requestId == pendingId, "al volver, la operación incierta sigue con su id")
+	-- Actualizar la vista no la descarta.
+	Editor.refreshState()
+	check(Editor.state().pending ~= nil, "actualizar la vista no la descarta")
+	r = Editor.retry()
+	check(r and r.duplicate, "el reintento se reconoce como ya aplicado")
+	check(Editor.state().pending == nil, "y queda resuelta")
+	eq(App.g.money, m1 - alfombra, "un solo cobro")
+	eq(App.g.office.finishes[R].floor, "piso_alfombra_1970", "acabado aplicado una vez")
+	-- 11. Independencia entre habitaciones (nivel 2) y 13. ampliación sin perder acabados.
+	sess = Sessions.instance.list[player]
+	sess.game.money = 1e9
+	sess.game.counters.unitsSold = 1e6
+	sess.game.reputation = 5
+	Sessions.instance:push(sess)
+	check(App.request("upgradeFacility", { kind = "offices" }).ok, "obra de oficinas")
+	App.go("juego")
+	App.request("setSpeed", { speed = 3 })
+	for _ = 1, 400 do
+		advance(1)
+		if App.g.sede >= 2 then
+			break
+		end
+	end
+	App.request("setSpeed", { speed = 1 })
+	eq(App.g.sede, 2, "oficinas nivel 2")
+	App.go("oficina")
+	M.task.wait()
+	Editor.setSection("remodelacion")
+	eq(App.g.office.finishes[R].floor, "piso_alfombra_1970", "la principal conserva sus acabados")
+	eq(App.g.office.finishes.sala_reuniones.floor, "piso_cemento", "la sala nueva empieza con los básicos")
+	Editor.setRoom("sala_reuniones")
+	Editor.choose("wall", "pared_beige_1970")
+	r = Editor.confirmRemodel()
+	check(r and r.ok, "remodelar la sala nueva")
+	eq(App.g.office.finishes[R].wall, "pared_beige_1970", "la principal no cambia por la sala")
+	eq(App.g.office.finishes.sala_reuniones.wall, "pared_beige_1970", "la sala tiene su pintura")
+	eq(App.g.office.finishes.sala_reuniones.floor, "piso_cemento", "y solo lo pedido")
+	-- 10. Guardar, salir y volver: los acabados confirmados siguen; la vista previa no se guarda.
+	Editor.setRoom(R)
+	Editor.choose("floor", "piso_cemento")
+	local saved = serde.encode("json", App.g.office.finishes)
+	App.request("saveNow", {})
+	App.go("juego")
+	M.task.wait()
+	check(not Editor.isActive() and M.services.Workspace:FindFirstChild("EditorOficina") == nil, "al salir se libera la escena (luces incluidas)")
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	App.request("selectSlot", { slot = slot })
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	eq(serde.encode("json", App.g.office.finishes), saved, "acabados confirmados conservados; la vista previa no se guardó")
+	-- 15. Abrir y cerrar el editor muchas veces sin fugas.
+	local function live(sigName: string, inst: any): number
+		local sig = rawget(inst, "__signals")[sigName]
+		local n = 0
+		for _, h in (sig and sig.handlers) or {} do
+			if h.connected then
+				n += 1
+			end
+		end
+		return n
+	end
+	local UIS, RS = M.services.UserInputService, M.services.RunService
+	local a0, b0, c0 = live("InputBegan", UIS), live("InputChanged", UIS), live("RenderStepped", RS)
+	App.renderError = nil
+	for _ = 1, 4 do
+		App.go("oficina")
+		M.task.wait()
+		Editor.setSection("remodelacion")
+		Editor.choose("lighting", "luz_fluorescente")
+		Editor.choose("covering", "sin_revestimiento")
+		App.go("juego")
+		M.task.wait()
+	end
+	eq(live("InputBegan", UIS), a0, "InputBegan sin conexiones nuevas")
+	eq(live("InputChanged", UIS), b0, "InputChanged sin conexiones nuevas")
+	eq(live("RenderStepped", RS), c0, "RenderStepped sin conexiones nuevas")
+	check(M.services.Workspace:FindFirstChild("EditorOficina") == nil, "ninguna escena ni luz queda en el Workspace")
+	check(App.renderError == nil, "sin errores")
+	noErrors("Remodelación")
+end)
+
+
+test("Remodelación en oficinas de nivel 1 a 5: todas las habitaciones con todos los acabados, pocas luces y sin restos", function()
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	for level = 1, 5 do
+		local o = Office.new(level)
+		Scene.buildRooms(o)
+		local rooms = OfficeCatalog.plan(level).rooms
+		for _, r in rooms do
+			for _, fl in OfficeCatalog.finishList("floor") do
+				for _, lt in OfficeCatalog.finishList("lighting") do
+					local look = { floor = fl.id, wall = "pared_beige_1970", covering = "madera_1970", lighting = lt.id }
+					Scene.applyLook(r.id, look)
+					eq(Scene.lookOf(r.id), table.concat({ fl.id, "pared_beige_1970", "madera_1970", lt.id }, "|"), "nivel " .. level .. " · " .. r.id .. ": acabado aplicado")
+				end
+			end
+			Scene.applyLook(r.id, OfficeCatalog.DEFAULT_FINISH)
+		end
+		local lights, covers = 0, 0
+		for _, d in Scene._state.folder:GetDescendants() do
+			if d.ClassName == "PointLight" then
+				lights += 1
+			elseif d.Name == "Revestimiento" then
+				covers += 1
+			end
+		end
+		check(lights <= #rooms * Scene.MAX_LIGHTS + 1, "nivel " .. level .. ": luces acotadas (" .. lights .. ")")
+		eq(covers, 0, "nivel " .. level .. ": sin revestimientos huérfanos al volver a «sin revestimiento»")
+		Scene.destroy()
+	end
+	check(Scene._state.folder == nil, "la escena se libera")
+	noErrors("Remodelación por niveles")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

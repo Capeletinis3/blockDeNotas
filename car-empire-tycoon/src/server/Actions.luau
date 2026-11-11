@@ -953,14 +953,37 @@ local function officeReq(payload: any, keys: { string }): any
 	req.opId = arg(payload, "requestId")
 	return req
 end
+-- companyId (opcional): la empresa para la que el editor armó la operación. Si no es la activa (por ejemplo, un
+-- reintento que llega después de cambiar de empresa), se rechaza sin tocar nada.
+local function otherCompany(g: any, payload: any): boolean
+	local id = arg(payload, "companyId")
+	return id ~= nil and id ~= (g.company and g.company.id)
+end
+local WRONG_COMPANY = { ok = false, msg = "Esa operación es de otra empresa: no se aplicó." }
 function Actions.officePlace(g: any, _ctx: any, payload: any): any
+	if otherCompany(g, payload) then
+		return WRONG_COMPANY
+	end
 	return OfficeService.place(g, officeReq(payload, { "item", "room", "x", "y", "rot" }))
 end
 function Actions.officeMove(g: any, _ctx: any, payload: any): any
+	if otherCompany(g, payload) then
+		return WRONG_COMPANY
+	end
 	return OfficeService.move(g, officeReq(payload, { "instance", "room", "x", "y", "rot" }))
 end
 function Actions.officeRemove(g: any, _ctx: any, payload: any): any
+	if otherCompany(g, payload) then
+		return WRONG_COMPANY
+	end
 	return OfficeService.remove(g, officeReq(payload, { "instance" }))
+end
+-- Remodelación de una habitación: payload = { room, changes = { floor?, wall?, covering?, lighting? }, rev, quote }.
+function Actions.officeRemodel(g: any, _ctx: any, payload: any): any
+	if otherCompany(g, payload) then
+		return WRONG_COMPANY
+	end
+	return OfficeService.remodel(g, officeReq(payload, { "room", "changes", "rev", "quote" }))
 end
 
 Actions.handlers = {
@@ -973,7 +996,7 @@ Actions.handlers = {
 	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept, startTraining = Actions.startTraining,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
 	setSpeed = Actions.setSpeed,
-	officePlace = Actions.officePlace, officeMove = Actions.officeMove, officeRemove = Actions.officeRemove,
+	officePlace = Actions.officePlace, officeMove = Actions.officeMove, officeRemove = Actions.officeRemove, officeRemodel = Actions.officeRemodel,
 }
 
 -- Consultas sin efectos: no marcan la partida como modificada ni requieren identificador único.
@@ -984,7 +1007,7 @@ Actions.economic = {
 	saveDesign = true, finalizeDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, startCampaign = true, cancelCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
 	claimMission = true, claimDaily = true, expandSede = true, upgradeFacility = true, expandGlobal = true,
-	officePlace = true, officeMove = true, officeRemove = true,
+	officePlace = true, officeMove = true, officeRemove = true, officeRemodel = true,
 }
 
 -- Acciones que justifican guardar enseguida (además del autoguardado periódico).

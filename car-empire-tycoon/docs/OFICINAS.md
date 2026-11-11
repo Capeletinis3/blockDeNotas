@@ -64,3 +64,37 @@ Editor isométrico (cámara, cuadrícula visible, techo oculto, paredes semitran
 - Cursor fuera de las habitaciones: se olvida la posición anterior y la vista previa desaparece. Confirmar no envía nada.
 - Reintentos: cada operación del editor lleva su `requestId`. Si no hay respuesta (`App.request` devuelve `noResponse`) o el servidor no la procesó (`retry`: acción en curso o límite de acciones), queda pendiente con ese mismo id. «Reintentar», o cualquier confirmación siguiente, la reenvía igual y el servidor responde `duplicate` si ya la había aplicado; después se pide el estado con `sync`.
 - Medidas: el tamaño declarado de cada mueble nunca supera sus casillas. El sofá pasó de 2,4 a 2 studs de profundidad, y una prueba mide todas las piezas de los 8 modelos provisionales.
+
+## Etapa 3: remodelación de interiores (sin probar en Roblox Studio)
+
+Sin cambios de esquema (19). Los acabados ya vivían en `g.office.finishes[habitación]`.
+- **Catálogo** (`OfficeCatalog`): mismos precios. Se agregaron datos visuales a cada acabado: `materialName`, `color`, `variant` opcional (MaterialVariant definitivo), `height` del revestimiento, y `light` y `fixture` de la iluminación. También `FINISH_KINDS`, `FINISH_UNITS` y `finishList(tipo)`. Un acabado nuevo aparece en el editor y en la escena solo con sus datos.
+- **Servidor** (`OfficeService.remodel`, acción `officeRemodel`, económica):
+  - El cliente manda la habitación, los ids elegidos por categoría, `rev` y `quote`.
+  - El servidor recalcula con `Office.remodelQuote` (plano real del nivel y año de la empresa).
+  - Rechaza sin cambiar nada:
+    - habitaciones de otro nivel, categorías o ids desconocidos, materiales futuros;
+    - pedidos sin cambios efectivos;
+    - `rev` distinta (la oficina cambió) o `quote` distinto (presupuesto desactualizado);
+    - fondos insuficientes;
+    - una operación de otra empresa (`companyId`).
+  - Lo instalado no se cobra. Volver a un acabado gratis cuesta 0 y no reembolsa.
+  - Cobra, actualiza los acabados, sube `rev`, registra el `opId` y guarda enseguida.
+- **Escena** (`OfficeScene`): la geometría se arma una vez por nivel y `applyLook(habitación, acabados)` cambia solo lo que difiere:
+  - material y color del piso;
+  - pintura de las paredes;
+  - revestimiento como banda apoyada en la cara interior de cada pared (sin superficies superpuestas; se aclara con su pared);
+  - luminarias provisionales con hasta 4 PointLight por habitación.
+  - No toca Lighting ni muebles. Cuadrícula normal, tenue u oculta. La habitación elegida se marca con un SelectionBox.
+- **Editor** (`OfficeEditor`): secciones Mobiliario y Remodelación.
+  - `drafts[habitación]` es solo vista previa: no toca la partida, no cobra y no envía nada.
+  - Funciones: `choose`, `quote`, `restoreRoom` (Restaurar selección), `cancelRemodel` (Cancelar cambios) y `confirmRemodel`.
+  - Al salir del editor o cambiar de empresa los borradores se descartan.
+- **Operaciones inciertas**:
+  - Se guardan por empresa (`pendingByCompany`) con su `requestId` y `companyId`, y sobreviven a salir del editor y a cambiar de empresa.
+  - Solo se resuelven con una respuesta del servidor a ese mismo `requestId`; «Actualizar vista» no las descarta.
+  - Una respuesta tardía de otra empresa no toca la empresa abierta.
+- **Pantalla** (`ScreenOffice`):
+  - Selector Mobiliario / Remodelación.
+  - Panel lateral con habitaciones (marca «sin confirmar»), las cuatro categorías y tarjetas de acabado: categoría, material, año, precio por unidad, cantidad para la habitación y costo.
+  - Panel de presupuesto: actual → elegido, cantidad y costo por línea, total, dinero disponible y restante, y los botones Confirmar (con el costo), Restaurar selección y Cancelar cambios.

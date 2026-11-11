@@ -94,31 +94,63 @@ end
 OfficeCatalog.BONUS_DECAY = 0.5
 
 --[[ Acabados. Unidades: piso por casilla de superficie, paredes y revestimientos por tramo de pared
-	(1 tramo = 1 casilla de largo), iluminación por luminaria (una cada LIGHT_AREA casillas). ]]
+	(1 tramo = 1 casilla de largo), iluminación por luminaria (una cada LIGHT_AREA casillas). Una casilla mide
+	CELL × CELL studs: las cantidades son casillas y tramos de la cuadrícula, no metros cuadrados.
+
+	Datos visuales (los lee OfficeScene; un acabado nuevo solo necesita sus datos, no cambios en el editor):
+	  materialName = nombre que ve el jugador · material = Enum.Material para Parts provisionales ·
+	  color = color base · variant = MaterialVariant definitivo futuro (opcional; si existe en
+	  MaterialService se usa) · covering.height = alto del revestimiento en studs ·
+	  lighting.light = { color, brightness, range } (luz local) y lighting.fixture = "tubo" | "plafon". ]]
 OfficeCatalog.LIGHT_AREA = 12
+OfficeCatalog.FINISH_KINDS = {
+	{ id = "floor", name = "Pisos" },
+	{ id = "wall", name = "Paredes" },
+	{ id = "covering", name = "Revestimientos" },
+	{ id = "lighting", name = "Iluminación" },
+}
+OfficeCatalog.FINISH_UNITS = { casilla = { "casilla", "casillas" }, tramo = { "tramo", "tramos" }, unidad = { "luminaria", "luminarias" } }
 OfficeCatalog.FINISHES = {
 	floor = {
-		piso_cemento = { name = "Cemento alisado", year = 1970, price = 0, unit = "casilla", material = "Concrete" },
-		piso_parquet_1970 = { name = "Parquet de roble", year = 1970, price = 40, unit = "casilla", material = "WoodPlanks" },
-		piso_alfombra_1970 = { name = "Alfombra", year = 1970, price = 30, unit = "casilla", material = "Fabric" },
+		piso_cemento = { name = "Cemento alisado", year = 1970, price = 0, unit = "casilla", material = "Concrete", materialName = "Hormigón", color = "#8E8C88" },
+		piso_parquet_1970 = { name = "Parquet de roble", year = 1970, price = 40, unit = "casilla", material = "WoodPlanks", materialName = "Madera de roble", color = "#A9744A" },
+		piso_alfombra_1970 = { name = "Alfombra", year = 1970, price = 30, unit = "casilla", material = "Fabric", materialName = "Textil", color = "#5A6E8C" },
 	},
 	wall = {
-		pared_blanca = { name = "Pintura blanca", year = 1970, price = 0, unit = "tramo", material = "SmoothPlastic", color = "#E8E6E1" },
-		pared_beige_1970 = { name = "Pintura beige", year = 1970, price = 15, unit = "tramo", material = "SmoothPlastic", color = "#D9C8A6" },
+		pared_blanca = { name = "Pintura blanca", year = 1970, price = 0, unit = "tramo", material = "SmoothPlastic", materialName = "Pintura látex", color = "#E8E6E1" },
+		pared_beige_1970 = { name = "Pintura beige", year = 1970, price = 15, unit = "tramo", material = "SmoothPlastic", materialName = "Pintura látex", color = "#D9C8A6" },
 	},
 	covering = {
-		sin_revestimiento = { name = "Sin revestimiento", year = 1970, price = 0, unit = "tramo", material = "" },
-		madera_1970 = { name = "Revestimiento de madera", year = 1970, price = 60, unit = "tramo", material = "Wood" },
+		sin_revestimiento = { name = "Sin revestimiento", year = 1970, price = 0, unit = "tramo", material = "", materialName = "—" },
+		madera_1970 = { name = "Revestimiento de madera", year = 1970, price = 60, unit = "tramo", material = "Wood", materialName = "Madera", color = "#7A4E2D", height = 2.6 },
 	},
 	lighting = {
-		luz_fluorescente = { name = "Tubos fluorescentes", year = 1970, price = 0, unit = "unidad", material = "Fluorescente" },
-		luz_calida_1970 = { name = "Plafones cálidos", year = 1970, price = 120, unit = "unidad", material = "Calida" },
+		luz_fluorescente = { name = "Tubos fluorescentes", year = 1970, price = 0, unit = "unidad", material = "Fluorescente", materialName = "Luz fría (tubo)", color = "#EAF2FF", fixture = "tubo", light = { color = "#DDE9FF", brightness = 1.3, range = 13 } },
+		luz_calida_1970 = { name = "Plafones cálidos", year = 1970, price = 120, unit = "unidad", material = "Calida", materialName = "Luz cálida (plafón)", color = "#FFD7A0", fixture = "plafon", light = { color = "#FFB866", brightness = 1.6, range = 12 } },
 	},
 }
 for _, group in OfficeCatalog.FINISHES do
 	for id, f in group do
 		(f :: any).id = id
 	end
+end
+
+-- Acabados de un tipo ordenados por año y precio (para el editor: un acabado nuevo aparece solo).
+function OfficeCatalog.finishList(kind: string): { any }
+	local out = {}
+	for _, f in OfficeCatalog.FINISHES[kind] or {} do
+		table.insert(out, f)
+	end
+	table.sort(out, function(a: any, b: any): boolean
+		if a.year ~= b.year then
+			return a.year < b.year
+		end
+		if a.price ~= b.price then
+			return a.price < b.price
+		end
+		return a.id < b.id
+	end)
+	return out
 end
 -- Acabados básicos de una habitación nueva (gratis).
 OfficeCatalog.DEFAULT_FINISH = { floor = "piso_cemento", wall = "pared_blanca", covering = "sin_revestimiento", lighting = "luz_fluorescente" }
