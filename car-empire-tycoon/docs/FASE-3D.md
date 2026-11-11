@@ -29,6 +29,8 @@ definitivos se pueden incorporar **sin tocar la lógica del juego**.
   `spec.wheels`, `spec.body`, `spec.interior` y `spec.parts` dentro de `CarModel.fromAssets`.
 - **Sedes:** poner un `Model` por nivel en `ServerStorage.CarEmpireAssets.Sedes.Sede1` … `Sede5`
   (`Catalog.SEDES[n].asset`). `Garage:applySedeModel` lo ubica en la parcela al cargar y al ampliar.
+  Para el avatar del dueño, el edificio puede traer una carpeta `PuntosAvatar` con partes (lugares por
+  donde camina), un `Seat` (silla del escritorio) y una parte `FrenteEscritorio` (mirando al escritorio).
 - **Producción y concesionario:** `Garage:update` ya sabe qué lote se fabrica (`Rules.producingLots`) y
   qué modelos tienen stock: ahí se pueden animar líneas o mostrar autos en la exhibición.
 

@@ -189,3 +189,18 @@ Respaldo: tag `respaldo-pre-investigacion` y copia del `.rbxl` anterior. La lóg
 - `Dialogs.research`: confirmación obligatoria. Abrirla no cobra. Muestra los costos definitivos con su base y el recargo (`Rules.researchCost` ahora informa `base` y `penalty`), requisitos, recursos antes y después, y la advertencia. Se recalcula sola si algo cambia mientras está abierta.
 - `ScreenSheet`: modo `custom` para pantallas con distribución propia.
 - Pruebas: `tests/run.luau` [ID] y `tests/ui.luau` «Centro de investigación» (categorías, filtros, estados, franja, confirmación sin cobro, cobro único, duplicadas, tope de 5 años, recargo, pausa y lo incluido desde el inicio).
+
+## Auditoría visual, Personal, Instalaciones y avatar del dueño (sin probar en Studio)
+
+Respaldo: tag `respaldo-pre-auditoria-visual` y copia del `.rbxl` anterior. Sin cambios de economía ni de guardado (sin migraciones).
+- **Visual general (`Ui.T` / `Ui.S`):** base azul oscuro y acentos azules (antes violeta), botones secundarios y deshabilitados con más contraste, textos chicos +1 px. Pestaña elegida de la barra superior con ícono y contador oscuros.
+- **Sin esperas al personaje:** `App` carga los controles solo si hay personaje; los puntos del mundo abren la pantalla sin caminar. El editor no usa `Player.Character`; su único aviso en Studio es el diagnóstico «Editor 3D: posible auto invisible».
+- **Personal (`ScreenStaff`):** límite global con ocupación real y lo que suma el próximo nivel de oficinas; tarjetas de departamento con datos grandes y barras por color; candidatos con salario, potencial, tres habilidades con barra (actual y marca del potencial) y aporte real al departamento elegido, con el resto a pedido («Más datos»); capacitaciones por nivel con mejora, costo por persona, duración, requisito y progreso de las activas. Mismas reglas (`Staff`, `Actions`).
+- **Instalaciones (`FacilitiesView`, en Compañía):** lista compacta (oficinas, fábrica, centro, línea 2, línea 3) y detalle con nivel, estado, beneficios actuales, comparación antes → después con valores reales (`Rules`/`Catalog`; la fábrica escala los autos/min con las mismas mejoras), costo, duración (también con la organización del personal) y requisitos pendientes marcados. El resumen de la empresa queda en la columna lateral.
+- **Avatar del dueño (`OwnerAvatar`, servidor):**
+  - Apariencia con `GetHumanoidDescriptionFromUserId` + `CreateHumanoidModelFromDescription` (R15); si falla, avatar genérico. No es el personaje: `CharacterAutoLoads` sigue apagado, sin teclado ni cámara.
+  - Camina en línea recta (`Humanoid:MoveTo`) entre puntos de la oficina, pausa, va al escritorio y se sienta en `SillaOficina` (animaciones R15 de Roblox desde el servidor). Si no llega en 10 s, aparece en el destino.
+  - Puntos: carpeta `PuntosAvatar` dentro del edificio de la sede (partes = lugares, un `Seat` = silla, `FrenteEscritorio` = dónde trabaja de pie); sin ella, la oficina provisional junto al escritorio de diseño. Al cambiar el edificio o las oficinas vuelve a tomar los puntos.
+  - Uno por parcela, un hilo por avatar, se destruye al liberar o reconstruir la parcela.
+- **Ajustes puntuales:** showroom con luces más suaves, exposición −0,35 y bloom moderado (se restauran al salir); fondo del editor azul oscuro y puntos sobre el auto más chicos y translúcidos; tarjetas de investigación con beneficio destacado, costos en píldoras y requisitos por línea.
+- Pruebas: `tests/ui.luau` (Personal, Instalaciones con valores reales, avatar con rig simulado: uno solo, camina dentro de la oficina, no es el personaje, no duplica al abrir menús, se limpia y su rutina termina).

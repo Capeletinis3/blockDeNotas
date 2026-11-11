@@ -108,7 +108,7 @@ function OwnerAvatar.new(owner: Player, parent: Instance, spots: Spots): any
 	self.spots = spots
 	self.rng = Random.new()
 	self.tracks = {}
-	self.current = nil
+	self.current = nil :: string?
 	self.last = 0
 	local rig = OwnerAvatar.makeRig(owner.UserId) -- puede demorar (pide la apariencia a Roblox)
 	if not rig then
