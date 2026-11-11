@@ -1,9 +1,15 @@
 --!strict
 --[[
-	Indicaciones del garaje con el aspecto de la V3:
+	NO SE INICIA (decisión de diseño: las instalaciones se administran desde los menús, sin caminar).
+	Main.client no llama a WorldPrompts.start() y el servidor crea los ProximityPrompt del garaje desactivados
+	(Garage.PROMPTS_ENABLED = false). Se conserva sin conectar como base si más adelante se decide mostrar
+	indicadores sobre los objetos del mundo. Pendiente de decidir antes de usarlo:
+	· si los puntos sobre los objetos deben existir (hoy duplicarían la barra de navegación);
+	· qué hace un clic: WorldPrompts.onOpen(pantalla) no está asignado; para activarlo, Main.client debería
+	  asignarlo a App.go y Garage.PROMPTS_ENABLED pasar a true.
+	Lo que haría al iniciarse:
 	· cerca de un objeto, la píldora clara «[E] Escritorio de diseño» (.prompt), que también se toca en celular;
-	· lejos, un punto (.dot3d) sobre cada objeto de tu garaje; al tocarlo, el personaje camina hasta ahí.
-	Los ProximityPrompt los crea el servidor con estilo Custom y la marca «CarEmpire».
+	· lejos, un punto (.dot3d) sobre cada objeto de tu garaje que abre su pantalla.
 ]]
 
 local Players = game:GetService("Players")

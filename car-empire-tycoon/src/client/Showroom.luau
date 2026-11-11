@@ -57,6 +57,10 @@ Showroom.CONFIG = {
 	fillLight = 0.5, -- relleno (antes 0,7)
 	rimLight = 1.0, -- contorno (antes 1,6)
 	exposure = -0.35, -- compensación de exposición mientras se ve el showroom (se restaura al salir)
+	-- La exposición se adapta a la pintura: las claras bajan (no se queman) y las oscuras suben un poco
+	-- (el negro conserva reflejos y detalles). Entre ambos extremos se interpola por luminancia.
+	exposureLight = -0.35, -- pintura clara (luminancia ≥ 0,7)
+	exposureDark = 0.1, -- pintura oscura (luminancia ≤ 0,12)
 }
 local C = Showroom.CONFIG
 
@@ -285,6 +289,28 @@ local function destroyCar(car: CarState?)
 	end
 end
 
+-- Exposición para una pintura (hex). Pública para las pruebas.
+function Showroom.exposureFor(hex: string?): number
+	local ok, c = pcall(Color3.fromHex, hex or "#C0C6D0")
+	if not ok then
+		return C.exposure
+	end
+	local lum = 0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B
+	local k = math.clamp((lum - 0.12) / (0.7 - 0.12), 0, 1)
+	return C.exposureDark + (C.exposureLight - C.exposureDark) * k
+end
+
+-- Aplica la exposición del auto actual, solo mientras el showroom maneja la iluminación (al ocultarlo se
+-- restaura el valor original del lugar).
+local function applyExposure()
+	if not state.savedLighting or state.exposure == nil then
+		return
+	end
+	pcall(function()
+		(Lighting :: any).ExposureCompensation = state.exposure
+	end)
+end
+
 -- Arma el auto sobre la plataforma (quieto, anclado y sin colisiones) y recalcula el encuadre.
 local function placeCar(spec: any, color: string?, sig: string): CarState?
 	local ok, m = pcall(function()
@@ -338,6 +364,9 @@ local function placeCar(spec: any, color: string?, sig: string): CarState?
 	state.distDefault = math.clamp(fit * 1.05, state.distMin, state.distMax)
 	state.tDist = state.distDefault
 	placeLights(state.target, radius)
+	local paint = type(spec) == "table" and spec.paint or nil
+	state.exposure = Showroom.exposureFor(paint and paint.primary or nil)
+	applyExposure()
 	return { model = model, parts = parts, sig = sig }
 end
 
@@ -538,6 +567,7 @@ local function overrideLighting(on: boolean)
 			end
 		end
 		state.savedLighting = saved
+		applyExposure()
 	elseif not on and state.savedLighting then
 		-- En orden inverso, por si una misma propiedad se guardó dos veces.
 		local saved = state.savedLighting

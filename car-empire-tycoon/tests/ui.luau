@@ -1565,6 +1565,288 @@ test("Avatar autónomo del dueño: uno por parcela, camina por la oficina, no es
 	noErrors("Avatar del dueño")
 end)
 
+test("Avatar del dueño: rutas que rodean obstáculos, bloqueos sin teletransporte, destinos inaccesibles y cambio de oficina", function()
+	local OwnerAvatar = require("./.build-ui/server/OwnerAvatar")
+	local saved = {}
+	for _, k in { "makeRig", "findPath", "PAUSE", "WORK", "START_DELAY", "STUCK_TIME", "MOVE_TIMEOUT", "DESK_CHANCE", "LOOK_CHANCE" } do
+		saved[k] = OwnerAvatar[k]
+	end
+	local blocked: { [string]: boolean } = {}
+	local visits: { any } = {}
+	local function key(v: any): string
+		return math.floor(v.X + 0.5) .. "," .. math.floor(v.Z + 0.5)
+	end
+	OwnerAvatar.makeRig = function()
+		local rig = M.Instance.new("Model")
+		local rootPart = M.Instance.new("Part")
+		rootPart.Name = "HumanoidRootPart"
+		rootPart.Size = M.Vector3.new(2, 2, 1)
+		rootPart.Parent = rig
+		rig.PrimaryPart = rootPart
+		local hum = M.Instance.new("Humanoid")
+		hum.HipHeight = 2
+		-- MoveTo: llega al destino salvo que esté bloqueado (ahí no avanza nada, como contra un mueble).
+		hum.MoveTo = function(_, pos)
+			table.insert(visits, pos)
+			if not blocked[key(pos)] then
+				rig:PivotTo(M.CFrame.new(M.Vector3.new(pos.X, 3.4, pos.Z)))
+			end
+		end
+		hum.Parent = rig
+		return rig
+	end
+	OwnerAvatar.PAUSE, OwnerAvatar.WORK, OwnerAvatar.START_DELAY = { 0.01, 0.02 }, { 0.01, 0.02 }, { 0.01, 0.02 }
+	OwnerAvatar.STUCK_TIME, OwnerAvatar.MOVE_TIMEOUT = 0.5, 2
+	OwnerAvatar.DESK_CHANCE, OwnerAvatar.LOOK_CHANCE = 0, 0 -- solo caminar: se miden los trayectos
+	local V = M.Vector3.new
+	local A, B, C = V(0, 0.4, 0), V(20, 0.4, 0), V(0, 0.4, 20)
+	-- Ruta con desvío para ir a B (rodea un «escritorio» en (10, 0)); C es inaccesible.
+	OwnerAvatar.findPath = function(_av, _from, to)
+		if key(to) == key(C) then
+			return nil
+		end
+		if key(to) == key(B) then
+			return { V(10, 0.4, 6), B }
+		end
+		return { to }
+	end
+	local folder = M.Instance.new("Model")
+	folder.Parent = M.services.Workspace
+	local owner = { UserId = 77 }
+	local av = OwnerAvatar.new(owner :: any, folder, { points = { A, B, C }, source = "prueba" })
+	check(av ~= nil and folder:FindFirstChild(OwnerAvatar.NAME) ~= nil, "se arma dentro de la oficina")
+	local function realWait(cond: () -> boolean, seconds: number): boolean
+		for _ = 1, math.ceil(seconds / 0.05) do
+			if cond() then
+				return true
+			end
+			M.task.wait(0.05)
+		end
+		return cond()
+	end
+	-- 1) Ruta con desvío: pasa por el punto intermedio antes de llegar.
+	table.clear(visits)
+	check(av:walkTo(B), "llega a B por la ruta")
+	check(#visits >= 2 and key(visits[1]) == "10,6" and key(visits[#visits]) == "20,0", "sigue los puntos de la ruta (rodea el obstáculo)")
+	-- 2) Destino inaccesible: no camina hacia él ni se mueve de lugar.
+	local before = av:pos()
+	table.clear(visits)
+	check(av:walkTo(C) == false and #visits == 0, "sin ruta no camina eternamente hacia un punto inaccesible")
+	check((av:pos() - before).Magnitude < 0.01, "y se queda donde estaba")
+	-- 3) Bloqueo en el camino: deja de intentar a los STUCK_TIME, se detiene donde está (sin aparecer en el destino).
+	blocked[key(A)] = true
+	local t0 = os.clock()
+	check(av:walkTo(A) == false, "detecta que no avanza")
+	check(os.clock() - t0 < 1.5, "y no se queda caminando hasta el tiempo máximo")
+	check((av:pos() - before).Magnitude < 0.01, "no se teletransporta al destino")
+	eq(av.current, "idle", "vuelve a la animación de reposo (sin caminar en el lugar)")
+	blocked[key(A)] = nil
+	-- 4) La rutina no repite el destino que acaba de fallar y se recupera caminando.
+	local fails0 = av.fails
+	check(fails0 >= 1, "cuenta los fallos")
+	check(av:pickPoint(3) ~= 3 or #av.spots.points == 1, "evita el punto que falló")
+	-- 5) Cambio de oficina: corta el trayecto, no aparece de golpe si hay ruta desde donde está.
+	local e0 = av.epoch
+	local D = V(40, 0.4, 40)
+	av:setSpots({ points = { D, A }, source = "nueva" })
+	check(av.epoch == e0 + 1, "el cambio de oficina corta el trayecto en curso")
+	M.task.wait(0.05)
+	eq(av.recovered, 0, "con ruta disponible no se teletransporta")
+	-- 6) Rutina en marcha: camina sola y el hilo se cancela al destruirlo.
+	check(realWait(function()
+		return #visits >= 6
+	end, 6), "la rutina camina sola")
+	av:destroy()
+	check(folder:FindFirstChild(OwnerAvatar.NAME) == nil and av.thread == nil and av.alive == false, "destroy elimina el modelo y cancela el hilo")
+	local n = #visits
+	M.task.wait(0.3)
+	eq(#visits, n, "sin movimiento después de destruirlo")
+	for k, v in saved do
+		OwnerAvatar[k] = v
+	end
+	folder:Destroy()
+	noErrors("Avatar: rutas y recuperación")
+end)
+
+test("Cámaras: un solo dueño por pantalla, sin conexiones acumuladas, y pantallas que se abren y cierran rápido", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	App.closeAllDialogs()
+	local function live(sigName: string, inst: any): number
+		local sig = rawget(inst, "__signals")[sigName]
+		local n = 0
+		for _, h in (sig and sig.handlers) or {} do
+			if h.connected then
+				n += 1
+			end
+		end
+		return n
+	end
+	local RS, UIS = M.services.RunService, M.services.UserInputService
+	local Showroom = App.screens.showroom
+	local SceneCamera = require("./.build-ui/client/SceneCamera")
+	local function cycle()
+		for _, route in { "juego", "personal", "compania", "investigacion", "editor", "juego" } do
+			App.go(route)
+			M.task.wait()
+			eq(App.cameraOwner, "scene", "con la empresa abierta la cámara es la de gestión (" .. route .. ")")
+			check(not Showroom.isVisible(), "el showroom no se mueve fuera del menú (" .. route .. ")")
+		end
+		App.go("juego")
+		M.task.wait()
+		-- Volver al menú principal (mismo camino que «Guardar y volver al menú») y entrar otra vez.
+		App.request("leaveCompany", {})
+		App.ui.route = "menu"
+		waitFor(function()
+			return App.g == nil
+		end)
+		App.forceRender()
+		M.task.wait()
+		eq(App.cameraOwner, "showroom", "en el menú principal la cámara es del showroom")
+		check(Showroom.isVisible() and not SceneCamera.owns(), "el showroom vuelve y la cámara de gestión se suelta")
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		App.go("juego")
+		M.task.wait()
+		eq(App.cameraOwner, "scene", "al entrar a la empresa se activa la cámara de gestión")
+	end
+	cycle()
+	local rs0, ib0, ic0 = live("RenderStepped", RS), live("InputBegan", UIS), live("InputChanged", UIS)
+	for _ = 1, 3 do
+		cycle()
+	end
+	eq(live("RenderStepped", RS), rs0, "RenderStepped: no se acumulan conexiones al cambiar de pantalla")
+	eq(live("InputBegan", UIS), ib0, "InputBegan: sin conexiones nuevas")
+	eq(live("InputChanged", UIS), ic0, "InputChanged: sin conexiones nuevas")
+	-- La cámara de gestión: zoom y rotación siguen funcionando después de los cambios.
+	App.go("juego")
+	M.task.wait()
+	local cam = M.services.Workspace.CurrentCamera
+	RS.RenderStepped:Fire(1 / 60)
+	local p0 = cam.CFrame.Position
+	SceneCamera.rotate(90, 0)
+	RS.RenderStepped:Fire(1 / 60)
+	check((cam.CFrame.Position - p0).Magnitude > 1, "la rotación sigue respondiendo")
+	SceneCamera.rotate(-90, 0)
+	-- Abrir y cerrar pantallas y diálogos muy rápido no deja errores ni diálogos colgados.
+	App.renderError = nil
+	for _ = 1, 4 do
+		for _, route in { "personal", "compania", "investigacion", "fabrica", "ventas", "autos", "mercado", "juego" } do
+			App.go(route)
+		end
+		App.ui.staff = { view = "mercado", dept = "produccion", hireDept = {} }
+		App.go("personal")
+		App.ui.staff.view = "capacitaciones"
+		App.forceRender()
+		App.openDialog("training", { scope = "general" })
+		App.closeAllDialogs()
+		App.go("juego")
+	end
+	M.task.wait()
+	check(App.renderError == nil, "sin errores al abrir y cerrar rápido" .. (App.renderError and (": " .. tostring(App.renderError)) or ""))
+	eq(#App.ui.dialogs, 0, "sin diálogos colgados")
+	noErrors("Cámaras y pantallas")
+end)
+
+test("Showroom: la exposición se adapta a la pintura y la iluminación del lugar vuelve al salir", function()
+	local Showroom = App.screens.showroom
+	local light, dark, mid = Showroom.exposureFor("#F2F2F2"), Showroom.exposureFor("#111111"), Showroom.exposureFor("#7A7A7A")
+	check(light < mid and mid < dark, "clara < media < oscura (" .. light .. ", " .. mid .. ", " .. dark .. ")")
+	check(light <= -0.3 and dark >= 0, "las claras bajan la exposición y las negras no se oscurecen de más")
+	local Lighting = M.services.Lighting
+	Lighting.ExposureCompensation = 0.2
+	Lighting.Brightness = 2
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	App.ui.route = "menu"
+	App.forceRender()
+	M.task.wait()
+	check(Showroom.isVisible(), "showroom visible en el menú")
+	check(Lighting.ExposureCompensation ~= 0.2 and Lighting.Brightness == 0, "en el showroom usa su propia iluminación")
+	App.request("selectSlot", { slot = "1" })
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	App.go("juego")
+	M.task.wait()
+	check(not Showroom.isVisible(), "fuera del menú se oculta")
+	eq(Lighting.ExposureCompensation, 0.2, "exposición del lugar restaurada al salir")
+	eq(Lighting.Brightness, 2, "brillo del lugar restaurado al salir")
+	noErrors("Exposición del showroom")
+end)
+
+test("Instalaciones: relaciones reales (oficinas, capacitaciones, fábrica, centro, línea 2 con dinero, línea 3 sin la 2)", function()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local FV = require("./.build-ui/client/FacilitiesView")
+	local Rules = require("./.build-ui/shared/Rules")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Staff = require("./.build-ui/shared/Staff")
+	local g = App.g
+	local oi = FV.info(g, "offices")
+	eq(oi.current[1][2], tostring(g.derived.caps.staff), "oficinas: límite de empleados = el de la simulación")
+	if oi.next then
+		local nx = Catalog.SEDES[Rules.officeLevel(g) + 1]
+		eq(oi.compare[1][3], tostring(nx.staff), "oficinas: el próximo nivel sube el límite global")
+		-- La capacitación que habilita el próximo nivel es la que acepta Staff.trainingPlan con ese nivel.
+		for _, l in Catalog.TRAINING.levels do
+			if l.office == nx.level then
+				eq(oi.compare[3][3], l.name, "oficinas: desbloquean la capacitación " .. l.name)
+				local e = g.employees[1]
+				if e then
+					local _, why = Staff.trainingPlan(g, { scope = "general", level = l.id, skill = Staff.dept(e.dept).skills[1] }, nx.level - 1, Rules.year(g))
+					check(why ~= nil and string.find(why, "oficinas", 1, true) ~= nil, "con el nivel actual de oficinas no se puede")
+				end
+			end
+		end
+	end
+	local ri = FV.info(g, "research")
+	eq(ri.current[1][2], tostring(g.derived.caps.pi), "centro: PI por minuto = el de la simulación")
+	local li2 = FV.info(g, "line2")
+	if not Rules.ownsLine(g, 2) and li2.next then
+		eq(li2.next.cost, Rules.expansionCost(g, Catalog.FACILITIES.line2.cost), "línea 2: se paga con dinero del juego")
+	end
+	-- Línea 3: independiente de la 2 (por cuenta, con Robux) y sin compra real configurada.
+	local fake = table.clone(g)
+	fake.facilities = table.clone(g.facilities)
+	fake.facilities.lines = {}
+	fake.facilities.accountLine3 = true
+	check(Rules.ownsLine(fake, 3) and not Rules.ownsLine(fake, 2), "la línea 3 no exige la línea 2")
+	local l3 = FV.info(g, "line3")
+	check(l3.next == nil and #l3.checks == 0, "la línea 3 no tiene requisitos de dinero del juego")
+	eq(Catalog.PRODUCTS.line3.id, 0, "sin compra real de Robux configurada")
+	-- Gestión por menús: los ProximityPrompt del garaje existen pero están desactivados.
+	local prompts, on = 0, 0
+	for _, d in M.services.Workspace:GetDescendants() do
+		if d.ClassName == "ProximityPrompt" then
+			prompts += 1
+			if d.Enabled ~= false then
+				on += 1
+			end
+		end
+	end
+	check(prompts > 0 and on == 0, "prompts del garaje desactivados (" .. prompts .. ")")
+	noErrors("Relaciones de Instalaciones")
+end)
+
 test("Showroom 3D del menú: escenario persistente, transición entre empresas, cámara con arrastre y zoom, y limpieza", function()
 	local Showroom = App.screens.showroom
 	local st = Showroom._state

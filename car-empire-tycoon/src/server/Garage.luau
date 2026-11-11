@@ -1,8 +1,11 @@
 --!strict
 --[[
 	Mundo provisional: un vestíbulo y un garaje básico por jugador (parcela).
-	Cada garaje tiene cuatro puntos de interacción (ProximityPrompt) y muestra con modelos
-	provisionales lo que pasa en la partida: unidad en fabricación, almacén, salón y clientes.
+	Muestra con modelos provisionales lo que pasa en la partida: unidad en fabricación, almacén, salón y
+	clientes, más el avatar autónomo del dueño en la oficina (OwnerAvatar).
+	Decisión de diseño: las instalaciones se administran desde los menús. Los cuatro ProximityPrompt del
+	garaje se crean desactivados (Garage.PROMPTS_ENABLED = false) y quedan como punto de enganche si más
+	adelante se decide interactuar con los objetos del mundo (ver WorldPrompts en el cliente).
 	La decoración definitiva del mapa queda para etapas posteriores.
 ]]
 
@@ -18,6 +21,8 @@ local OwnerAvatar = require(script.Parent.OwnerAvatar)
 
 local Garage = {}
 Garage.__index = Garage
+-- Pendiente de decidir: interacción con los objetos del mundo. Desactivada (la gestión es por menús).
+Garage.PROMPTS_ENABLED = false
 
 local PLOT_COUNT = 8
 local PLOT_W, PLOT_D = 90, 70
@@ -219,7 +224,8 @@ function Garage:prompt(parent: Instance, action: string, object: string, screen:
 	pp.MaxActivationDistance = 14
 	pp.RequiresLineOfSight = false
 	pp.KeyboardKeyCode = Enum.KeyCode.E
-	-- La indicación se dibuja en el cliente con el aspecto de la V3 (WorldPrompts).
+	pp.Enabled = Garage.PROMPTS_ENABLED -- sin personaje no se podían usar; así tampoco se activan por error
+	-- La indicación se dibujaría en el cliente con el aspecto de la V3 (WorldPrompts, sin iniciar).
 	pp.Style = Enum.ProximityPromptStyle.Custom
 	pp:SetAttribute("CarEmpire", true)
 	pp:SetAttribute("Screen", screen) -- el punto del cliente abre esta pantalla sin caminar
@@ -414,7 +420,8 @@ function Garage:avatarSpots(i: number): any
 	return {
 		points = points,
 		seat = (seat and seat.Parent) and seat or nil,
-		desk = plot.cf * CFrame.new(-30, FLOOR_Y, -19.6),
+		-- De pie, a un costado de la silla y mirando al escritorio (si no puede sentarse).
+		desk = plot.cf * CFrame.new(-25.6, FLOOR_Y, -20.4),
 		source = "oficina provisional",
 	}
 end
