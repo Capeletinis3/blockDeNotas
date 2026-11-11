@@ -34,6 +34,13 @@ tocar el dinero, y por la interfaz (entorno simulado) como un jugador nuevo.
 4. **Ventas que «no arrancan»**: con el menú de Ventas abierto la empresa está en pausa (regla existente), así que
    lo recién lanzado no se vende hasta volver al juego. Ventas ahora lo explica en el modelo recién lanzado.
 
+5. **Alerta superior contradictoria** (`ScreenHud.topAlert`): con todos los modelos ya fabricados decía «La fábrica
+   está parada. Lanzá un lote…» mientras el botón principal proponía «Diseñar otro modelo». Ahora, sin lotes activos:
+   sin diseños → «Diseñá tu primer automóvil para comenzar»; con modelos fabricables → «La fábrica está parada.
+   Iniciá la producción de uno de tus modelos»; con todos usados → «Tu último modelo completó su ciclo. Diseñá un
+   nuevo automóvil para continuar» (abre el editor). Con lotes activos no aparece ninguna de esas tres. El botón y la
+   alerta usan la misma regla (`ScreenHud.fabricable`, basada en `Dialogs.lotBlock`, la del catálogo del lote).
+
 ### Comportamientos revisados que se conservan (no son errores)
 
 - Un componente omitido en la solicitud se completa con el predeterminado de la carrocería (compatibilidad); uno

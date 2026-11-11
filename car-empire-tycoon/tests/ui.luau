@@ -6069,6 +6069,189 @@ test("Etapa 6: ciclo jugable guiado por el botón principal con el capital inici
 	noErrors("Ciclo guiado")
 end)
 
+
+test("HUD coherente: botón principal y alerta superior en los nueve estados del ciclo", function()
+	local DesignCalc = require("./.build-ui/shared/DesignCalc")
+	local Hud = App.screens.hud
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		for k, v in App.profile.slots do
+			if v and v.name ~= nil then
+				App.request("deleteCompany", { slot = k, confirm = v.name })
+				slot = k
+				break
+			end
+		end
+	end
+	check(App.request("createCompany", { slot = slot, name = "Alertas HUD", color = "#3B82F6", logo = "pico" }).ok, "empresa nueva")
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	App.request("setTutorial", { skipped = true })
+	App.go("juego")
+	M.task.wait()
+	local PARADA, OTRO, PRIMERO = "Iniciá la producción de uno de tus modelos.", "Tu último modelo completó su ciclo. Diseñá un nuevo automóvil para continuar.", "Diseñá tu primer automóvil para comenzar."
+	-- Comprueba un estado: qué dice el botón principal, qué dice la alerta, y que el HUD dibujado coincida.
+	local function state(label: string, wantMain: string?, wantAlert: string?, notMain: { string }?)
+		App.closeAllDialogs()
+		App.go("juego")
+		App.forceRender()
+		M.task.wait()
+		local main = Hud.nextAction(App.g)
+		local alert = Hud.topAlert(App.g)
+		local alertText = alert and alert.text or nil
+		if wantMain then
+			eq(main and main.label, wantMain, label .. ": botón principal")
+		end
+		for _, bad in notMain or {} do
+			check(not (main and main.label == bad), label .. ": el botón principal no propone «" .. bad .. "»")
+		end
+		if wantAlert then
+			eq(alertText, wantAlert, label .. ": alerta superior")
+		else
+			check(alertText ~= PARADA and alertText ~= OTRO and alertText ~= PRIMERO, label .. ": sin alerta de fábrica parada (" .. tostring(alertText) .. ")")
+		end
+		-- Coherencia: cada alerta del ciclo va con el botón principal que corresponde.
+		if alertText == PARADA then
+			eq(main.label, "Lanzar un lote", label .. ": «fábrica parada» va con «Lanzar un lote»")
+			eq(Hud.fabricable(App.g) > 0, true, label .. ": hay modelos fabricables")
+		elseif alertText == OTRO then
+			eq(main.label, "Diseñar otro modelo", label .. ": «diseñá un nuevo automóvil» va con «Diseñar otro modelo»")
+			eq(Hud.fabricable(App.g), 0, label .. ": ningún modelo fabricable")
+			eq(alert.go, "editor", label .. ": la alerta abre el editor")
+		elseif alertText == PRIMERO then
+			eq(main.label, "Diseñar mi primer auto", label .. ": va con «Diseñar mi primer auto»")
+		end
+		-- El HUD dibujado muestra esa misma alerta.
+		local shown = named("Alerta")
+		if alertText then
+			check(shown ~= nil and M.find(shown, alertText) ~= nil, label .. ": el HUD muestra la alerta")
+		else
+			check(shown == nil, label .. ": el HUD no muestra alerta")
+		end
+	end
+	local function newModel(name: string): any
+		local dr = DesignCalc.newDraft(App.g, "brisa")
+		dr.name = name
+		local r = App.request("saveDesign", { draft = dr })
+		check(r.ok, "diseño «" .. name .. "»: " .. tostring(r.msg))
+		waitFor(function()
+			for _, d in App.g.designs do
+				if d.name == name then
+					return true
+				end
+			end
+			return false
+		end)
+		for _, d in App.g.designs do
+			if d.name == name then
+				return d
+			end
+		end
+		return nil
+	end
+	local function lotFor(d: any): any
+		for _, l in App.g.lots do
+			if l.designId == d.id then
+				return l
+			end
+		end
+		return nil
+	end
+	local function runUntil(cond: () -> boolean): boolean
+		for _ = 1, 900 do
+			App.closeAllDialogs()
+			if App.ui.route ~= "juego" then
+				App.go("juego")
+			end
+			advance(1)
+			if cond() then
+				return true
+			end
+		end
+		return false
+	end
+	-- 1. Empresa nueva sin diseños.
+	state("1. sin diseños", "Diseñar mi primer auto", PRIMERO)
+	-- 2. Primer diseño finalizado, sin fabricar.
+	local d1 = newModel("Alerta Uno")
+	state("2. diseño sin fabricar", "Lanzar un lote", PARADA)
+	-- 3. Lote en producción.
+	check(App.request("createLot", { designId = d1.id, qty = 10 }).ok, "lote")
+	waitFor(function()
+		return lotFor(d1) ~= nil
+	end)
+	state("3. fabricando", nil, nil, { "Lanzar un lote", "Diseñar otro modelo" })
+	-- 4. Lote terminado, pendiente de venta.
+	check(runUntil(function()
+		local l = lotFor(d1)
+		return l ~= nil and l.saleState == "por lanzar"
+	end), "termina la fabricación")
+	state("4. por lanzar", "Poner a la venta", nil)
+	-- 5. A la venta.
+	check(App.request("launchSale", { lotId = lotFor(d1).id, price = lotFor(d1).refPrice }).ok, "a la venta")
+	waitFor(function()
+		local l = lotFor(d1)
+		return l ~= nil and l.saleState == "en venta"
+	end)
+	state("5. a la venta", nil, nil, { "Lanzar un lote", "Diseñar otro modelo" })
+	-- 6 y 7. Vendido y archivado: todos los diseños usaron su lote.
+	check(runUntil(function()
+		return lotFor(d1) == nil
+	end), "se agota y pasa al historial")
+	eq(Hud.fabricable(App.g), 0, "ningún modelo fabricable")
+	state("6. agotado y archivado", "Diseñar otro modelo", OTRO)
+	state("7. todos los diseños usados", "Diseñar otro modelo", OTRO)
+	-- 8. Nuevo modelo diseñado después del anterior.
+	local d2 = newModel("Alerta Dos")
+	state("8. modelo nuevo sin fabricar", "Lanzar un lote", PARADA)
+	-- 9. Varios diseños, solo algunos usados.
+	local d3 = newModel("Alerta Tres")
+	eq(Hud.fabricable(App.g), 2, "dos fabricables y uno usado")
+	state("9. varios, algunos usados (sin lotes)", "Lanzar un lote", PARADA)
+	check(App.request("createLot", { designId = d2.id, qty = 5 }).ok, "lote del segundo")
+	waitFor(function()
+		return lotFor(d2) ~= nil
+	end)
+	state("9. varios, uno fabricándose y otro disponible", nil, nil, { "Diseñar otro modelo" })
+	-- El botón principal y el catálogo del lote usan la misma regla.
+	local Dialogs = require("./.build-ui/client/Dialogs")
+	local n = 0
+	for _, d in App.g.designs do
+		if Dialogs.lotBlock(App.g, d) == nil then
+			n += 1
+		end
+	end
+	eq(Hud.fabricable(App.g), n, "misma regla que el catálogo del lote")
+	local function current(d: any): any
+		for _, x in App.g.designs do
+			if x.id == d.id then
+				return x
+			end
+		end
+		return nil
+	end
+	check(Dialogs.lotBlock(App.g, current(d3)) == nil and Dialogs.lotBlock(App.g, current(d1)) ~= nil, "el usado no se puede fabricar; el nuevo sí")
+	App.go("juego")
+	noErrors("HUD coherente")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

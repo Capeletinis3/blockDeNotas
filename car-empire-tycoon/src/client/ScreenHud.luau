@@ -15,6 +15,7 @@ local Rules = require(Shared.Rules)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
+local Dialogs = require(script.Parent.Dialogs)
 local T = Ui.T
 local W = Ui.W
 local hex = Ui.hex
@@ -51,6 +52,20 @@ local function realDesigns(g: any): number
 	return n
 end
 Screen.realDesigns = realDesigns
+
+-- Modelos que se pueden fabricar ahora: la misma regla que el catálogo del lote (Dialogs.lotBlock: ni plantillas
+-- ni modelos que ya tuvieron su único lote). La usan el botón principal y la alerta superior, así nunca se
+-- contradicen.
+local function fabricable(g: any): number
+	local n = 0
+	for _, d in g.designs do
+		if Dialogs.lotBlock(g, d) == nil then
+			n += 1
+		end
+	end
+	return n
+end
+Screen.fabricable = fabricable
 
 -- ¿Hay una investigación que se pueda empezar ya (requisitos, PI y dinero) y lugar para otra en curso?
 local function researchFree(g: any): boolean
@@ -140,14 +155,7 @@ function Screen.nextAction(g: any): any
 	end
 	if #g.lots == 0 then
 		-- Cada modelo fabrica un solo lote: si todos ya tuvieron el suyo, lo que sigue es diseñar otro.
-		local ready = false
-		for _, d in g.designs do
-			if not d.template and not d.lotLaunched then
-				ready = true
-				break
-			end
-		end
-		if not ready then
+		if fabricable(g) == 0 then
 			return { label = "Diseñar otro modelo", sub = "Tus modelos ya fabricaron su lote: el próximo necesita un diseño nuevo", go = "editor", params = { fresh = true }, key = "1" }
 		end
 		return { label = "Lanzar un lote", sub = "Elegí un diseño y cuántas unidades fabricar", dialog = "lot", key = "3" }
@@ -206,8 +214,16 @@ function Screen.topAlert(g: any): any
 			return { title = "Producción en pausa", text = l.design.name .. ": no alcanza el dinero para la próxima unidad. Sigue sola cuando entre dinero.", go = "fabrica", icon = "warn", col = T.re2, bg = T.re, a = 0.15, border = T.re, ba = 0.5 }
 		end
 	end
-	if #g.lots == 0 and realDesigns(g) > 0 then
-		return { title = "La fábrica está parada", text = "Lanzá un lote para empezar a vender.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5 }
+	-- Sin lotes activos: qué sigue depende de los modelos (mismo criterio que el botón principal). Con lotes
+	-- activos (fabricando, por lanzar o a la venta) no se dice que la fábrica está parada.
+	if #g.lots == 0 then
+		if realDesigns(g) == 0 then
+			return { title = "Tu primer automóvil", text = "Diseñá tu primer automóvil para comenzar.", go = "editor", icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5 }
+		elseif fabricable(g) > 0 then
+			return { title = "La fábrica está parada", text = "Iniciá la producción de uno de tus modelos.", go = "fabrica", icon = "factory", col = hex("#FFB36B"), bg = hex("#FFA050"), a = 0.16, border = hex("#FFA050"), ba = 0.5 }
+		else
+			return { title = "Modelo terminado", text = "Tu último modelo completó su ciclo. Diseñá un nuevo automóvil para continuar.", go = "editor", params = { fresh = true }, icon = "car", col = T.bl2, bg = T.bl, a = 0.16, border = T.bl, ba = 0.5 }
+		end
 	end
 	if #(g.research.projects or {}) == 0 and g.rp >= 30 and researchFree(g) then
 		return { title = "Investigación sin proyectos", text = "Tenés " .. math.floor(g.rp) .. " PI acumulados. Elegí una investigación.", go = "investigacion", icon = "flask", col = T.vi2, bg = T.vi, a = 0.2, border = T.vi, ba = 0.5 }
@@ -872,7 +888,7 @@ local function leftCards(g: any): { Instance }
 			Ui.icon("right", 16, hex("#8E95A3")),
 		})
 		b.Activated:Connect(function()
-			App.go(alert.go)
+			App.go(alert.go, alert.params)
 		end)
 		table.insert(out, b)
 	end
@@ -1135,7 +1151,7 @@ function Screen.build(parent: Instance, route: string)
 				App.forceRender()
 			end, { small = true, icon = "tag", height = 40, radius = 20, name = "PildoraVenta" }),
 			alert and Ui.button("Alerta", "default", function()
-				App.go(alert.go)
+				App.go(alert.go, alert.params)
 			end, { small = true, icon = alert.icon, height = 40, radius = 20 }) or nil,
 		}
 		if not App.ui.sidePanel then
