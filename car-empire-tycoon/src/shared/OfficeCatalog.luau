@@ -6,7 +6,8 @@
 
 	Mueble (FURNITURE[id]):
 	  id, name, category (CATEGORIES), desc, year (disponible desde; nunca desaparece), price (dinero del juego),
-	  size = studs (ancho, alto, largo) del futuro modelo, cells = { w, d } casillas que ocupa sin girar,
+	  size = studs (ancho, alto, largo) del modelo, nunca mayor que cells × CELL en planta (el modelo no
+	  sobresale de las casillas que ocupa), cells = { w, d } casillas que ocupa sin girar,
 	  rotations = giros permitidos en grados (múltiplos de 45; hoy todos admiten los 8), interaction = punto de uso del avatar o nil
 	  ({ kind = "work" | "sit" | "rest" | "browse", dx, dy, facing } relativo al centro del mueble, en casillas),
 	  bonus = { skill = id de Catalog.STAFF.skills, value } o nil (comparte el tope de esa habilidad con el
@@ -54,7 +55,7 @@ OfficeCatalog.FURNITURE = {
 	sofa_cuero_1970 = {
 		name = "Sofá de cuero", category = "asientos", year = 1970, price = 2200,
 		desc = "Sofá de tres cuerpos para la recepción o la dirección.",
-		size = { 6, 2.8, 2.4 }, cells = { 3, 1 }, rotations = ALL,
+		size = { 6, 2.8, 2 }, cells = { 3, 1 }, rotations = ALL,
 		interaction = { kind = "rest", dx = 0, dy = 0, facing = 0 }, model = "SofaCuero1970",
 	},
 	maquina_escribir_1970 = {

@@ -201,6 +201,29 @@ end
 
 -- Inventario ------------------------------------------------------------------------------------------
 
+-- Muebles guardados en el inventario, sin importar su año (lo propio siempre se puede colocar):
+-- { { item, count } } ordenados por categoría, año y nombre.
+function Office.inventoryList(o: any): { any }
+	local out = {}
+	for id, n in (o and o.inventory) or {} do
+		local item = OfficeCatalog.item(id)
+		if item and type(n) == "number" and n > 0 then
+			table.insert(out, { item = item, count = n })
+		end
+	end
+	table.sort(out, function(a: any, b: any): boolean
+		local x, y = a.item, b.item
+		if x.category ~= y.category then
+			return x.category < y.category
+		end
+		if x.year ~= y.year then
+			return x.year < y.year
+		end
+		return x.name < y.name
+	end)
+	return out
+end
+
 function Office.count(o: any, itemId: string): number
 	return (o.inventory and o.inventory[itemId]) or 0
 end

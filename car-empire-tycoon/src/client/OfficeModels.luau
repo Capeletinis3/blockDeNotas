@@ -72,8 +72,8 @@ end
 
 BUILDERS.maquina_escribir_1970 = function(m, w, h, l)
 	part(m, "Cuerpo", Vector3.new(w, h * 0.55, l), Vector3.new(0, h * 0.275, 0), Color3.fromHex("#2F6E62"))
-	part(m, "Rodillo", Vector3.new(w * 1.05, 0.22, 0.22), Vector3.new(0, h * 0.62, l * 0.3), METAL_DARK)
-	part(m, "Hoja", Vector3.new(w * 0.6, h * 0.45, 0.04), Vector3.new(0, h * 0.85, l * 0.32), Color3.fromHex("#F4F1E8"))
+	part(m, "Rodillo", Vector3.new(w, 0.22, 0.22), Vector3.new(0, h * 0.62, l * 0.3), METAL_DARK)
+	part(m, "Hoja", Vector3.new(w * 0.6, h * 0.4, 0.04), Vector3.new(0, h * 0.78, l * 0.32), Color3.fromHex("#F4F1E8"))
 	part(m, "Teclado", Vector3.new(w * 0.85, 0.1, l * 0.4), Vector3.new(0, h * 0.58, -l * 0.25), Color3.fromHex("#1F2A2A"))
 end
 
@@ -110,7 +110,11 @@ end
 
 BUILDERS.planta_interior_1970 = function(m, w, h, l)
 	part(m, "Maceta", Vector3.new(w * 0.7, h * 0.3, l * 0.7), Vector3.new(0, h * 0.15, 0), Color3.fromHex("#A65A3A"))
-	part(m, "Follaje", Vector3.new(w, h * 0.7, l), Vector3.new(0, h * 0.62, 0), Color3.fromHex("#3F8A4A"), { Shape = Enum.PartType.Ball, Material = Enum.Material.Grass })
+	local stemTop = h - math.min(w, l) + 0.1
+	part(m, "Tallo", Vector3.new(0.15, stemTop - h * 0.3, 0.15), Vector3.new(0, (h * 0.3 + stemTop) / 2, 0), Color3.fromHex("#4E6B2E"))
+	-- Una esfera en Roblox siempre es uniforme: se usa el lado menor para no salirse de la casilla.
+	local r = math.min(w, l)
+	part(m, "Follaje", Vector3.new(r, r, r), Vector3.new(0, h - r / 2, 0), Color3.fromHex("#3F8A4A"), { Shape = Enum.PartType.Ball, Material = Enum.Material.Grass })
 end
 
 -- Modelo definitivo si existe en los assets (sin scripts), o nil.

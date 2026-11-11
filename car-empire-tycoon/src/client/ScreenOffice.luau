@@ -55,7 +55,7 @@ function Screen.updateBar()
 		}, 8))
 		local h = st.hover
 		local valid = h and h.valid
-		table.insert(rows, Ui.text(st.busy and "Enviando al servidor…" or (not h and "Mové el cursor sobre una habitación.") or (valid and "Ubicación válida: hacé clic o Enter para confirmar.") or (h.reason or "Ubicación inválida."), { size = Ui.S.sm, color = st.busy and T.mut or (valid and T.gr or T.re2), name = "EstadoColocacion" }))
+		table.insert(rows, Ui.text(st.busy and "Enviando al servidor…" or (not h and "Fuera de las habitaciones: mové el cursor sobre una habitación para ubicarlo.") or (valid and "Ubicación válida: hacé clic o Enter para confirmar.") or (h.reason or "Ubicación inválida."), { size = Ui.S.sm, color = st.busy and T.mut or (valid and T.gr or T.re2), name = "EstadoColocacion" }))
 		table.insert(actions, Ui.button("Girar", "default", function()
 			Editor.rotate(-1)
 		end, { small = true, icon = "undo", name = "GirarIzq", kbd = "⇧R" }))
@@ -90,6 +90,18 @@ function Screen.updateBar()
 	end
 	if st.message then
 		table.insert(rows, Ui.note("r", st.message))
+	end
+	if st.pending then
+		-- Operación sin respuesta: se reintenta con el mismo identificador (sin cobro doble).
+		table.insert(rows, Ui.row({
+			Ui.button("Reintentar", "p", function()
+				task.spawn(Editor.retry)
+			end, { small = true, name = "ReintentarOperacion", disabled = st.busy, why = "Esperá la respuesta" }),
+			Ui.button("Actualizar estado", "default", function()
+				task.spawn(Editor.dropPending)
+			end, { small = true, name = "DescartarReintento", disabled = st.busy, why = "Esperá la respuesta" }),
+		}, 8))
+		actions = {}
 	end
 	if #actions > 0 then
 		table.insert(rows, Ui.row(actions, 8, { wrap = true }))
@@ -194,10 +206,9 @@ local function sidePanel(g: any, o: any): Frame
 			end
 		end
 	else
-		for _, f in Office.catalogFor(0) do
-			if Office.count(o, f.id) > 0 then
-				table.insert(list, itemCard(g, o, f, year))
-			end
+		-- Todo lo guardado, sin filtrar por año: lo propio siempre se puede colocar gratis.
+		for _, e in Office.inventoryList(o) do
+			table.insert(list, itemCard(g, o, e.item, year))
 		end
 		table.insert(items, Ui.text("Los muebles guardados se colocan gratis. Al retirar uno de la oficina vuelve acá.", { size = Ui.S.xs, color = T.mut }))
 		if #list == 0 then

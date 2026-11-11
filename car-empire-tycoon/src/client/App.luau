@@ -306,7 +306,9 @@ function App.request(action: string, payload: any?, opts: any?): any
 	end
 	if not ok or type(result) ~= "table" then
 		App.toast("error", "No hubo respuesta del servidor. Probá de nuevo: tus datos escritos se conservan.")
-		return { ok = false, msg = "" }
+		-- noResponse: no se sabe si el servidor la aplicó. Quien quiera reintentar sin duplicar debe reenviar
+		-- con el mismo requestId (va en la respuesta).
+		return { ok = false, msg = "", noResponse = true, requestId = body.requestId }
 	end
 	if result.msg and result.msg ~= "" and not result.quiet then
 		App.toast(result.ok and "ok" or "error", result.msg)

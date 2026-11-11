@@ -695,7 +695,8 @@ function Sessions:request(player: any, action: any, payload: any): any
 		return { ok = true, quiet = true }
 	end
 	if rateLimited(self, s) then
-		return { ok = false, msg = "Demasiadas acciones seguidas. Esperá un momento." }
+		-- retry: no se procesó; el cliente puede reenviarla igual (mismo requestId).
+		return { ok = false, msg = "Demasiadas acciones seguidas. Esperá un momento.", retry = true }
 	end
 	if action == "sync" then
 		self:push(s)
@@ -738,7 +739,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	end
 
 	if s.busy then
-		return { ok = false, msg = "Esperá a que termine la acción anterior." }
+		return { ok = false, msg = "Esperá a que termine la acción anterior.", retry = true }
 	end
 	s.busy = true
 	local ok, result = pcall(function(): any

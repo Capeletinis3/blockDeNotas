@@ -3121,7 +3121,7 @@ test("Editor de oficinas: entrar desde Instalaciones, colocar, comprar una vez, 
 	-- 1. Empresa nueva en una ranura libre.
 	local slot
 	for _, k in { "1", "2", "3", "4" } do
-		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or App.profile.unlocked[k]) then
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
 			slot = k
 			break
 		end
@@ -3377,6 +3377,150 @@ test("Editor de oficinas: entrar desde Instalaciones, colocar, comprar una vez, 
 	eq(scenes, 0, "ninguna escena del editor queda en el Workspace")
 	check(App.renderError == nil, "sin errores al entrar y salir")
 	noErrors("Editor de oficinas")
+end)
+
+
+test("Editor de oficinas (estabilización): inventario inicial, cursor fuera de las habitaciones, reintentos sin cobro doble y medidas de los modelos", function()
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Editor = require("./.build-ui/client/OfficeEditor")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	local OfficeModels = require("./.build-ui/client/OfficeModels")
+	-- Medidas: cada modelo provisional entra en las casillas que ocupa (y en su tamaño declarado).
+	local CELL = OfficeCatalog.CELL
+	for id, item in OfficeCatalog.FURNITURE do
+		check(item.size[1] <= item.cells[1] * CELL + 1e-6 and item.size[3] <= item.cells[2] * CELL + 1e-6, id .. ": tamaño declarado dentro de sus casillas")
+		local m = OfficeModels.build(item)
+		local hx, hz = item.cells[1] * CELL / 2, item.cells[2] * CELL / 2
+		local worst = 0
+		for _, d in m:GetDescendants() do
+			if d:IsA("BasePart") and d.Transparency < 1 then
+				local p, sz = d.CFrame.Position, d.Size
+				worst = math.max(worst, math.abs(p.X) + sz.X / 2 - hx, math.abs(p.Z) + sz.Z / 2 - hz)
+				check(p.Y - sz.Y / 2 >= -1e-6 and p.Y + sz.Y / 2 <= item.size[2] + 1e-6, id .. "/" .. d.Name .. ": entre el piso y su alto")
+			end
+		end
+		check(worst <= 1e-6, id .. ": ninguna pieza sobresale de sus casillas (" .. string.format("%.2f", worst) .. ")")
+		m:Destroy()
+	end
+	-- Empresa nueva para empezar con el inventario inicial.
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or (App.profile.unlocked or {})[k]) then
+			slot = k
+			break
+		end
+	end
+	if not slot then
+		-- Sin ranura libre: se libera la última de esta prueba anterior.
+		for k, v in App.profile.slots do
+			if v and v.name == "Oficinas SA" then
+				App.request("deleteCompany", { slot = k, confirm = "Oficinas SA" })
+				slot = k
+			end
+		end
+	end
+	check(slot ~= nil, "ranura libre")
+	local cr = App.request("createCompany", { slot = slot, name = "Muebles Uno", color = "#FF8A3D", logo = "pico" })
+	check(cr.ok, "empresa creada: " .. tostring(cr.msg))
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = 100000
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.money == 100000
+	end)
+	App.go("oficina")
+	M.task.wait()
+	-- 1. Pestaña Inventario: escritorio y silla iniciales, para colocar gratis.
+	clickN("TabInventario")
+	M.task.wait()
+	check(named("Mueble_escritorio_metal_1970") ~= nil and named("Mueble_silla_oficina_1970") ~= nil, "el inventario muestra el escritorio y la silla")
+	check(named("Inventario_escritorio_metal_1970") ~= nil and named("Inventario_silla_oficina_1970") ~= nil, "con su cantidad y «gratis»")
+	check(named("Mueble_lampara_pie_1970") == nil, "solo lo propio (no el catálogo)")
+	local btn = named("Colocar_escritorio_metal_1970")
+	check(btn ~= nil and string.find(btn:GetAttribute("label"), "gratis", 1, true) ~= nil, "botón «Colocar gratis»")
+	clickN("Colocar_escritorio_metal_1970")
+	M.task.wait()
+	eq(Editor.state().mode, "place", "elegir desde el inventario empieza la colocación")
+	local R = "oficina_principal"
+	-- 2. Cursor fuera de las habitaciones: la vista previa desaparece y confirmar no usa la posición anterior.
+	Editor.hover(R, 5, 2.5)
+	check(Editor.state().hover and Editor.state().hover.valid, "dentro: posición válida")
+	check(Scene._state.preview ~= nil, "con vista previa")
+	Editor.hover(nil, nil, nil)
+	check(Editor.state().hover == nil, "fuera: se olvida la posición anterior")
+	check(Scene._state.preview == nil, "y la vista previa desaparece")
+	check(named("EstadoColocacion") ~= nil and string.find(named("EstadoColocacion").Text, "Fuera", 1, true) ~= nil, "la barra lo indica")
+	local placed0 = #App.g.office.placed
+	check(Editor.confirm() == nil, "confirmar fuera de las habitaciones no envía nada")
+	eq(#App.g.office.placed, placed0, "ni coloca en la posición anterior")
+	Editor.hover(R, 5, 2.5)
+	local r = Editor.confirm()
+	check(r and r.ok and r.paid == 0, "de vuelta adentro se coloca gratis")
+	clickN("TabInventario")
+	M.task.wait()
+	check(named("Mueble_escritorio_metal_1970") == nil and named("Mueble_silla_oficina_1970") ~= nil, "el escritorio deja el inventario y la silla sigue")
+	-- 3. Reintentos: la respuesta de una compra se pierde (el servidor la aplicó). El editor conserva el id.
+	local rf = M.services.ReplicatedStorage.CarEmpireRemotes.Request
+	local orig = rawget(rf, "__props").OnServerInvoke
+	local lamp = OfficeCatalog.item("lampara_pie_1970")
+	local m0 = App.g.money
+	rawget(rf, "__props").OnServerInvoke = function(pl, action, body)
+		local res = orig(pl, action, body)
+		rawget(rf, "__props").OnServerInvoke = orig -- solo esta vez
+		error("respuesta perdida")
+		return res
+	end
+	Editor.startPlace(lamp.id)
+	Editor.hover(R, 8.5, 6.5)
+	r = Editor.confirm()
+	check(r and r.noResponse, "sin respuesta")
+	check(Editor.state().pending ~= nil and Editor.state().pending.requestId == r.requestId, "la operación queda pendiente con su id")
+	check(named("ReintentarOperacion") ~= nil, "la barra ofrece reintentar")
+	waitFor(function()
+		return App.g.money == m0 - lamp.price
+	end)
+	eq(App.g.money, m0 - lamp.price, "el estado del servidor se reconcilia (se aplicó una vez)")
+	-- Confirmar otra cosa primero reintenta la pendiente (mismo id): no hay cobro doble.
+	Editor.hover(R, 7.5, 6.5)
+	r = Editor.confirm()
+	check(r and r.duplicate, "el reintento se reconoce como ya aplicado")
+	check(Editor.state().pending == nil, "la operación queda resuelta")
+	eq(App.g.money, m0 - lamp.price, "un solo cobro")
+	eq(Office.owned(App.g.office, lamp.id), 1, "una sola lámpara")
+	-- Pérdida ANTES de llegar al servidor: el reintento la aplica una vez.
+	local m1 = App.g.money
+	rawget(rf, "__props").OnServerInvoke = function()
+		rawget(rf, "__props").OnServerInvoke = orig
+		error("sin conexión")
+	end
+	Editor.hover(R, 7.5, 6.5)
+	r = Editor.confirm()
+	check(r and r.noResponse and Editor.state().pending ~= nil, "pendiente sin aplicar")
+	eq(App.g.money, m1, "todavía sin cobro")
+	r = Editor.retry()
+	check(r and r.ok and not r.duplicate and r.paid == lamp.price, "el reintento la aplica")
+	eq(App.g.money, m1 - lamp.price, "cobrada una vez")
+	r = App.request("officePlace", { item = lamp.id, room = R, x = 7.5, y = 6.5, rot = 0 }, { requestId = Editor.state().pending and Editor.state().pending.requestId or "x-ya-resuelto-0001" })
+	eq(App.g.money, m1 - lamp.price, "sin cobros extra")
+	eq(Office.owned(App.g.office, lamp.id), 2, "dos lámparas en total")
+	Editor.cancel()
+	App.go("juego")
+	M.task.wait()
+	noErrors("Estabilización del editor de oficinas")
 end)
 
 T.finish()

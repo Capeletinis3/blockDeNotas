@@ -13,6 +13,7 @@
 	pruebas; está pensada para poder agregar controles táctiles después. ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
@@ -36,6 +37,9 @@ local st = {
 	busy = false,
 	message = nil :: string?, -- último motivo de rechazo del servidor
 	company = nil :: string?,
+	-- Operación sin respuesta del servidor { action, payload, requestId }: puede haberse aplicado o no. Se
+	-- reintenta tal cual (mismo requestId: el servidor no la aplica dos veces) antes de enviar otra.
+	pending = nil :: any,
 }
 Editor._state = st
 
@@ -69,7 +73,7 @@ function Editor.enter()
 	local company = App.g.company and App.g.company.id or "?"
 	if st.company ~= company then
 		-- Otra empresa: nada del estado anterior pasa a esta.
-		st.mode, st.item, st.instance, st.rot, st.room, st.hover, st.message = "idle", nil, nil, 0, nil, nil, nil
+		st.mode, st.item, st.instance, st.rot, st.room, st.hover, st.message, st.pending = "idle", nil, nil, 0, nil, nil, nil, nil
 		st.company = company
 	end
 	st.active = true
@@ -214,8 +218,12 @@ function Editor.hover(roomId: string?, x: number?, y: number?)
 	end
 	local item = st.item and OfficeCatalog.item(st.item)
 	if not item or not roomId or not x or not y then
-		if st.hover then
-			st.hover.valid, st.hover.reason = false, "Fuera de las habitaciones."
+		-- Fuera de las habitaciones: se olvida la posición anterior (confirmar no puede usarla) y la vista
+		-- previa desaparece hasta que el cursor vuelva a una habitación.
+		if st.hover ~= nil then
+			st.hover = nil
+			Scene.preview(nil)
+			changed()
 		end
 		return
 	end
@@ -252,12 +260,41 @@ end
 
 -- Operaciones con el servidor ---------------------------------------------------------------------------------
 
+-- Pide al servidor la partida actual (reconciliar después de una operación sin respuesta).
+local function resync()
+	task.spawn(function()
+		App.request("sync")
+	end)
+end
+
+--[[ Envía una operación económica. Cada operación lleva su requestId (lo genera el editor): si no hay
+	respuesta, queda en st.pending con ese mismo id para reintentarla sin riesgo de cobrar dos veces, y se
+	pide el estado al servidor. Con cualquier respuesta real del servidor la operación queda resuelta. ]]
 local function send(action: string, payload: any, requestId: string?): any
+	local id = requestId or HttpService:GenerateGUID(false)
 	st.busy = true
 	changed()
-	local r = App.request(action, payload, { key = "oficina", requestId = requestId })
+	local r = App.request(action, payload, { key = "oficina", requestId = id })
 	st.busy = false
-	if not r.ok and not r.pending then
+	if r.pending then
+		-- Otra operación del editor sigue en curso: no se envió nada.
+		changed()
+		return r
+	end
+	if r.noResponse or r.retry then
+		-- Sin respuesta (no se sabe si se aplicó) o el servidor no la procesó todavía: se conserva el id.
+		st.pending = { action = action, payload = payload, requestId = id }
+		st.message = r.retry and (tostring(r.msg) .. " «Reintentar» la reenvía con el mismo identificador.") or "Sin respuesta del servidor. «Reintentar» la reenvía igual: si ya se había aplicado, no se cobra dos veces."
+		changed()
+		resync()
+		return r
+	end
+	st.pending = nil
+	if r.duplicate then
+		-- Ya se había aplicado (reenvío): vale lo que diga el estado del servidor.
+		st.message = nil
+		resync()
+	elseif not r.ok then
 		st.message = r.msg
 	else
 		st.message = nil
@@ -266,8 +303,38 @@ local function send(action: string, payload: any, requestId: string?): any
 	return r
 end
 
+-- Reintenta la operación que quedó sin respuesta, con su mismo requestId.
+function Editor.retry(): any
+	local p = st.pending
+	if not p or st.busy then
+		return nil
+	end
+	local r = send(p.action, p.payload, p.requestId)
+	Editor.sync()
+	return r
+end
+
+-- Descarta el reintento después de reconciliar con el servidor (la oficina queda como diga el servidor).
+function Editor.dropPending(): boolean
+	if not st.pending or st.busy then
+		return false
+	end
+	local r = App.request("sync")
+	if r.ok then
+		st.pending = nil
+		st.message = nil
+		Editor.sync()
+		changed()
+		return true
+	end
+	return false
+end
+
 -- Confirma la vista previa en la posición actual. Devuelve la respuesta del servidor (o nil si no se envió).
 function Editor.confirm(requestId: string?): any
+	if st.active and st.pending then
+		return Editor.retry() -- primero se resuelve la operación que quedó sin respuesta
+	end
 	if not st.active or st.busy or st.mode == "idle" or not st.hover or not st.item then
 		return nil
 	end
@@ -296,6 +363,9 @@ end
 -- Gira el mueble elegido en su lugar (si el giro nuevo entra).
 function Editor.rotateSelected(dir: number): any
 	local o = Editor.office()
+	if st.pending then
+		return Editor.retry()
+	end
 	local p = o and st.instance and Office.find(o, st.instance)
 	if not p or st.busy then
 		return nil
@@ -316,6 +386,9 @@ end
 
 -- Guarda el mueble elegido en el inventario (sin reembolso).
 function Editor.removeSelected(): any
+	if st.pending then
+		return Editor.retry()
+	end
 	if not st.instance or st.busy then
 		return nil
 	end

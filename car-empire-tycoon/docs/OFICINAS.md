@@ -58,3 +58,9 @@ Editor isométrico (cámara, cuadrícula visible, techo oculto, paredes semitran
 - Remodelación de acabados con cobro (`Office.remodelQuote`).
 - Controles táctiles y modelos 3D definitivos.
 - Ubicar las oficinas dentro de los edificios reales de la parcela.
+
+### Estabilización de la etapa 2
+- Inventario del editor: `Office.inventoryList` recorre lo guardado sin filtrar por año (antes `catalogFor(0)` devolvía una lista vacía).
+- Cursor fuera de las habitaciones: se olvida la posición anterior y la vista previa desaparece. Confirmar no envía nada.
+- Reintentos: cada operación del editor lleva su `requestId`. Si no hay respuesta (`App.request` devuelve `noResponse`) o el servidor no la procesó (`retry`: acción en curso o límite de acciones), queda pendiente con ese mismo id. «Reintentar», o cualquier confirmación siguiente, la reenvía igual y el servidor responde `duplicate` si ya la había aplicado; después se pide el estado con `sync`.
+- Medidas: el tamaño declarado de cada mueble nunca supera sus casillas. El sofá pasó de 2,4 a 2 studs de profundidad, y una prueba mide todas las piezas de los 8 modelos provisionales.
