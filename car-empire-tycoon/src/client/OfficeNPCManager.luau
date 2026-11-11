@@ -52,6 +52,20 @@ Manager.LOCAL_DELAY = 1
 Manager.REBUILD_WAIT = 15
 Manager.MAX_REBUILDS = 3
 Manager.MAX_REQUESTS = 6
+--[[ Los «no disponible» vencen: el del servidor (Agotado_<userId> = hora de vencimiento) cuando él lo indica, y
+	los del cliente (intentos agotados) a los UNAVAILABLE_COOLDOWN segundos. Al vencer se vuelve a intentar sin
+	reabrir el editor, con los contadores de intentos en cero, pero como mucho MAX_CYCLES veces por amigo
+	mientras el editor está abierto (sin reintentos infinitos: después queda no disponible hasta reabrirlo). ]]
+Manager.UNAVAILABLE_COOLDOWN = 600
+Manager.MAX_CYCLES = 3
+-- Reloj de pared (segundos UNIX) comparable con los atributos del servidor: la hora sincronizada con el
+-- servidor si el motor la ofrece (Workspace:GetServerTimeNow), si no la local. Las pruebas lo reemplazan.
+Manager.now = function(): number
+	local ok, t = pcall(function()
+		return (workspace :: any):GetServerTimeNow()
+	end)
+	return (ok and type(t) == "number") and t or os.time()
+end
 
 local st = {
 	open = false,
@@ -72,7 +86,8 @@ local st = {
 	buildFail = {} :: { [number]: any }, -- userId → { tpl, n, nextAt, invalid, askedAt }
 	rebuildAsked = {} :: { [number]: number }, -- userId → regeneraciones pedidas
 	requestCount = {} :: { [number]: number }, -- userId → pedidos comunes enviados
-	unavailable = {} :: { [number]: string }, -- userId → motivo (sin más pedidos hasta reabrir)
+	unavailable = {} :: { [number]: any }, -- userId → { reason, untilT } (sin pedidos hasta que venza)
+	cycles = {} :: { [number]: number }, -- userId → veces que se volvió a intentar tras un vencimiento
 	rebuildQueue = {} :: { string },
 	queue = {} :: { string },
 	lastRequest = -math.huge,
@@ -174,26 +189,60 @@ local function flushRequests()
 	end
 end
 
--- Aviso del servidor de que dejó de intentar ese avatar por un rato (fallas seguidas).
-local function serverGaveUp(userId: number): boolean
+--[[ Bloqueo del servidor para ese amigo (fallas seguidas): devuelve la hora de vencimiento si sigue vigente, o
+	nil. Un atributo vencido (o con otro formato) se ignora: el servidor lo limpia en el próximo pedido. ]]
+local function serverBlock(userId: number): number?
 	local f = templates()
-	return f ~= nil and type(f:GetAttribute("Agotado_" .. userId)) == "number"
+	local untilT = f and f:GetAttribute("Agotado_" .. userId)
+	if type(untilT) == "number" and untilT > Manager.now() then
+		return untilT
+	end
+	return nil
+end
+Manager._serverBlock = serverBlock
+
+local function markUnavailable(userId: number, reason: string, untilT: number)
+	st.unavailable[userId] = { reason = reason, untilT = untilT }
 end
 
-local function want(employeeId: string, force: boolean?)
+--[[ ¿Venció el «no disponible» de ese amigo? Si venció y quedan ciclos, se limpian sus contadores y se lo pide
+	de nuevo (sin reabrir el editor). Sin ciclos, queda no disponible hasta reabrir. ]]
+local want: (string, boolean?) -> ()
+
+local function expireUnavailable(employeeId: string, userId: number)
+	local rec = st.unavailable[userId]
+	if not rec or Manager.now() < rec.untilT then
+		return
+	end
+	local c = st.cycles[userId] or 0
+	if c >= Manager.MAX_CYCLES then
+		rec.untilT = math.huge
+		rec.reason = "avatar no disponible: se vuelve a intentar al reabrir el editor"
+		return
+	end
+	st.cycles[userId] = c + 1
+	st.unavailable[userId] = nil
+	st.requestCount[userId] = nil
+	st.rebuildAsked[userId] = nil
+	st.buildFail[userId] = nil
+	want(employeeId, true)
+end
+
+want = function(employeeId: string, force: boolean?)
 	local userId = st.friendOf[employeeId]
 	if not userId or st.unavailable[userId] then
 		return
 	end
-	if serverGaveUp(userId) then
-		st.unavailable[userId] = "el servidor no pudo armarlo"
+	local blockedUntil = serverBlock(userId)
+	if blockedUntil then
+		markUnavailable(userId, "el servidor no pudo armarlo; se reintenta solo más tarde", blockedUntil)
 		return
 	end
 	local at = st.requested[userId]
 	if force or not at or st.clock - at >= Manager.RETRY then
 		local n = (st.requestCount[userId] or 0) + 1
 		if n > Manager.MAX_REQUESTS then
-			st.unavailable[userId] = "sin respuesta del servidor"
+			markUnavailable(userId, "sin respuesta del servidor; se reintenta solo más tarde", Manager.now() + Manager.UNAVAILABLE_COOLDOWN)
 			return
 		end
 		st.requestCount[userId] = n
@@ -214,8 +263,13 @@ local function wantRebuild(employeeId: string, rec: any)
 		return
 	end
 	local n = st.rebuildAsked[userId] or 0
-	if n >= Manager.MAX_REBUILDS or serverGaveUp(userId) then
-		st.unavailable[userId] = "la plantilla del avatar no sirve"
+	local blockedUntil = serverBlock(userId)
+	if blockedUntil then
+		markUnavailable(userId, "el servidor no pudo armarlo; se reintenta solo más tarde", blockedUntil)
+		return
+	end
+	if n >= Manager.MAX_REBUILDS then
+		markUnavailable(userId, "la plantilla del avatar no sirve; se reintenta solo más tarde", Manager.now() + Manager.UNAVAILABLE_COOLDOWN)
 		return
 	end
 	st.rebuildAsked[userId] = n + 1
@@ -317,6 +371,9 @@ local function reconcile()
 			end
 			want(id, true)
 			changed = true
+		end
+		if not rig and userId then
+			expireUnavailable(id, userId)
 		end
 		local template = templateFor(userId)
 		if rig and template and rig.builtAt ~= template:GetAttribute("builtAt") then
@@ -420,7 +477,7 @@ function Manager.open(g: any)
 	for _, id in st.world.order do
 		local tpl = templateFor(st.friendOf[id])
 		local at = tpl and tpl:GetAttribute("builtAt")
-		if type(at) == "number" and os.time() - at >= Manager.REFRESH_AFTER then
+		if type(at) == "number" and Manager.now() - at >= Manager.REFRESH_AFTER then
 			want(id, true)
 		end
 	end
@@ -486,6 +543,7 @@ function Manager.close()
 	table.clear(st.rebuildAsked)
 	table.clear(st.requestCount)
 	table.clear(st.unavailable)
+	table.clear(st.cycles)
 	table.clear(st.rebuildQueue)
 	local was = st.open
 	st.open = false
@@ -608,7 +666,7 @@ function Manager.info(employeeId: string?): any
 			friend = e.friend
 		end
 	end
-	return { id = npc.id, name = npc.name, username = friend and friend.username, userId = userId, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state, avatar = st.rigs[npc.id] ~= nil, avatarProblem = userId and st.unavailable[userId] or nil }
+	return { id = npc.id, name = npc.name, username = friend and friend.username, userId = userId, dept = d and d.name or tostring(npc.dept), room = room and room.name or npc.room, activity = activity, nav = nav, state = npc.state, avatar = st.rigs[npc.id] ~= nil, avatarProblem = userId and st.unavailable[userId] and st.unavailable[userId].reason or nil }
 end
 
 -- Posición en el mundo del empleado (para enfocar la cámara).

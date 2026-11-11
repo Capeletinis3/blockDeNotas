@@ -5594,7 +5594,7 @@ do
 		check(S.requests - req1 <= 1, "agotado: ya no se pide más")
 		local _, _, _, _, unav = Mgr.counts({ employees = list })
 		check(unav >= 1, "el contador cuenta los avatares no disponibles (" .. unav .. ")")
-		eq(Mgr.info("rc3").avatarProblem, S.unavailable[u3], "el panel del empleado lo explica")
+		eq(Mgr.info("rc3").avatarProblem, S.unavailable[u3].reason, "el panel del empleado lo explica")
 		-- Ninguna duplicación: un modelo por empleado.
 		local seen, dup = {}, false
 		for _, mdl in Scene.folder():FindFirstChild("Empleados"):GetChildren() do
@@ -5744,6 +5744,177 @@ do
 		App.go("juego")
 		M.avatarsEnabled = false
 		noErrors("Recuperación (servidor)")
+	end)
+
+	test("Bloqueos de avatares: tres fallas, bloqueo temporal, vencimiento a los 600 s sin reabrir, rechazos que no consumen, regeneración, cancelación y sin duplicados", function()
+		local EA = require("./.build-ui/server/EmployeeAvatars")
+		local remote = M.services.ReplicatedStorage.CarEmpireRemotes.Avatares
+		local saved = { EA.now, Mgr.now, EA.RETRY_AFTER, EA.FAIL_MAX, EA.FAIL_WINDOW, EA.REBUILD_GAP, EA.REBUILD_MAX, EA.PER_MINUTE }
+		local T = os.time()
+		local function clock(): number
+			return T
+		end
+		EA.now, Mgr.now = clock, clock -- reloj simulado (mismo para servidor y cliente)
+		EA.RETRY_AFTER, EA.FAIL_MAX, EA.FAIL_WINDOW, EA.REBUILD_GAP, EA.REBUILD_MAX, EA.PER_MINUTE = 60, 3, 600, 10, 3, 1000
+		M.avatarsEnabled = true
+		local sess = freshCompany("Bloqueos SA")
+		setFriends(sess, friendList(2, 850000))
+		hireUi(2)
+		local e1, e2 = App.g.employees[1], App.g.employees[2]
+		local u1, u2 = e1.friend.userId, e2.friend.userId
+		M.avatarVariant = function(uid: number): any
+			return uid == u1 and { noRoot = true } or nil -- el avatar de u1 sale roto hasta que se arregle
+		end
+		local S = Mgr._state
+		local folder = player.PlayerGui.AvataresEmpleados
+		local pst = EA._perPlayer(player)
+		local function fails(): number
+			local f = pst.fails[u1]
+			return f and f.n or 0
+		end
+		local calls0 = M.avatarCalls.model
+		App.go("oficina")
+		M.task.wait()
+		local opens = S.opens
+		check(waitReal(function()
+			return EA.pending() == 0 and Mgr.rig(e2.id) ~= nil and fails() == 1
+		end, 10), "u2 aparece y u1 falla una vez")
+		-- Tres fallas seguidas: el cliente vuelve a pedir tras RETRY y el servidor, pasada la espera por falla.
+		for k = 2, 3 do
+			T += EA.RETRY_AFTER + 1
+			M.task.wait(2.1)
+			Mgr.step(Mgr.RETRY + 1)
+			check(waitReal(function()
+				return EA.pending() == 0 and fails() == k
+			end, 5), "falla " .. k .. " de u1")
+		end
+		eq(M.avatarCalls.model - calls0, 4, "tres intentos de u1 (más el de u2)")
+		local untilT = folder:GetAttribute("Agotado_" .. u1)
+		eq(untilT, T + EA.FAIL_WINDOW, "bloqueo: el atributo guarda el vencimiento (600 s)")
+		Mgr.step(0.1)
+		check(S.unavailable[u1] and S.unavailable[u1].untilT == untilT, "el cliente lo marca no disponible hasta el vencimiento")
+		check(Mgr.rig(e1.id) == nil and npcModels() == 1, "sin personaje (ni genérico) mientras tanto")
+		-- Bloqueo temporal: ni el cliente insiste ni el servidor arma, aunque se le pida directo.
+		local c1, r1 = M.avatarCalls.model, S.requests
+		T += 300
+		M.task.wait(2.1)
+		for _ = 1, 30 do
+			Mgr.step(Mgr.RETRY + 1)
+		end
+		remote:FireServer({ e1.id })
+		M.task.wait(0.2)
+		eq(M.avatarCalls.model, c1, "bloqueado: el servidor no lo arma")
+		check(S.requests - r1 <= 0, "bloqueado: el cliente no lo pide (" .. (S.requests - r1) .. ")")
+		eq(fails(), 3, "el bloqueo no suma fallas")
+		-- Vencimiento a los 600 s: se recupera solo, sin reabrir el editor.
+		M.avatarVariant = nil -- el avatar de u1 ya se puede armar
+		T = untilT + 1
+		M.task.wait(2.1)
+		check(waitReal(function()
+			return Mgr.rig(e1.id) ~= nil
+		end, 10), "vencido el bloqueo, el avatar aparece sin reabrir el editor")
+		eq(S.opens, opens, "el editor no se reabrió")
+		check(folder:GetAttribute("Agotado_" .. u1) == nil and pst.fails[u1] == nil, "el bloqueo vencido se limpió")
+		eq(S.cycles[u1], 1, "un ciclo de reintento usado")
+		-- Rechazos que NO consumen regeneraciones de u2.
+		local function used(): number
+			local rb = pst.rebuilds[u2]
+			return rb and rb.n or 0
+		end
+		local tpl2 = folder:FindFirstChild("Avatar_" .. u2)
+		local function ask()
+			M.task.wait(2.1)
+			remote:FireServer({ e2.id }, { e2.id })
+			M.task.wait(0.1)
+		end
+		-- Regeneración aceptada: consume una y se entrega (la plantilla queda recién armada).
+		local rb0 = EA._stats.rebuilt
+		ask()
+		local function regenerated(prev: any): boolean
+			return waitReal(function()
+				local now2 = folder:FindFirstChild("Avatar_" .. u2)
+				return now2 ~= nil and now2 ~= prev and Mgr.rig(e2.id) ~= nil and Mgr.rig(e2.id).builtAt == now2:GetAttribute("builtAt")
+			end, 5)
+		end
+		check(regenerated(tpl2), "regeneración exitosa: plantilla nueva y personaje rearmado")
+		check(used() == 1 and EA._stats.rebuilt == rb0 + 1, "una regeneración consumida")
+		tpl2 = folder:FindFirstChild("Avatar_" .. u2)
+		-- Rechazos: ninguno consume una regeneración ni rearma nada.
+		local ref0 = EA._stats.refused
+		ask() -- recién armado: dentro de REBUILD_GAP
+		check(used() == 1 and EA._stats.refused == ref0 + 1, "rechazo por frecuencia: no consume")
+		T += EA.REBUILD_GAP + 1
+		folder:SetAttribute("Fallo_" .. u2, T)
+		ask()
+		check(used() == 1, "rechazo por falla reciente: no consume")
+		folder:SetAttribute("Fallo_" .. u2, nil)
+		pst.count = EA.PER_MINUTE
+		ask()
+		check(used() == 1, "rechazo por límite por minuto: no consume")
+		pst.count = 0
+		pst.fails[u2] = { n = EA.FAIL_MAX, blockedUntil = T + 100 }
+		ask()
+		check(used() == 1, "rechazo por bloqueo: no consume")
+		pst.fails[u2] = nil
+		folder:SetAttribute("Agotado_" .. u2, nil)
+		pst.building[u2] = true
+		ask()
+		check(used() == 1, "rechazo por armado en curso: no consume")
+		pst.building[u2] = nil
+		check(folder:FindFirstChild("Avatar_" .. u2) == tpl2 and EA._stats.refused == ref0 + 5, "cinco rechazos y nada rearmado")
+		-- Después de los rechazos, la siguiente válida se acepta: los intentos siguen disponibles.
+		ask()
+		check(regenerated(tpl2), "regeneración aceptada después de los rechazos")
+		eq(used(), 2, "solo las aceptadas consumen (2 de " .. EA.REBUILD_MAX .. ")")
+		-- Sin duplicados (plantillas ni personajes).
+		local tcount, seen, dup = {}, {}, false
+		for _, mdl in folder:GetChildren() do
+			tcount[mdl.Name] = (tcount[mdl.Name] or 0) + 1
+			dup = dup or tcount[mdl.Name] > 1
+		end
+		for _, mdl in Scene.folder():FindFirstChild("Empleados"):GetChildren() do
+			local id = mdl:GetAttribute("employeeId")
+			dup = dup or seen[id] == true
+			seen[id] = true
+		end
+		check(not dup and npcModels() == 2, "sin NPCs ni plantillas duplicados")
+		-- Cancelación por cambio de empresa: la regeneración en curso se descarta.
+		local tplNow = folder:FindFirstChild("Avatar_" .. u2)
+		T += EA.REBUILD_GAP + 1
+		M.avatarDelay = 0.5
+		local d0 = EA._stats.discarded + EA._stats.skipped
+		M.task.wait(2.1)
+		remote:FireServer({ e2.id }, { e2.id })
+		M.task.wait(0.05)
+		local sessB = freshCompany("Bloqueos B")
+		M.task.wait(1)
+		M.avatarDelay = nil
+		check(EA._stats.discarded + EA._stats.skipped > d0, "cambio de empresa: el resultado obsoleto se descarta")
+		check(folder:FindFirstChild("Avatar_" .. u2) == tplNow, "no se entrega la plantilla de la empresa anterior")
+		check(not Mgr.isOpen() or #Mgr.world().order == 0, "la empresa nueva no muestra empleados de la anterior")
+		-- Tope de ciclos: un amigo que vuelve a bloquearse una y otra vez queda no disponible hasta reabrir.
+		local _ = sessB
+		local o = Office.new(1)
+		Scene.buildRooms(o)
+		local one = staff(1, "bq")
+		local uq = one[1].friend.userId
+		Mgr.open({ company = { id = "ciclos" }, office = o, employees = one })
+		for k = 1, Mgr.MAX_CYCLES + 1 do
+			folder:SetAttribute("Agotado_" .. uq, T + 10)
+			Mgr._state.lastRequest = -math.huge
+			Mgr.step(Mgr.RETRY + 1)
+			check(S.unavailable[uq] ~= nil, "ciclo " .. k .. ": bloqueado")
+			T += 11
+			Mgr.step(0.1)
+		end
+		check(S.unavailable[uq] and S.unavailable[uq].untilT == math.huge and S.cycles[uq] == Mgr.MAX_CYCLES, "tras " .. Mgr.MAX_CYCLES .. " ciclos queda no disponible hasta reabrir (sin reintentos infinitos)")
+		folder:SetAttribute("Agotado_" .. uq, nil)
+		Mgr.close()
+		Scene.destroy()
+		EA.now, Mgr.now, EA.RETRY_AFTER, EA.FAIL_MAX, EA.FAIL_WINDOW, EA.REBUILD_GAP, EA.REBUILD_MAX, EA.PER_MINUTE = saved[1], saved[2], saved[3], saved[4], saved[5], saved[6], saved[7], saved[8]
+		App.go("juego")
+		M.avatarsEnabled = false
+		noErrors("Bloqueos de avatares")
 	end)
 end
 

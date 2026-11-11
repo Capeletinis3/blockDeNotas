@@ -268,6 +268,20 @@ panel: nombre, departamento y habitación, actividad, navegación, «Enfocar». 
   anterior (nunca dos). Los controles de vigencia (empresa activa, despido, reasignación, jugador que se va)
   siguen aplicando a las regeneraciones.
 
+### Bloqueos que vencen y regeneraciones bien contadas
+
+- Tras 3 fallas seguidas de un amigo, el servidor lo bloquea 600 s desde la última falla. `Agotado_<userId>`
+  guarda la **hora de vencimiento**; al vencer, el servidor borra el bloqueo (estado y atributo) en el próximo
+  pedido y el amigo vuelve a tener 3 intentos.
+- El cliente ignora un `Agotado_` vencido y usa la hora sincronizada con el servidor
+  (`Workspace:GetServerTimeNow`, si no `os.time`). Sus «no disponible» también vencen (el del servidor a su hora;
+  los propios a los 600 s) y entonces vuelve a pedir el avatar **sin reabrir el editor**, con sus contadores en
+  cero, hasta 3 veces por amigo mientras el editor está abierto; después queda no disponible hasta reabrirlo.
+- Una regeneración consume un intento solo si el pedido se acepta para procesarse. Si se rechaza por intervalo
+  mínimo, falla reciente, bloqueo, armado en curso o límite por minuto, no consume nada.
+- `EmployeeAvatars.now` y `OfficeNPCManager.now` son el reloj de pared; las pruebas los reemplazan para simular
+  los 600 s.
+
 ### Pendiente de verificar en Roblox Studio
 
 La lista real de amigos (`GetFriendsAsync`) y la creación de avatares en un servidor de Roblox; el aspecto de

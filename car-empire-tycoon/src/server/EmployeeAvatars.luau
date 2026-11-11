@@ -37,7 +37,12 @@ Avatars.REBUILD_GAP = 10
 Avatars.REBUILD_MAX = 3
 Avatars.REBUILD_WINDOW = 600
 Avatars.FAIL_MAX = 3
-Avatars.FAIL_WINDOW = 600
+Avatars.FAIL_WINDOW = 600 -- duración del bloqueo tras FAIL_MAX fallas seguidas (desde la última)
+-- Reloj de pared (segundos UNIX) para armados, fallas, bloqueos y regeneraciones. Las pruebas lo reemplazan
+-- para simular el paso del tiempo; el límite por minuto usa os.clock aparte.
+Avatars.now = function(): number
+	return os.time()
+end
 
 --[[ Comprobación de vigencia (la asigna Main.server): (player, userId, token) → ¿sigue siendo un empleado de la
 	empresa activa con la que se pidió? token identifica esa empresa abierta. Se consulta antes de empezar a
@@ -78,19 +83,39 @@ function Avatars.validModel(model: any): boolean
 	return parts >= 2 and model:FindFirstChild("Head", true) ~= nil
 end
 
--- Registra una falla de un amigo (ventana deslizante) y avisa al cliente en la carpeta.
+--[[ Registra una falla de un amigo y avisa al cliente en la carpeta. Con FAIL_MAX fallas seguidas se bloquea
+	ese amigo durante FAIL_WINDOW segundos: el atributo Agotado_<userId> guarda la HORA DE VENCIMIENTO (no la
+	de la falla), así el cliente sabe cuándo puede volver a pedirlo. Al vencer, el amigo tiene de nuevo
+	FAIL_MAX intentos (un bloqueo por vez: nunca reintentos sin pausa). ]]
 local function noteFail(st: any, folder: Instance, userId: number)
+	local now = Avatars.now()
 	local f = st.fails[userId]
-	local now = os.time()
-	if not f or now - f.since >= Avatars.FAIL_WINDOW then
-		f = { n = 0, since = now }
+	if not f or (f.blockedUntil and now >= f.blockedUntil) then
+		f = { n = 0 }
 		st.fails[userId] = f
 	end
 	f.n += 1
 	folder:SetAttribute("Fallo_" .. userId, now)
 	if f.n >= Avatars.FAIL_MAX then
-		folder:SetAttribute("Agotado_" .. userId, now) -- el cliente deja de pedirlo por ahora
+		f.blockedUntil = now + Avatars.FAIL_WINDOW
+		folder:SetAttribute("Agotado_" .. userId, f.blockedUntil)
 	end
+end
+
+-- ¿Ese amigo está bloqueado ahora? Un bloqueo vencido se borra (estado y atributo) y deja de contar.
+local function blocked(st: any, folder: Instance, userId: number, now: number): boolean
+	local f = st.fails[userId]
+	if f and f.blockedUntil then
+		if now < f.blockedUntil then
+			return true
+		end
+		st.fails[userId] = nil
+	end
+	local attr = folder:GetAttribute("Agotado_" .. userId)
+	if attr ~= nil and (type(attr) ~= "number" or now >= attr) then
+		folder:SetAttribute("Agotado_" .. userId, nil) -- vencido (o de otra versión): se limpia
+	end
+	return false
 end
 
 -- Llama al primer nombre de método que exista (las APIs con y sin sufijo Async según la versión del motor).
@@ -140,13 +165,13 @@ end
 
 local function description(userId: number): (boolean, any)
 	local c = descCache[userId]
-	if c and os.time() - c.at < Avatars.DESC_TTL then
+	if c and Avatars.now() - c.at < Avatars.DESC_TTL then
 		return true, c.desc
 	end
 	local ok, desc = callFirst({ "GetHumanoidDescriptionFromUserIdAsync", "GetHumanoidDescriptionFromUserId" }, userId)
 	if ok then
 		Avatars._stats.descFetched += 1
-		descCache[userId] = { desc = desc, at = os.time() }
+		descCache[userId] = { desc = desc, at = Avatars.now() }
 	end
 	return ok, desc
 end
@@ -155,7 +180,7 @@ end
 local function prepare(model: Model, userId: number)
 	model.Name = "Avatar_" .. userId
 	model:SetAttribute("userId", userId)
-	model:SetAttribute("builtAt", os.time())
+	model:SetAttribute("builtAt", Avatars.now())
 	for _, d in model:GetDescendants() do
 		if d:IsA("Script") or d:IsA("LocalScript") then
 			d:Destroy()
@@ -211,6 +236,7 @@ local function build(job: any)
 	end
 	st.fails[userId] = nil
 	folder:SetAttribute("Agotado_" .. userId, nil)
+	folder:SetAttribute("Fallo_" .. userId, nil)
 	prepare(model, userId)
 	local old = folder:FindFirstChild("Avatar_" .. userId)
 	if old then
@@ -265,19 +291,24 @@ function Avatars.request(player: any, userIds: { number }, token: any?, rebuild:
 		return
 	end
 	local st = stateOf(player)
-	local now = os.time()
+	local now = Avatars.now()
 	for _, userId in userIds do
 		local have = folder:FindFirstChild("Avatar_" .. userId)
 		local builtAt = have and (have:GetAttribute("builtAt") or 0) or 0
 		local fresh = have ~= nil and now - builtAt < Avatars.MODEL_TTL
+		local failedAt = folder:GetAttribute("Fallo_" .. userId)
+		local recentFail = type(failedAt) == "number" and now - failedAt < Avatars.RETRY_AFTER
+		-- ¿Se podría procesar ahora? (sin armado en curso, sin falla reciente, sin bloqueo, dentro del límite)
+		local allowed = not st.building[userId] and not recentFail and not blocked(st, folder, userId, now) and st.count < Avatars.PER_MINUTE
 		if fresh and rebuild and rebuild[userId] then
-			-- Regenerar una plantilla que el cliente no pudo usar, dentro de los límites.
+			-- Regenerar una plantilla que el cliente no pudo usar. El intento se descuenta SOLO si el pedido se
+			-- acepta de verdad; uno rechazado (frecuencia, falla reciente, bloqueo, límite) no consume nada.
 			local rb = st.rebuilds[userId]
 			if not rb or now - rb.since >= Avatars.REBUILD_WINDOW then
 				rb = { n = 0, since = now }
 				st.rebuilds[userId] = rb
 			end
-			if rb.n < Avatars.REBUILD_MAX and now - builtAt >= Avatars.REBUILD_GAP and not st.building[userId] then
+			if allowed and rb.n < Avatars.REBUILD_MAX and now - builtAt >= Avatars.REBUILD_GAP then
 				rb.n += 1
 				fresh = false
 				Avatars._stats.rebuilt += 1
@@ -285,11 +316,7 @@ function Avatars.request(player: any, userIds: { number }, token: any?, rebuild:
 				Avatars._stats.refused += 1
 			end
 		end
-		local failedAt = folder:GetAttribute("Fallo_" .. userId)
-		local recentFail = type(failedAt) == "number" and now - failedAt < Avatars.RETRY_AFTER
-		local f = st.fails[userId]
-		local exhausted = f ~= nil and f.n >= Avatars.FAIL_MAX and now - f.since < Avatars.FAIL_WINDOW
-		if not fresh and not st.building[userId] and not recentFail and not exhausted and st.count < Avatars.PER_MINUTE then
+		if not fresh and allowed then
 			st.count += 1
 			st.building[userId] = true
 			table.insert(queue, { player = player, userId = userId, token = token })
