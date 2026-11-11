@@ -18,7 +18,7 @@ local Office = require(Shared.Office)
 
 local GameState = {}
 
-GameState.SCHEMA = 18
+GameState.SCHEMA = 19
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -1136,6 +1136,15 @@ MIGRATIONS[17] = function(g: any, _now: number)
 	g.schema = 18
 end
 
+-- 18 → 19: el escritorio y la silla iniciales pasan a estar guardados en el inventario (antes se colocaban
+-- solos) y el contador de ids de muebles se sincroniza con los existentes. Sin crear ni perder muebles.
+MIGRATIONS[18] = function(g: any, _now: number)
+	Office.sanitize(g)
+	Office.unplaceStarter(g.office)
+	Office.syncSeq(g.office)
+	g.schema = 19
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1512,7 +1521,7 @@ end
 function GameState.structKey(g: any): string
 	local parts = { tostring(g.time.day), tostring(g.sede), tostring(g.facilities.factory), tostring(g.facilities.research), tostring(#g.facilities.builds), tostring(Rules.lineCount(g)), tostring(#g.designs), tostring(#g.notifications), g.notifications[1] and g.notifications[1].id or "",
 		tostring(#g.lotHistory), g.lotHistory[1] and g.lotHistory[1].id or "", tostring(#g.research.done), tostring(#g.research.projects),
-		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), g.campaign and g.campaign.id or "-", tostring(#g.modelHistory), tostring(g.expansion) }
+		tostring(#g.candidates), g.candidates[1] and g.candidates[1].id or "", tostring(g.market.searches), tostring(#g.employees), tostring(#g.trainings), g.campaign and g.campaign.id or "-", tostring(#g.modelHistory), tostring(g.expansion), tostring(type(g.office) == "table" and g.office.rev or 0) }
 	for _, l in g.lots do
 		table.insert(parts, l.id .. ":" .. l.prodState .. ":" .. l.saleState)
 	end

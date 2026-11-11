@@ -1,4 +1,4 @@
-# Oficinas decorables — etapa 1 (arquitectura)
+# Oficinas decorables
 
 Solo datos y servicios. Sin editor, cámara, cuadrícula visible ni modelos 3D. No probado en Roblox Studio ni con DataStore real.
 
@@ -29,3 +29,32 @@ Un mueble propio está guardado o colocado, nunca en los dos.
 
 ## Pendiente para la etapa 2
 Editor isométrico (cámara, cuadrícula visible, techo oculto, paredes semitransparentes) que previsualice con `Office.validatePlacement`. Registrar `OfficeService.place/move/remove` y una acción de remodelación en Sessions. Ubicación del plano en el mundo (origen de cada habitación) y modelos 3D (`model`). Colisiones 3D en `Office.extraCheck`. Conectar `Office.interactionSpots` a OwnerAvatar y `Office.sharedBonus` a `Rules.staff`.
+
+## Etapa 2: editor 3D (sin probar en Roblox Studio)
+
+### Correcciones de la etapa 1 (esquema 19, migración aditiva e idempotente)
+- El escritorio y la silla iniciales empiezan **guardados en el inventario**. Las partidas del esquema 18 que los tenían colocados en su lugar inicial los recuperan en el inventario (`Office.unplaceStarter`), sin crear ni perder muebles. Si el escritorio ya no estaba en su lugar inicial, no se toca.
+- Colisiones con la intersección real de rectángulos girados (`Office.overlaps`, eje separador), límites por esquinas (`Office.insideRoom`) y accesos como casillas completas.
+- Todos los muebles giran de a 45°.
+- `office.seq` se sincroniza con los ids existentes (`Office.syncSeq`): nunca se reutiliza un id.
+
+### Acciones del servidor
+`officePlace`, `officeMove` y `officeRemove` (Actions → OfficeService) son económicas en Sessions:
+- Exigen `requestId`; un reenvío devuelve la respuesta original (instancia y monto cobrado incluidos).
+- El `requestId` es además el `opId` de la oficina, así que tampoco se aplica dos veces después de recargar.
+- Guardan enseguida, respetando el intervalo mínimo del guardado.
+- Cada cambio sube `office.rev`, de modo que el cliente recibe la oficina actualizada.
+
+### Cliente
+- `OfficeScene`: escena aislada en este cliente, lejos del mapa. Muestra las habitaciones del plano con su cuadrícula, los accesos en azul y paredes bajas sin techo que se aclaran cuando tapan la vista. Los muebles se sincronizan por diferencias y la vista previa usa Highlight (verde o rojo).
+- `OfficeModels`: los 8 muebles provisionales con Parts y las medidas del catálogo. Se reemplazan solos si existe `ReplicatedStorage.CarEmpireAssets.Muebles.<item.model>` (Model con PrimaryPart en la base y el frente hacia −Z).
+- `OfficeCamera`: cámara isométrica, con control exclusivo cuando `App.cameraOwner == "office"`. Clic derecho + arrastrar o Q/E giran; la rueda hace zoom; W A S D o clic de la rueda desplazan.
+- `OfficeEditor`: estado y colocación con `Office.validatePlacement`, las mismas reglas que el servidor. La API (`startPlace`, `hover`, `rotate`, `confirm`, `selectAt`, `startMove`, `rotateSelected`, `removeSelected`, `cancel`) la usan el mouse y las pruebas, y queda preparada para controles táctiles.
+- `ScreenOffice`: barra superior, panel lateral (habitaciones, catálogo por categorías, inventario) y barra contextual. Se entra desde Compañía › Instalaciones › Oficinas centrales › **Personalizar oficina** (ruta `oficina`, pausa la empresa).
+
+### Pendiente (etapas siguientes)
+- Bonificaciones del mobiliario: conectar `Office.sharedBonus` a `Rules.staff`.
+- Que el avatar use los muebles colocados (`Office.interactionSpots`).
+- Remodelación de acabados con cobro (`Office.remodelQuote`).
+- Controles táctiles y modelos 3D definitivos.
+- Ubicar las oficinas dentro de los edificios reales de la parcela.

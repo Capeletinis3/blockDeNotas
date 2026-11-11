@@ -295,7 +295,8 @@ function App.request(action: string, payload: any?, opts: any?): any
 		Ui.setBusy(btn, true)
 	end
 	local body = type(payload) == "table" and table.clone(payload) or {}
-	body.requestId = HttpService:GenerateGUID(false)
+	-- Un reenvío explícito (opts.requestId) reutiliza el identificador: el servidor no lo aplica dos veces.
+	body.requestId = (opts and type(opts.requestId) == "string" and opts.requestId) or HttpService:GenerateGUID(false)
 	local ok, result = pcall(function()
 		return Request:InvokeServer(action, body)
 	end)
@@ -398,6 +399,7 @@ end
 local FULLSCREEN = {
 	editor = true, fabrica = true, autos = true, ventas = true, mercado = true, investigacion = true,
 	personal = true, compania = true, misiones = true, estadisticas = true, menu = true, nueva = true,
+	oficina = true, -- editor de oficinas: pausa la empresa mientras está abierto
 }
 
 --[[ Protección del borrador del editor: antes de salir del editor, abrir otro borrador o volver al menú se
@@ -680,7 +682,12 @@ function App.render()
 	-- Dueño único de Workspace.CurrentCamera según la pantalla: el showroom en el menú principal, la cámara de
 	-- gestión (SceneCamera) con una empresa abierta fuera del menú, y nadie en la pantalla de creación. Así
 	-- nunca hay dos sistemas moviendo la cámara (por ejemplo, al volver al menú con la empresa todavía cargada).
-	App.cameraOwner = (route == "menu" and "showroom") or ((App.g ~= nil and route ~= "nueva") and "scene") or nil
+	App.cameraOwner = if route == "menu" then "showroom" elseif App.g ~= nil and route == "oficina" then "office" elseif App.g ~= nil and route ~= "nueva" then "scene" else nil
+	-- Fuera de la ruta del editor de oficinas su escena se libera (al volver, al cambiar de empresa o al menú).
+	local office = App.screens.office
+	if office and route ~= "oficina" and office.isActive() then
+		office.leave()
+	end
 	local showroom = App.screens.showroom
 	if showroom then
 		showroom.setVisible(App.cameraOwner == "showroom", { reduce = App.settings.reduceMotion == true, phone = App.isPhone() })
@@ -692,6 +699,8 @@ function App.render()
 			App.screens.company.build(App.content)
 		elseif route == "editor" then
 			App.screens.editor.build(App.content)
+		elseif route == "oficina" and App.screens.office then
+			App.screens.office.build(App.content)
 		else
 			App.screens.hud.build(App.content, route)
 			if route ~= "juego" and App.screens[route] then
@@ -781,6 +790,9 @@ function App.onState(payload: any)
 	elseif not App.g and hadGame then
 		App.ui.route = "menu"
 		leaveEditor()
+		-- Los diálogos son de la empresa que se cerró (reseñas, lotes…): no se reconstruyen sin partida.
+		table.clear(App.ui.dialogs)
+		App.renderDialog()
 	end
 	local sig = structuralSig(payload)
 	local focused = UserInputService:GetFocusedTextBox()

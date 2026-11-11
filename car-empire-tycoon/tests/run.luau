@@ -4137,16 +4137,17 @@ local Office = require("./.build/shared/Office")
 local OfficeCatalog = require("./.build/shared/OfficeCatalog")
 local OfficeService = require("./.build/server/OfficeService")
 
-test("[OF] Empresa nueva: oficina del nivel 1, escritorio y silla iniciales una sola vez, inventario vacío", function()
+test("[OF] Empresa nueva: oficina del nivel 1, escritorio y silla iniciales en el inventario una sola vez", function()
 	local g = newCompany("Oficina Nueva")
 	local o = g.office
 	check(Office.validate(o), "datos válidos")
 	eq(o.level, 1, "plano del nivel de oficinas")
-	eq(#o.placed, 2, "escritorio y silla colocados")
-	eq(next(o.inventory), nil, "inventario vacío")
+	eq(#o.placed, 0, "nada colocado al empezar")
+	eq(Office.count(o, "escritorio_metal_1970"), 1, "escritorio guardado en el inventario")
+	eq(Office.count(o, "silla_oficina_1970"), 1, "silla guardada en el inventario")
 	check(o.starter == true, "marca de entrega inicial")
 	eq(Office.grantStarter(o), 0, "volver a entregarlos no hace nada")
-	eq(#o.placed, 2, "sin duplicados")
+	eq(Office.count(o, "escritorio_metal_1970") + Office.count(o, "silla_oficina_1970"), 2, "sin duplicados")
 	for _, r in OfficeCatalog.plan(1).rooms do
 		check(o.finishes[r.id] ~= nil, "acabados básicos en " .. r.id)
 	end
@@ -4167,7 +4168,8 @@ test("[OF] Partida existente (esquema 17): migración aditiva sin perder datos y
 	check(m ~= nil, err)
 	eq(m.schema, GameState.SCHEMA, "esquema actual")
 	eq(m.office.level, 2, "la oficina sigue el nivel real (2)")
-	eq(#m.office.placed, 2, "recibe escritorio y silla")
+	eq(Office.owned(m.office, "escritorio_metal_1970") + Office.owned(m.office, "silla_oficina_1970"), 2, "recibe escritorio y silla")
+	eq(#m.office.placed, 0, "guardados (no colocados)")
 	for k, v in before do
 		if k ~= "schema" then
 			eq(serde.encode("json", m[k]), serde.encode("json", v), "campo conservado: " .. k)
@@ -4179,11 +4181,11 @@ test("[OF] Partida existente (esquema 17): migración aditiva sin perder datos y
 	-- Cargar otra vez la partida ya migrada no vuelve a entregar nada.
 	local again = GameState.migrate(jsonCopy(m), 2)
 	Office.sanitize(again)
-	eq(#again.office.placed, 2, "recargar no duplica el mobiliario inicial")
+	eq(Office.owned(again.office, "escritorio_metal_1970") + Office.owned(again.office, "silla_oficina_1970"), 2, "recargar no duplica el mobiliario inicial")
 	-- Perfil completo desde el guardado: misma ruta que DataService.
 	local profile, damaged = GameState.loadProfile({ profile = { slots = { ["1"] = jsonCopy(old) }, active = "1" } }, 3)
 	check(profile ~= nil and next(damaged) == nil, "el perfil carga sin ranuras dañadas")
-	eq(#profile.slots["1"].office.placed, 2, "con la oficina inicializada")
+	eq(Office.count(profile.slots["1"].office, "silla_oficina_1970"), 1, "con la oficina inicializada")
 end)
 
 test("[OF] Serialización: la oficina sobrevive a JSON (formato del guardado) idéntica y por empresa", function()
@@ -4197,7 +4199,7 @@ test("[OF] Serialización: la oficina sobrevive a JSON (formato del guardado) id
 	check(GameState.validate(copy), "la copia valida")
 	eq(Office.count(copy.office, "lampara_pie_1970"), 1, "inventario recuperado")
 	eq(Office.count(b.office, "lampara_pie_1970"), 0, "la otra empresa no comparte inventario")
-	eq(#b.office.placed, 2, "ni distribución")
+	eq(#b.office.placed, 0, "ni distribución")
 	check(a.office ~= b.office and a.office.inventory ~= b.office.inventory, "tablas independientes")
 end)
 
@@ -4240,7 +4242,12 @@ test("[OF] Rotaciones y cuadrícula: giros de 45°, casillas ocupadas, límites,
 		check(Office.validRotation(desk, rot), "escritorio admite " .. rot .. "°")
 	end
 	check(not Office.validRotation(desk, 30) and not Office.validRotation(desk, 360) and not Office.validRotation(desk, -45) and not Office.validRotation(desk, 45.5), "rechaza giros que no son múltiplos de 45 en [0, 360)")
-	check(not Office.validRotation(sofa, 45) and Office.validRotation(sofa, 90), "el sofá solo gira en ángulos rectos")
+	for id, f in OfficeCatalog.FURNITURE do
+		for _, rot in { 0, 45, 90, 135, 180, 225, 270, 315 } do
+			check(Office.validRotation(f, rot), id .. " admite " .. rot .. "°")
+		end
+	end
+	check(Office.validRotation(sofa, 45), "el sofá también gira en diagonal")
 	eq(#Office.footprint(desk, 5, 2.5, 0), 2, "escritorio 2×1 ocupa 2 casillas")
 	local r90 = Office.footprint(desk, 5.5, 3, 90)
 	eq(#r90, 2, "girado 90° también 2")
@@ -4325,8 +4332,9 @@ test("[OF] Bonificaciones aisladas: solo lo colocado suma, rendimientos decrecie
 	local o = g.office
 	local desk = OfficeCatalog.item("escritorio_metal_1970")
 	local before = Rules.staff(g, "organizacion")
-	local one = Office.furnitureRaw(o, "organizacion")
-	eq(one, desk.bonus.value, "el escritorio inicial colocado suma su valor")
+	eq(Office.furnitureRaw(o, "organizacion"), 0, "el escritorio inicial guardado no suma")
+	table.insert(o.placed, { id = "x0", item = desk.id, room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	eq(Office.furnitureRaw(o, "organizacion"), desk.bonus.value, "colocado suma su valor")
 	table.insert(o.placed, { id = "x1", item = desk.id, room = "oficina_principal", x = 5, y = 5.5, rot = 0 })
 	local two = Office.furnitureRaw(o, "organizacion")
 	check(math.abs(two - desk.bonus.value * (1 + OfficeCatalog.BONUS_DECAY)) < 1e-9, "la segunda copia suma la mitad")
@@ -4389,7 +4397,7 @@ test("[OF] Ampliación real de oficinas: la obra terminada pasa la decoración a
 	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 400)
 	eq(g.sede, 2, "oficinas nivel 2")
 	eq(g.office.level, 2, "la decoración sigue al nivel")
-	eq(#g.office.placed, 2, "escritorio y silla conservados")
+	eq(Office.owned(g.office, "escritorio_metal_1970") + Office.owned(g.office, "silla_oficina_1970"), 2, "escritorio y silla conservados")
 	check(g.office.finishes.sala_reuniones ~= nil, "acabados para la sala nueva")
 	check(GameState.validate(g), "válida")
 end)
@@ -4409,8 +4417,163 @@ test("[OF] Reparación al cargar: datos de oficina dañados no dañan la empresa
 	eq(o.inventory.lampara_pie_1970, nil, "cantidad negativa descartada")
 	eq(o.inventory.mueble_inexistente, nil, "mueble desconocido descartado")
 	eq(Office.count(o, "planta_interior_1970"), 1, "el mueble con datos inválidos vuelve al inventario")
-	eq(Office.count(o, "silla_oficina_1970"), 1, "el de una habitación inexistente también")
+	eq(Office.count(o, "silla_oficina_1970"), 2, "el de una habitación inexistente también (más la inicial)")
 	eq(o.finishes.oficina_principal.floor, OfficeCatalog.DEFAULT_FINISH.floor, "acabado desconocido → básico")
+end)
+
+
+test("[OF2] Correcciones: partida del esquema 18 con escritorio y silla colocados solos → vuelven al inventario", function()
+	local g = newCompany("Esquema Ocho")
+	local old = jsonCopy(g)
+	old.schema = 18
+	-- Así quedaban en la etapa 1: colocados en su lugar inicial, inventario vacío, seq = 2.
+	old.office.inventory = {}
+	old.office.placed = {}
+	for i, st in OfficeCatalog.STARTER do
+		table.insert(old.office.placed, { id = "m" .. i, item = st.item, room = st.room, x = st.x, y = st.y, rot = st.rot })
+	end
+	old.office.seq = 2
+	old.office.rev = nil
+	-- Y un mueble comprado que no es el inicial (debe quedar donde está).
+	table.insert(old.office.placed, { id = "m3", item = "planta_interior_1970", room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 })
+	old.office.seq = 3
+	local m, err = GameState.migrate(jsonCopy(old), 1)
+	check(m ~= nil, err)
+	eq(m.schema, GameState.SCHEMA, "esquema actual")
+	eq(Office.count(m.office, "escritorio_metal_1970"), 1, "escritorio al inventario")
+	eq(Office.count(m.office, "silla_oficina_1970"), 1, "silla al inventario")
+	eq(#m.office.placed, 1, "el mueble comprado sigue colocado")
+	eq(m.office.placed[1].id, "m3", "con su id")
+	check(GameState.validate(m), "válida")
+	local again = GameState.migrate(jsonCopy(m), 2)
+	eq(Office.owned(again.office, "escritorio_metal_1970"), 1, "volver a cargar no duplica")
+	-- Un jugador que ya movió el escritorio (no está en el lugar inicial): no se toca.
+	local moved = jsonCopy(old)
+	moved.office.placed[1].x = 7
+	local mm = GameState.migrate(moved, 3)
+	eq(Office.placedCount(mm.office, "escritorio_metal_1970"), 1, "un escritorio movido queda colocado")
+	eq(Office.owned(mm.office, "escritorio_metal_1970"), 1, "sin copias")
+end)
+
+test("[OF2] Correcciones: colisiones diagonales con intersección real de rectángulos y límites por esquinas", function()
+	local desk = OfficeCatalog.item("escritorio_metal_1970")
+	local plant = OfficeCatalog.item("planta_interior_1970")
+	local sofa = OfficeCatalog.item("sofa_cuero_1970")
+	local o = Office.new(1)
+	-- Una planta 1×1 girada 45° en el borde: su esquina sale de la habitación (el centro de casilla no basta).
+	local ok, why = Office.validatePlacement(o, plant, { room = "oficina_principal", x = 0.5, y = 7.5, rot = 45 })
+	check(not ok and string.find(why, "sale", 1, true) ~= nil, "diagonal pegada a la pared: la esquina se sale")
+	check(Office.validatePlacement(o, plant, { room = "oficina_principal", x = 1, y = 7, rot = 45 }), "un poco adentro sí entra")
+	-- Dos muebles en diagonal que se tocan solo en las puntas de sus rectángulos: con muestras por centro de
+	-- casilla no se detectaba; con intersección real, sí.
+	table.insert(o.placed, { id = "m1", item = sofa.id, room = "oficina_principal", x = 5, y = 4, rot = 45 })
+	o.seq = 1
+	-- En (6, 5) ningún centro de casilla queda dentro de ambos rectángulos, pero los rectángulos se cruzan.
+	ok, why = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 6, y = 5, rot = 135 })
+	check(not ok and string.find(why, "ocupado", 1, true) ~= nil, "rectángulos girados que se cruzan: ocupado")
+	check(Office.validatePlacement(o, desk, { room = "oficina_principal", x = 7.5, y = 5.5, rot = 135 }), "separados: válido")
+	-- Tocar un borde no es superponerse.
+	local o2 = Office.new(1)
+	table.insert(o2.placed, { id = "m1", item = desk.id, room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	check(Office.validatePlacement(o2, desk, { room = "oficina_principal", x = 7, y = 2.5, rot = 0 }), "dos escritorios lado a lado (comparten un borde)")
+	check(not Office.validatePlacement(o2, desk, { room = "oficina_principal", x = 6, y = 2.5, rot = 0 }), "medio escritorio encima: ocupado")
+	-- Una diagonal que roza un acceso también lo bloquea.
+	ok, why = Office.validatePlacement(o2, plant, { room = "oficina_principal", x = 3.5, y = 3.5, rot = 45 })
+	check(ok, "cerca de la puerta sin tocarla")
+	ok, why = Office.validatePlacement(o2, plant, { room = "oficina_principal", x = 2.5, y = 3.5, rot = 45 })
+	check(not ok, "la punta de la planta en diagonal roza la puerta")
+	ok, why = Office.validatePlacement(o2, desk, { room = "oficina_principal", x = 2.5, y = 4, rot = 45 })
+	check(not ok and string.find(why, "acceso", 1, true) ~= nil, "en diagonal, rozar la puerta la bloquea")
+	-- Huella de casillas (para el editor): las que realmente toca.
+	local fp = Office.footprint(plant, 1, 7, 45)
+	eq(#fp, 4, "una planta 1×1 a 45° centrada en un vértice toca 4 casillas")
+end)
+
+test("[OF2] Correcciones: el contador de ids se sincroniza y nunca reutiliza un id", function()
+	local o = Office.new(1)
+	table.insert(o.placed, { id = "m7", item = "planta_interior_1970", room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 })
+	o.seq = 2 -- atrasado (datos recuperados)
+	check(not Office.validate(o), "un seq atrasado no pasa la validación estricta")
+	local g = { sede = 1, office = o }
+	Office.sanitize(g)
+	eq(o.seq, 7, "la reparación lo sincroniza")
+	check(Office.validate(o), "y valida")
+	local id = Office.newInstanceId(o)
+	eq(id, "m8", "el siguiente id es nuevo")
+	o.seq = 0
+	eq(Office.newInstanceId(o), "m8", "aunque seq se haya atrasado, no repite un id existente")
+end)
+
+
+test("[OF3] Acciones de oficina por Sessions: compra única, reenvíos, rechazos sin cambios, guardado y carga en otro servidor", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "A", clock)
+	local p = { UserId = 7001, Name = "deco" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	g.money = 100000
+	local lamp = OfficeCatalog.item("lampara_pie_1970")
+	-- Sin requestId no se acepta una acción económica.
+	check(not mgr:request(p, "officePlace", { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 }).ok, "exige requestId")
+	-- Escritorio inicial: desde el inventario, gratis.
+	local m0 = g.money
+	local r = mgr:request(p, "officePlace", { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0, requestId = rid() })
+	check(r.ok and r.fromInventory and r.paid == 0, r.msg)
+	eq(g.money, m0, "colocar del inventario es gratis")
+	check(s.pendingSave or s.dirty, "dispara el guardado")
+	-- Compra nueva con precio enviado por el cliente: se ignora y se cobra el del catálogo, una sola vez.
+	local id = rid()
+	r = mgr:request(p, "officePlace", { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0, price = 1, requestId = id })
+	check(r.ok and r.paid == lamp.price and r.instance ~= nil, r.msg)
+	local inst = r.instance
+	eq(g.money, m0 - lamp.price, "precio del catálogo")
+	local again = mgr:request(p, "officePlace", { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0, requestId = id })
+	check(again.duplicate and again.ok, "reenvío detectado")
+	eq(again.instance, inst, "con los datos de la respuesta original")
+	eq(again.paid, lamp.price, "y el monto cobrado original")
+	eq(g.money, m0 - lamp.price, "sin segundo cobro")
+	eq(Office.owned(g.office, lamp.id), 1, "una sola lámpara")
+	-- Rechazos: no cambian nada.
+	local before = serde.encode("json", g.office)
+	local mb = g.money
+	for _, bad in {
+		{ item = lamp.id, room = "oficina_principal", x = 0.5, y = 3.5, rot = 0 }, -- acceso
+		{ item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 }, -- ocupado
+		{ item = "mesa_reuniones_1970", room = "oficina_principal", x = 9, y = 7, rot = 45 }, -- diagonal fuera del plano
+		{ item = lamp.id, room = "direccion", x = 1.5, y = 1.5, rot = 0 }, -- habitación de otro nivel
+		{ item = lamp.id, room = "oficina_principal", x = 4.5, y = 4.5, rot = 30 }, -- giro inválido
+		{ item = "inexistente", room = "oficina_principal", x = 4.5, y = 4.5, rot = 0 },
+	} do
+		bad.requestId = rid()
+		check(not mgr:request(p, "officePlace", bad).ok, "rechazo: " .. tostring(bad.item) .. " " .. tostring(bad.x) .. "," .. tostring(bad.y))
+	end
+	eq(g.money, mb, "los rechazos no cobran")
+	eq(serde.encode("json", g.office), before, "ni cambian la oficina")
+	-- Mover, girar y retirar: gratis; retirar no reembolsa.
+	check(mgr:request(p, "officeMove", { instance = inst, room = "oficina_principal", x = 7.5, y = 6.5, rot = 45, requestId = rid() }).ok, "mover y girar 45°")
+	eq(g.money, mb, "gratis")
+	check(mgr:request(p, "officeRemove", { instance = inst, requestId = rid() }).ok, "retirar")
+	eq(Office.count(g.office, lamp.id), 1, "al inventario")
+	eq(g.money, mb, "sin reembolso")
+	check(mgr:request(p, "officePlace", { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 90, requestId = rid() }).paid == 0, "reutilizarla es gratis")
+	-- Guardar, salir y cargar en otro servidor.
+	local layout = serde.encode("json", g.office.placed)
+	local inventory = serde.encode("json", g.office.inventory)
+	mgr:remove(p)
+	local mgr2, pushed2 = makeServer(store, "B", clock)
+	mgr2:add(p)
+	check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "volver a abrir la empresa")
+	local g2 = mgr2.list[p].game
+	eq(serde.encode("json", g2.office.placed), layout, "distribución conservada")
+	eq(serde.encode("json", g2.office.inventory), inventory, "inventario conservado")
+	eq(g2.money, mb, "dinero conservado")
+	check(pushed2[p].game.office ~= nil and #pushed2[p].game.office.placed == #g2.office.placed, "el cliente recibe la oficina")
+	-- Un reenvío viejo después de recargar tampoco se aplica (requestId guardado y opId en la partida).
+	local r2 = mgr2:request(p, "officePlace", { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0, requestId = id })
+	check(r2.duplicate == true or not r2.ok, "reenvío viejo rechazado")
+	eq(g2.money, mb, "sin cobro")
 end)
 
 T.finish()

@@ -782,7 +782,8 @@ function Sessions:request(player: any, action: any, payload: any): any
 		return { ok = false, msg = "Error interno del servidor. No se aplicó la acción." }
 	end
 	if Actions.economic[action] and requestId then
-		local stored = { ok = result.ok, msg = result.msg, lotId = result.lotId, designId = result.designId }
+		-- Lo que el cliente necesita de la respuesta original (también para la oficina: instancia y cobro).
+		local stored = { ok = result.ok, msg = result.msg, lotId = result.lotId, designId = result.designId, instance = result.instance, item = result.item, paid = result.paid, fromInventory = result.fromInventory }
 		s.processed[requestId] = stored
 		if result.ok then
 			table.insert(s.profile.processed, requestId)
@@ -804,6 +805,7 @@ function Sessions:request(player: any, action: any, payload: any): any
 	return {
 		ok = result.ok, msg = result.msg, quiet = result.quiet, duplicate = result.duplicate,
 		designId = result.designId, version = result.version, lotId = result.lotId, paid = result.paid, draftId = result.draftId, rev = result.rev,
+		instance = result.instance, item = result.item, fromInventory = result.fromInventory, repeated = result.repeated,
 	}
 end
 

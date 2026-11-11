@@ -3104,6 +3104,281 @@ test("Eliminar empresa exige escribir el nombre", function()
 	noErrors("Eliminar")
 end)
 
+
+test("Editor de oficinas: entrar desde Instalaciones, colocar, comprar una vez, mover, rechazos, reenvíos, ampliación, cambio de empresa y limpieza", function()
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Editor = require("./.build-ui/client/OfficeEditor")
+	local Scene = require("./.build-ui/client/OfficeScene")
+	local OfficeCamera = require("./.build-ui/client/OfficeCamera")
+	App.closeAllDialogs()
+	if App.g then
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+	end
+	-- 1. Empresa nueva en una ranura libre.
+	local slot
+	for _, k in { "1", "2", "3", "4" } do
+		if App.profile.slots[k] == nil and (tonumber(k) <= 2 or App.profile.unlocked[k]) then
+			slot = k
+			break
+		end
+	end
+	check(slot ~= nil, "hay una ranura libre")
+	local cr = App.request("createCompany", { slot = slot, name = "Oficinas SA", color = "#FF8A3D", logo = "pico" })
+	check(cr.ok, "empresa creada: " .. tostring(cr.msg))
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = 100000
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.money == 100000
+	end)
+	App.ui.facSel = "offices"
+	App.go("compania")
+	M.task.wait()
+	clickN("PersonalizarOficina")
+	M.task.wait()
+	eq(App.ui.route, "oficina", "Instalaciones › Oficinas centrales › Personalizar oficina abre el editor")
+	eq(App.cameraOwner, "office", "la cámara es del editor")
+	check(App.menuPaused(), "la empresa queda en pausa (setUiPause)")
+	local folder = M.services.Workspace:FindFirstChild("EditorOficina")
+	check(folder ~= nil and folder:FindFirstChild("Habitaciones") ~= nil, "escena de la oficina en el Workspace (solo en este cliente)")
+	check(named("LateralOficina") ~= nil and named("BarraOficina") ~= nil and named("AccionesOficina") ~= nil and named("DineroOficina") ~= nil, "barra superior, panel lateral y acciones")
+	OfficeCamera.update(1 / 60)
+	local cam = M.services.Workspace.CurrentCamera
+	check((cam.CFrame.Position - Scene.ORIGIN).Magnitude < 400, "la cámara encuadra la oficina")
+	-- Las paredes que miran a la cámara se vuelven casi transparentes.
+	local faded, solid = 0, 0
+	for _, w in Scene.wallParts() do
+		if w.part.Transparency >= Scene.WALL_FADED - 1e-6 then
+			faded += 1
+		else
+			solid += 1
+		end
+	end
+	check(faded > 0 and solid > 0, "paredes semitransparentes según la cámara (" .. faded .. "/" .. solid .. ")")
+	-- 2. Escritorio y silla iniciales en el inventario.
+	local o = App.g.office
+	eq(#o.placed, 0, "nada colocado")
+	check(named("Inventario_escritorio_metal_1970") ~= nil and named("Inventario_silla_oficina_1970") ~= nil, "el catálogo los muestra en el inventario (gratis)")
+	local R = "oficina_principal"
+	local function place(itemId: string, x: number, y: number, rot: number?): any
+		Editor.startPlace(itemId)
+		local st = Editor.state()
+		while st.rot ~= (rot or 0) do
+			Editor.rotate(1)
+		end
+		Editor.hover(R, x, y)
+		return Editor.confirm()
+	end
+	-- 3. Colocarlos sin pagar (la posición del cursor se ajusta a la cuadrícula).
+	local m0 = App.g.money
+	local r = place("escritorio_metal_1970", 5.1, 2.6)
+	check(r and r.ok and r.paid == 0, "escritorio colocado gratis")
+	r = place("silla_oficina_1970", 5.4, 3.4)
+	check(r and r.ok and r.paid == 0, "silla colocada gratis")
+	eq(App.g.money, m0, "sin pagar")
+	eq(#App.g.office.placed, 2, "dos muebles en la oficina")
+	check(Scene.furnitureModel(App.g.office.placed[1].id) ~= nil, "el modelo aparece en la escena")
+	-- 4. Comprar uno nuevo: se cobra exactamente una vez; se pueden poner varios seguidos sin cerrar el catálogo.
+	local lamp = OfficeCatalog.item("lampara_pie_1970")
+	r = place(lamp.id, 8.5, 6.5)
+	check(r and r.ok and r.paid == lamp.price, "lámpara comprada")
+	eq(App.g.money, m0 - lamp.price, "cobrada una vez")
+	eq(Editor.state().mode, "place", "sigue en modo colocar para poner otra")
+	Editor.hover(R, 7.5, 6.5)
+	r = Editor.confirm()
+	check(r and r.ok and r.paid == lamp.price, "segunda lámpara")
+	eq(App.g.money, m0 - 2 * lamp.price, "dos lámparas, dos cobros")
+	-- 13. Reenviar la misma operación (mismo requestId): no cobra de nuevo.
+	Editor.hover(R, 6.5, 6.5)
+	local fixed = "reenvio-oficina-0001"
+	r = Editor.confirm(fixed)
+	check(r and r.ok, "tercera lámpara")
+	local money3 = App.g.money
+	-- Reenvío de la misma solicitud (por ejemplo, si se perdió la respuesta): mismo requestId.
+	local dup = App.request("officePlace", { item = lamp.id, room = R, x = 6.5, y = 6.5, rot = 0 }, { requestId = fixed })
+	check(dup and dup.duplicate and dup.ok, "el reenvío se reconoce y devuelve la respuesta original")
+	eq(App.g.money, money3, "sin segundo cobro")
+	eq(Office.owned(App.g.office, lamp.id), 3, "sin unidades de más")
+	-- 6-7. Rechazos: fuera del plano (también en diagonal), superposición y accesos. La vista previa queda roja,
+	-- no se envía nada y no cambia el dinero.
+	local beforeOffice = serde.encode("json", App.g.office)
+	local mb = App.g.money
+	Editor.startPlace("planta_interior_1970")
+	Editor.rotate(1) -- 45°
+	Editor.hover(R, 0.6, 7.4)
+	check(Editor.state().hover.valid == false and string.find(Editor.state().hover.reason, "sale", 1, true) ~= nil, "diagonal contra la pared: roja")
+	local rr = Editor.confirm()
+	check(rr and not rr.ok, "no se confirma")
+	Editor.rotate(-1)
+	Editor.hover(R, 0.5, 3.5)
+	check(not Editor.state().hover.valid and string.find(Editor.state().hover.reason, "acceso", 1, true) ~= nil, "sobre el acceso: roja")
+	check(not Editor.confirm().ok, "no se coloca sobre un acceso")
+	Editor.hover(R, 8.5, 6.5)
+	check(not Editor.state().hover.valid and string.find(Editor.state().hover.reason, "ocupado", 1, true) ~= nil, "sobre otra lámpara: roja")
+	check(named("EstadoColocacion") ~= nil and named("ConfirmarColocacion") ~= nil, "la barra muestra el motivo y la confirmación")
+	-- El servidor rechaza lo mismo aunque el cliente lo envíe directo.
+	check(not App.request("officePlace", { item = "planta_interior_1970", room = R, x = 0.5, y = 3.5, rot = 0 }).ok, "el servidor también rechaza el acceso")
+	eq(App.g.money, mb, "los rechazos no cobran")
+	eq(serde.encode("json", App.g.office), beforeOffice, "ni cambian la oficina")
+	Editor.cancel()
+	eq(Editor.state().mode, "idle", "cancelar la vista previa (gratis)")
+	-- 5. Elegir un mueble colocado, moverlo y girarlo sin pagar.
+	local desk = App.g.office.placed[1]
+	eq(Editor.selectAt(R, desk.x, desk.y), desk.id, "clic sobre el escritorio lo elige")
+	check(named("MoverMueble") ~= nil and named("GuardarMueble") ~= nil, "acciones del mueble elegido")
+	Editor.startMove()
+	Editor.hover(R, 3.1, 6.4)
+	r = Editor.confirm()
+	check(r and r.ok, "escritorio movido")
+	local moved = Office.find(App.g.office, desk.id)
+	check(moved.x == 3 and moved.y == 6.5, "nueva posición ajustada a la cuadrícula")
+	Editor.selectAt(R, moved.x, moved.y)
+	r = Editor.rotateSelected(1)
+	check(r and r.ok and Office.find(App.g.office, desk.id).rot == 45, "girado 45° en su lugar")
+	eq(App.g.money, mb, "mover y girar es gratis")
+	-- 8-9. Guardarlo en el inventario y volver a colocarlo gratis.
+	Editor.selectAt(R, 8.5, 6.5)
+	local lampId = Editor.state().instance
+	check(lampId ~= nil, "lámpara elegida")
+	r = Editor.removeSelected()
+	check(r and r.ok, "lámpara guardada")
+	eq(Office.count(App.g.office, lamp.id), 1, "vuelve al inventario")
+	eq(App.g.money, mb, "sin reembolso")
+	r = place(lamp.id, 8.5, 1.5)
+	check(r and r.ok and r.paid == 0, "reutilizada sin pagar")
+	-- 10. Guardar, salir al menú y volver a entrar: se conserva todo.
+	local layout = serde.encode("json", App.g.office.placed)
+	App.request("saveNow", {})
+	App.go("juego")
+	M.task.wait()
+	check(not Editor.isActive() and M.services.Workspace:FindFirstChild("EditorOficina") == nil, "al salir del editor se libera la escena")
+	eq(App.cameraOwner, "scene", "y la cámara vuelve a la de gestión")
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	App.request("selectSlot", { slot = slot })
+	waitFor(function()
+		return App.g ~= nil
+	end)
+	eq(serde.encode("json", App.g.office.placed), layout, "distribución conservada al volver a entrar")
+	-- 11. Otra empresa: oficina propia y estado del editor limpio.
+	App.go("oficina")
+	M.task.wait()
+	Editor.selectAt(R, 8.5, 1.5)
+	check(Editor.state().instance ~= nil, "algo elegido en esta empresa")
+	App.go("juego")
+	App.request("leaveCompany", {})
+	waitFor(function()
+		return App.g == nil
+	end)
+	local other
+	for k, v in App.profile.slots do
+		if v and k ~= slot then
+			other = k
+		end
+	end
+	if other then
+		App.request("selectSlot", { slot = other })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+		if App.screens.intro.active() then
+			App.screens.intro.finish()
+		end
+		App.go("oficina")
+		M.task.wait()
+		check(Editor.state().instance == nil and Editor.state().mode == "idle", "el estado del editor no pasa a otra empresa")
+		check(serde.encode("json", App.g.office.placed) ~= layout, "la otra empresa tiene su propia distribución")
+		App.go("juego")
+		App.request("leaveCompany", {})
+		waitFor(function()
+			return App.g == nil
+		end)
+		App.request("selectSlot", { slot = slot })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	-- 12. Ampliación de oficinas terminada: el editor muestra el plano nuevo sin perder ni duplicar muebles.
+	local owned = {}
+	for id in OfficeCatalog.FURNITURE do
+		owned[id] = Office.owned(App.g.office, id)
+	end
+	sess = Sessions.instance.list[player]
+	sess.game.money = 1e9
+	sess.game.counters.unitsSold = 1e6
+	sess.game.reputation = 5
+	Sessions.instance:push(sess)
+	App.go("oficina")
+	M.task.wait()
+	check(App.request("upgradeFacility", { kind = "offices" }).ok, "obra de oficinas iniciada")
+	App.request("setSpeed", { speed = 3 })
+	App.go("juego") -- la empresa avanza fuera del editor
+	for _ = 1, 400 do
+		advance(1)
+		if App.g.sede >= 2 then
+			break
+		end
+	end
+	App.request("setSpeed", { speed = 1 })
+	eq(App.g.sede, 2, "oficinas nivel 2")
+	App.go("oficina")
+	M.task.wait()
+	eq(App.g.office.level, 2, "plano del nivel 2")
+	local rooms = M.services.Workspace.EditorOficina.Habitaciones
+	check(rooms:FindFirstChild("Habitacion_sala_reuniones") ~= nil, "la sala nueva aparece en el editor")
+	for id, n in owned do
+		eq(Office.owned(App.g.office, id), n, "sin pérdidas ni copias: " .. id)
+	end
+	-- 14. Entrar y salir varias veces: sin conexiones nuevas ni escenas duplicadas.
+	local function live(sigName: string, inst: any): number
+		local sig = rawget(inst, "__signals")[sigName]
+		local n = 0
+		for _, h in (sig and sig.handlers) or {} do
+			if h.connected then
+				n += 1
+			end
+		end
+		return n
+	end
+	local UIS, RS = M.services.UserInputService, M.services.RunService
+	App.go("juego")
+	M.task.wait()
+	local a0, b0, c0 = live("InputBegan", UIS), live("InputChanged", UIS), live("RenderStepped", RS)
+	App.renderError = nil
+	for _ = 1, 4 do
+		App.go("oficina")
+		M.task.wait()
+		Editor.startPlace("planta_interior_1970")
+		Editor.hover(R, 2.5, 1.5)
+		App.go("juego")
+		M.task.wait()
+	end
+	eq(live("InputBegan", UIS), a0, "InputBegan sin conexiones nuevas")
+	eq(live("InputChanged", UIS), b0, "InputChanged sin conexiones nuevas")
+	eq(live("RenderStepped", RS), c0, "RenderStepped sin conexiones nuevas")
+	local scenes = 0
+	for _, d in M.services.Workspace:GetChildren() do
+		if d.Name == "EditorOficina" then
+			scenes += 1
+		end
+	end
+	eq(scenes, 0, "ninguna escena del editor queda en el Workspace")
+	check(App.renderError == nil, "sin errores al entrar y salir")
+	noErrors("Editor de oficinas")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

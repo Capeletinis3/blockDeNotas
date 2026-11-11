@@ -7,7 +7,7 @@
 	Mueble (FURNITURE[id]):
 	  id, name, category (CATEGORIES), desc, year (disponible desde; nunca desaparece), price (dinero del juego),
 	  size = studs (ancho, alto, largo) del futuro modelo, cells = { w, d } casillas que ocupa sin girar,
-	  rotations = giros permitidos en grados (múltiplos de 45), interaction = punto de uso del avatar o nil
+	  rotations = giros permitidos en grados (múltiplos de 45; hoy todos admiten los 8), interaction = punto de uso del avatar o nil
 	  ({ kind = "work" | "sit" | "rest" | "browse", dx, dy, facing } relativo al centro del mueble, en casillas),
 	  bonus = { skill = id de Catalog.STAFF.skills, value } o nil (comparte el tope de esa habilidad con el
 	  personal), model = nombre del futuro modelo en ServerStorage.CarEmpireAssets.Muebles (aún no existe).
@@ -33,7 +33,6 @@ OfficeCatalog.CATEGORIES = {
 	{ id = "decoracion", name = "Decoración" },
 }
 
-local ORTHO = { 0, 90, 180, 270 }
 local ALL = { 0, 45, 90, 135, 180, 225, 270, 315 }
 
 -- Registros de prueba representativos de 1970 (uno o dos por categoría). Las bonificaciones son moderadas
@@ -55,7 +54,7 @@ OfficeCatalog.FURNITURE = {
 	sofa_cuero_1970 = {
 		name = "Sofá de cuero", category = "asientos", year = 1970, price = 2200,
 		desc = "Sofá de tres cuerpos para la recepción o la dirección.",
-		size = { 6, 2.8, 2.4 }, cells = { 3, 1 }, rotations = ORTHO,
+		size = { 6, 2.8, 2.4 }, cells = { 3, 1 }, rotations = ALL,
 		interaction = { kind = "rest", dx = 0, dy = 0, facing = 0 }, model = "SofaCuero1970",
 	},
 	maquina_escribir_1970 = {
@@ -67,7 +66,7 @@ OfficeCatalog.FURNITURE = {
 	estanteria_madera_1970 = {
 		name = "Estantería de madera", category = "almacenamiento", year = 1970, price = 700,
 		desc = "Archivo de catálogos, planos y documentación técnica.",
-		size = { 4, 6, 1.4 }, cells = { 2, 1 }, rotations = ORTHO,
+		size = { 4, 6, 1.4 }, cells = { 2, 1 }, rotations = ALL,
 		interaction = { kind = "browse", dx = 0, dy = 1, facing = 180 },
 		bonus = { skill = "conocimiento", value = 0.008 }, model = "EstanteriaMadera1970",
 	},
@@ -79,11 +78,11 @@ OfficeCatalog.FURNITURE = {
 	},
 	lampara_pie_1970 = {
 		name = "Lámpara de pie", category = "iluminacion", year = 1970, price = 250,
-		desc = "Luz cálida de apoyo.", size = { 1.2, 5, 1.2 }, cells = { 1, 1 }, rotations = ORTHO, model = "LamparaPie1970",
+		desc = "Luz cálida de apoyo.", size = { 1.2, 5, 1.2 }, cells = { 1, 1 }, rotations = ALL, model = "LamparaPie1970",
 	},
 	planta_interior_1970 = {
 		name = "Planta en maceta", category = "decoracion", year = 1970, price = 150,
-		desc = "Decoración sin beneficios.", size = { 1.4, 3, 1.4 }, cells = { 1, 1 }, rotations = ORTHO, model = "PlantaInterior1970",
+		desc = "Decoración sin beneficios.", size = { 1.4, 3, 1.4 }, cells = { 1, 1 }, rotations = ALL, model = "PlantaInterior1970",
 	},
 }
 for id, f in OfficeCatalog.FURNITURE do
@@ -157,7 +156,8 @@ OfficeCatalog.PLANS = {
 }
 OfficeCatalog.ROOM_MAP = {} :: { [string]: string } -- habitación vieja → equivalente nueva (si cambia de id)
 
--- Mobiliario inicial de toda empresa (se entrega una sola vez): escritorio y silla en la oficina principal.
+-- Mobiliario inicial de toda empresa (se entrega una sola vez, guardado en el inventario). x, y, rot son el
+-- lugar donde la versión anterior (esquema 18) los colocaba solos: sirven para devolverlos al inventario.
 OfficeCatalog.STARTER = {
 	{ item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 },
 	{ item = "silla_oficina_1970", room = "oficina_principal", x = 5.5, y = 3.5, rot = 0 },

@@ -227,6 +227,20 @@ local function detail(g: any, kind: string): Frame
 		table.insert(cur, Ui.between(r[1], r[2], { size = Ui.S.sm }))
 	end
 	table.insert(rows, Ui.card(cur, { gap = 6, bg = T.p1, name = "BeneficiosActuales" }))
+	if kind == "offices" then
+		-- Editor de oficinas: decorar con muebles (los nuevos se pagan al confirmar su primera colocación).
+		local o = g.office
+		local stored = 0
+		for _, n in (o and o.inventory) or {} do
+			stored += n
+		end
+		table.insert(rows, Ui.row({
+			Ui.grow(Ui.text("Decoración: " .. (o and #o.placed or 0) .. " muebles colocados · " .. stored .. " guardados", { size = Ui.S.sm, color = T.tx2 })),
+			Ui.button("Personalizar oficina", "p", function()
+				App.go("oficina")
+			end, { small = true, name = "PersonalizarOficina", disabled = o == nil, why = "La oficina no está disponible" }),
+		}, 10, { wrap = true }))
+	end
 	if inf.build then
 		local b = inf.build
 		local speed = Rules.buildSpeed(g)

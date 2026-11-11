@@ -15,6 +15,7 @@ local Rules = require(Shared.Rules)
 local Staff = require(Shared.Staff)
 local GameState = require(script.Parent.GameState)
 local Simulation = require(script.Parent.Simulation)
+local OfficeService = require(script.Parent.OfficeService)
 
 local money = Util.money
 local round = Util.round
@@ -941,6 +942,27 @@ function Actions.setSpeed(g: any, _ctx: any, payload: any): any
 	return { ok = true, msg = v == 0 and "Simulación en pausa." or ("Velocidad " .. v .. "×."), quiet = true }
 end
 
+-- Oficinas: colocar (compra si no hay unidades guardadas), mover/girar y retirar. payload = { item | instance,
+-- room, x, y, rot, requestId }. El requestId de Sessions es también el opId de la oficina (idempotencia
+-- guardada en la partida). La validación y el precio son del servidor (OfficeService).
+local function officeReq(payload: any, keys: { string }): any
+	local req = {}
+	for _, k in keys do
+		req[k] = arg(payload, k)
+	end
+	req.opId = arg(payload, "requestId")
+	return req
+end
+function Actions.officePlace(g: any, _ctx: any, payload: any): any
+	return OfficeService.place(g, officeReq(payload, { "item", "room", "x", "y", "rot" }))
+end
+function Actions.officeMove(g: any, _ctx: any, payload: any): any
+	return OfficeService.move(g, officeReq(payload, { "instance", "room", "x", "y", "rot" }))
+end
+function Actions.officeRemove(g: any, _ctx: any, payload: any): any
+	return OfficeService.remove(g, officeReq(payload, { "instance" }))
+end
+
 Actions.handlers = {
 	setIdentity = Actions.setIdentity, setShowcase = Actions.setShowcase, expandSede = Actions.expandSede, upgradeFacility = Actions.upgradeFacility, expandGlobal = Actions.expandGlobal,
 	saveDesign = Actions.saveDesign, dupDesign = Actions.dupDesign, delDesign = Actions.delDesign,
@@ -951,6 +973,7 @@ Actions.handlers = {
 	hire = Actions.hire, searchCandidates = Actions.searchCandidates, fire = Actions.fire, setDept = Actions.setDept, startTraining = Actions.startTraining,
 	claimMission = Actions.claimMission, claimDaily = Actions.claimDaily, setTutorial = Actions.setTutorial, markRead = Actions.markRead,
 	setSpeed = Actions.setSpeed,
+	officePlace = Actions.officePlace, officeMove = Actions.officeMove, officeRemove = Actions.officeRemove,
 }
 
 -- Consultas sin efectos: no marcan la partida como modificada ni requieren identificador único.
@@ -961,6 +984,7 @@ Actions.economic = {
 	saveDesign = true, finalizeDesign = true, dupDesign = true, delDesign = true, createLot = true, launchSale = true, setLotPrice = true, closeSale = true,
 	upgradeStation = true, startCampaign = true, cancelCampaign = true, moveLot = true, toggleLotPause = true, startResearch = true, cancelResearch = true, hire = true, searchCandidates = true, fire = true, setDept = true, startTraining = true,
 	claimMission = true, claimDaily = true, expandSede = true, upgradeFacility = true, expandGlobal = true,
+	officePlace = true, officeMove = true, officeRemove = true,
 }
 
 -- Acciones que justifican guardar enseguida (además del autoguardado periódico).

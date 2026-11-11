@@ -32,6 +32,8 @@ App.screens.company = require(script.Parent.ScreenCompany)
 App.screens.hud = require(script.Parent.ScreenHud)
 App.screens.sheet = require(script.Parent.ScreenSheet)
 App.screens.editor = require(script.Parent.ScreenEditor)
+App.screens.office = require(script.Parent.ScreenOffice)
+require(script.Parent.OfficeEditor).start()
 App.screens.fabrica = require(script.Parent.ScreenFactory)
 App.screens.autos = require(script.Parent.ScreenInventory)
 App.screens.ventas = require(script.Parent.ScreenSales)
@@ -95,6 +97,20 @@ UserInputService.InputBegan:Connect(function(input: InputObject, processed: bool
 	if #App.ui.dialogs > 0 then
 		if key == Enum.KeyCode.Escape then
 			App.closeDialog()
+		end
+		return
+	end
+	-- Editor de oficinas: Esc cancela la vista previa o la selección; si no hay nada, vuelve a Instalaciones.
+	if route == "oficina" then
+		local OfficeEditor = require(script.Parent.OfficeEditor)
+		if key == Enum.KeyCode.Escape then
+			if not OfficeEditor.cancel() then
+				App.ui.facSel = "offices"
+				App.go("compania")
+			end
+		else
+			local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+			OfficeEditor.key(key, shift)
 		end
 		return
 	end

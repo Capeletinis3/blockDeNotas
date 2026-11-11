@@ -21,7 +21,6 @@ local Office = {}
 
 local MAX_OPS = 32 -- operaciones recientes recordadas
 local MAX_PLACED = 400 -- protección del guardado contra datos dañados
-local EPS = 1e-6
 
 -- Creación, verificación y reparación ------------------------------------------------------------
 
@@ -31,7 +30,7 @@ end
 
 function Office.new(level: number?): any
 	local lvl = math.clamp(math.floor(level or 1), 1, #OfficeCatalog.PLANS)
-	local o = { version = OfficeCatalog.VERSION, level = lvl, seq = 0, inventory = {}, placed = {}, finishes = {}, starter = false, ops = {} }
+	local o = { version = OfficeCatalog.VERSION, level = lvl, seq = 0, rev = 0, inventory = {}, placed = {}, finishes = {}, starter = false, ops = {} }
 	for _, r in OfficeCatalog.plan(lvl).rooms do
 		o.finishes[r.id] = defaultFinish()
 	end
@@ -61,6 +60,9 @@ function Office.validate(o: any): (boolean, string?)
 			return false, "El inventario de muebles está dañado."
 		end
 	end
+	if o.rev ~= nil and not isInt(o.rev, 0) then
+		return false, "La revisión de la oficina está dañada."
+	end
 	if #o.placed > MAX_PLACED then
 		return false, "Demasiados muebles colocados."
 	end
@@ -73,6 +75,10 @@ function Office.validate(o: any): (boolean, string?)
 			return false, "La posición de un mueble está dañada."
 		end
 		seen[p.id] = true
+		local n = tonumber(string.match(p.id, "^m(%d+)$"))
+		if n and n > o.seq then
+			return false, "El contador de muebles está atrasado."
+		end
 	end
 	for roomId, f in o.finishes do
 		if type(roomId) ~= "string" or type(f) ~= "table" then
@@ -153,6 +159,10 @@ function Office.sanitize(g: any)
 	end
 	if o.storedFinishes ~= nil and type(o.storedFinishes) ~= "table" then
 		o.storedFinishes = nil
+	end
+	Office.syncSeq(o)
+	if not isInt(o.rev, 0) then
+		o.rev = 0
 	end
 	-- Lugares que dejaron de ser válidos (por ejemplo, un plano corregido): al inventario.
 	Office.evictInvalid(o)
@@ -250,7 +260,25 @@ function Office.removePlaced(o: any, instanceId: string): boolean
 	return true
 end
 
+-- Número del id de instancia («m12» → 12) o nil.
+local function idNumber(id: any): number?
+	return type(id) == "string" and tonumber(string.match(id, "^m(%d+)$")) or nil
+end
+
+-- seq nunca queda por debajo de un id existente (tras migrar o reparar datos no se reutilizan ids).
+function Office.syncSeq(o: any)
+	local top = isInt(o.seq, 0) and o.seq or 0
+	for _, p in o.placed or {} do
+		local n = idNumber(p.id)
+		if n and n > top then
+			top = n
+		end
+	end
+	o.seq = top
+end
+
 function Office.newInstanceId(o: any): string
+	Office.syncSeq(o)
 	o.seq += 1
 	return "m" .. o.seq
 end
@@ -279,31 +307,100 @@ function Office.isDiagonal(rot: number): boolean
 	return rot % 90 ~= 0
 end
 
---[[ Casillas que ocupa un mueble con centro (x, y) y giro rot: las casillas cuyo centro cae dentro del
-	rectángulo girado. Con giros de 90° es exactamente w × d (o d × w); en diagonal ocupa las casillas que
-	realmente cubre. Devuelve { { cx, cy } }. ]]
-function Office.footprint(item: any, x: number, y: number, rot: number): { { number } }
-	local w, d = item.cells[1], item.cells[2]
+-- Geometría ----------------------------------------------------------------------------------------------
+-- Cada mueble es un rectángulo girado (centro x, y; lados w × d en casillas; giro rot). Las colisiones se
+-- calculan con la intersección real de polígonos convexos (teorema del eje separador), no con muestras.
+
+local GEO_EPS = 1e-4 -- tolerancia: tocarse por un borde no es superponerse
+
+-- Esquinas del rectángulo de un mueble, en casillas de la habitación.
+function Office.corners(item: any, x: number, y: number, rot: number): { { number } }
+	local hw, hd = item.cells[1] / 2, item.cells[2] / 2
 	local a = math.rad(rot)
 	local c, s = math.cos(a), math.sin(a)
-	local hw, hd = w / 2, d / 2
-	local reach = math.ceil(math.sqrt(hw * hw + hd * hd)) + 1
 	local out = {}
-	for cx = math.floor(x - reach), math.ceil(x + reach) do
-		for cy = math.floor(y - reach), math.ceil(y + reach) do
-			local px, py = cx + 0.5 - x, cy + 0.5 - y
-			-- Al sistema del mueble (giro inverso).
-			local u = px * c + py * s
-			local v = -px * s + py * c
-			if math.abs(u) < hw - EPS and math.abs(v) < hd - EPS then
+	for _, k in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
+		local u, v = k[1] * hw, k[2] * hd
+		table.insert(out, { x + u * c - v * s, y + u * s + v * c })
+	end
+	return out
+end
+
+local function square(cx: number, cy: number): { { number } }
+	return { { cx, cy }, { cx + 1, cy }, { cx + 1, cy + 1 }, { cx, cy + 1 } }
+end
+Office.cellPolygon = square
+
+local function project(poly: { { number } }, ax: number, ay: number): (number, number)
+	local lo, hi = math.huge, -math.huge
+	for _, p in poly do
+		local d = p[1] * ax + p[2] * ay
+		lo, hi = math.min(lo, d), math.max(hi, d)
+	end
+	return lo, hi
+end
+
+-- ¿Se superponen dos polígonos convexos con área (más que tocarse)?
+function Office.overlaps(a: { { number } }, b: { { number } }): boolean
+	for _, poly in { a, b } do
+		local n = #poly
+		for i = 1, n do
+			local p, q = poly[i], poly[i % n + 1]
+			local ax, ay = q[2] - p[2], p[1] - q[1]
+			local len = math.sqrt(ax * ax + ay * ay)
+			if len > 0 then
+				ax, ay = ax / len, ay / len
+				local a1, a2 = project(a, ax, ay)
+				local b1, b2 = project(b, ax, ay)
+				if a2 <= b1 + GEO_EPS or b2 <= a1 + GEO_EPS then
+					return false -- eje separador
+				end
+			end
+		end
+	end
+	return true
+end
+
+-- ¿El polígono queda dentro de la habitación (0..w × 0..d)?
+function Office.insideRoom(poly: { { number } }, r: any): boolean
+	for _, p in poly do
+		if p[1] < -GEO_EPS or p[2] < -GEO_EPS or p[1] > r.w + GEO_EPS or p[2] > r.d + GEO_EPS then
+			return false
+		end
+	end
+	return true
+end
+
+--[[ Casillas que toca un mueble (con área en común, también en diagonal): para la cuadrícula del editor y
+	para mostrar qué ocupa. Devuelve { { cx, cy } }. ]]
+function Office.footprint(item: any, x: number, y: number, rot: number): { { number } }
+	local poly = Office.corners(item, x, y, rot)
+	local lx, ly, hx, hy = math.huge, math.huge, -math.huge, -math.huge
+	for _, p in poly do
+		lx, ly, hx, hy = math.min(lx, p[1]), math.min(ly, p[2]), math.max(hx, p[1]), math.max(hy, p[2])
+	end
+	local out = {}
+	for cx = math.floor(lx), math.ceil(hx) - 1 do
+		for cy = math.floor(ly), math.ceil(hy) - 1 do
+			if Office.overlaps(poly, square(cx, cy)) then
 				table.insert(out, { cx, cy })
 			end
 		end
 	end
-	if #out == 0 then
-		table.insert(out, { math.floor(x), math.floor(y) })
-	end
 	return out
+end
+
+-- ¿El punto (x, y) de la habitación cae sobre este mueble colocado? (selección en el editor)
+function Office.hits(p: any, x: number, y: number): boolean
+	local item = OfficeCatalog.item(p.item)
+	if not item then
+		return false
+	end
+	local a = math.rad(p.rot)
+	local c, s = math.cos(a), math.sin(a)
+	local dx, dy = x - p.x, y - p.y
+	local u, v = dx * c + dy * s, -dx * s + dy * c
+	return math.abs(u) <= item.cells[1] / 2 and math.abs(v) <= item.cells[2] / 2
 end
 
 --[[ Alineación con la cuadrícula: con giros rectos el borde del mueble cae sobre líneas de la cuadrícula
@@ -342,7 +439,8 @@ Office.extraCheck = nil :: ((any, any, any, any, { { number } }) -> (boolean, st
 
 --[[ ¿Se puede ubicar `item` en { room, x, y, rot }? ignoreId = instancia que se está moviendo (no choca consigo
 	misma). Comprueba: habitación del plano actual, giro permitido, coordenadas en medias casillas, dentro de
-	la habitación, sin pisar accesos obligatorios ni casillas ocupadas. Devuelve (ok, motivo, casillas). ]]
+	la habitación (todas sus esquinas), sin superponerse con accesos obligatorios ni con otros muebles (intersección
+	real de los rectángulos girados). Devuelve (ok, motivo, casillas que toca). ]]
 function Office.validatePlacement(o: any, item: any, req: any, ignoreId: string?): (boolean, string?, { { number } }?)
 	if not item then
 		return false, "Mueble desconocido.", nil
@@ -363,30 +461,22 @@ function Office.validatePlacement(o: any, item: any, req: any, ignoreId: string?
 	if not Office.aligned(item, req.x, req.y, req.rot) then
 		return false, "El mueble no está alineado con la cuadrícula.", nil
 	end
+	local poly = Office.corners(item, req.x, req.y, req.rot)
 	local cells = Office.footprint(item, req.x, req.y, req.rot)
-	local blocked = {}
+	if not Office.insideRoom(poly, r) then
+		return false, "El mueble se sale de la habitación.", cells
+	end
 	for _, a in r.access do
-		blocked[a[1] .. ":" .. a[2]] = "acceso"
+		if Office.overlaps(poly, square(a[1], a[2])) then
+			return false, "Bloquearía un acceso (puerta o paso).", cells
+		end
 	end
 	for _, p in o.placed do
 		if p.room == r.id and p.id ~= ignoreId then
 			local other = OfficeCatalog.item(p.item)
-			if other then
-				for _, cell in Office.footprint(other, p.x, p.y, p.rot) do
-					blocked[cell[1] .. ":" .. cell[2]] = "ocupada"
-				end
+			if other and Office.overlaps(poly, Office.corners(other, p.x, p.y, p.rot)) then
+				return false, "Ese lugar ya está ocupado.", cells
 			end
-		end
-	end
-	for _, cell in cells do
-		if cell[1] < 0 or cell[2] < 0 or cell[1] >= r.w or cell[2] >= r.d then
-			return false, "El mueble se sale de la habitación.", cells
-		end
-		local b = blocked[cell[1] .. ":" .. cell[2]]
-		if b == "acceso" then
-			return false, "Bloquearía un acceso (puerta o paso).", cells
-		elseif b == "ocupada" then
-			return false, "Ese lugar ya está ocupado.", cells
 		end
 	end
 	if Office.extraCheck then
@@ -418,24 +508,38 @@ end
 
 -- Mobiliario inicial ----------------------------------------------------------------------------------
 
--- Escritorio y silla iniciales, una sola vez por empresa (marca `starter`). Idempotente.
+-- Escritorio y silla iniciales: se entregan una sola vez por empresa (marca `starter`) y quedan GUARDADOS en
+-- el inventario, como muebles propios que el jugador coloca gratis donde quiera. Idempotente.
 function Office.grantStarter(o: any): number
 	if o.starter then
 		return 0
 	end
 	o.starter = true
-	local n = 0
 	for _, s in OfficeCatalog.STARTER do
-		local item = OfficeCatalog.item(s.item)
-		local req = { room = s.room, x = s.x, y = s.y, rot = s.rot }
-		if item and Office.validatePlacement(o, item, req) then
-			table.insert(o.placed, { id = Office.newInstanceId(o), item = s.item, room = s.room, x = s.x, y = s.y, rot = s.rot })
-		else
-			Office.addToInventory(o, s.item, 1)
-		end
-		n += 1
+		Office.addToInventory(o, s.item, 1)
 	end
-	return n
+	o.rev = (o.rev or 0) + 1
+	return #OfficeCatalog.STARTER
+end
+
+--[[ Partidas de la versión anterior (esquema 18): el escritorio y la silla iniciales se colocaban solos. Si
+	siguen exactamente en su lugar inicial (el jugador no podía moverlos: no había editor), vuelven al
+	inventario. No crea ni borra muebles: cada uno pasa de colocado a guardado una sola vez. ]]
+function Office.unplaceStarter(o: any): number
+	local moved = 0
+	for _, s in OfficeCatalog.STARTER do
+		for _, p in o.placed do
+			if p.item == s.item and p.room == s.room and p.x == s.x and p.y == s.y and p.rot == s.rot then
+				Office.removePlaced(o, p.id)
+				moved += 1
+				break
+			end
+		end
+	end
+	if moved > 0 then
+		o.rev = (o.rev or 0) + 1
+	end
+	return moved
 end
 
 -- Ampliaciones ----------------------------------------------------------------------------------------
