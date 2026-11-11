@@ -15,6 +15,8 @@ local T = Ui.T
 local W = Ui.W
 
 local WorldPrompts = {}
+-- Lo asigna Main.client: abre la pantalla de gestión del objeto (mismo camino que el ProximityPrompt).
+WorldPrompts.onOpen = nil :: ((string) -> ())?
 
 local player = Players.LocalPlayer
 local shown: { [Instance]: BillboardGui } = {}
@@ -103,7 +105,7 @@ local function addDot(prompt: ProximityPrompt)
 	})
 	local b = Ui.new("TextButton", {
 		Name = "Punto", Text = "", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(34, 34),
-		BackgroundColor3 = Color3.fromHex("#111319"), BackgroundTransparency = 0.15, Corner = 17, Stroke = { T.tx, 2, 0.15 },
+		BackgroundColor3 = Color3.fromHex("#0E1626"), BackgroundTransparency = 0.15, Corner = 17, Stroke = { T.tx, 2, 0.15 },
 	}, {
 		Ui.new("Frame", { Size = UDim2.fromOffset(9, 9), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = T.tx, BackgroundTransparency = 0, Corner = 5 }),
 	})
@@ -113,16 +115,11 @@ local function addDot(prompt: ProximityPrompt)
 	b.MouseLeave:Connect(function()
 		tip.Visible = false
 	end)
-	-- Como «Ir a: …» de la V3: el personaje camina hasta el objeto.
+	-- Sin personaje jugable: el punto abre directamente el menú de ese objeto (no hace falta caminar).
 	b.Activated:Connect(function()
-		local char = player.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local target = adornee(prompt)
-		if hum and target then
-			local pos = target:IsA("BasePart") and (target :: BasePart).Position or (target:IsA("Model") and (target :: Model):GetPivot().Position or nil)
-			if pos then
-				hum:MoveTo(pos + Vector3.new(0, 0, 4))
-			end
+		local screen = prompt:GetAttribute("Screen")
+		if type(screen) == "string" and WorldPrompts.onOpen then
+			WorldPrompts.onOpen(screen)
 		end
 	end)
 	b.Parent = gui

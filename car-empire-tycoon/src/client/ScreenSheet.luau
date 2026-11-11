@@ -115,7 +115,7 @@ function Sheet.build(parent: Instance, route: string)
 		Name = "Panel_" .. route,
 		Position = UDim2.fromOffset(phone and 0 or 14, top + (phone and 0 or 10)),
 		Size = UDim2.new(1, phone and 0 or -28, 1, -(top + (phone and 0 or 24))),
-		BackgroundColor3 = Color3.fromHex("#090B10"),
+		BackgroundColor3 = Color3.fromHex("#0A1020"),
 		BackgroundTransparency = 0.04,
 		Corner = phone and 0 or 16,
 		Stroke = phone and nil or T.hudLine,

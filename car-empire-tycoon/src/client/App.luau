@@ -149,15 +149,31 @@ function App.isNarrow(): boolean
 	return App.layout == "phone" or App.layout == "tablet"
 end
 
--- Controles del personaje: se desactivan con paneles de pantalla completa abiertos.
+--[[ Controles del personaje: el juego no carga personaje (gestión con cámara y menús; el dueño aparece como un
+	avatar autónomo que no se controla). Si en algún momento existe un personaje (por ejemplo, en pruebas de
+	Studio), sus controles se desactivan con los paneles abiertos. No se espera a que exista: nada depende de él. ]]
 local controls: any = nil
-task.spawn(function()
+local function loadControls()
+	if controls then
+		return
+	end
+	local scripts = player:FindFirstChild("PlayerScripts")
+	local module = scripts and scripts:FindFirstChild("PlayerModule")
+	if not module then
+		return
+	end
 	local ok, mod = pcall(function()
-		return require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule") :: any)
+		return require(module :: any)
 	end)
 	if ok and mod then
 		controls = mod:GetControls()
 	end
+end
+if player.Character then
+	task.spawn(loadControls)
+end
+player.CharacterAdded:Connect(function()
+	task.defer(loadControls)
 end)
 local function setControls(enabled: boolean)
 	if controls then

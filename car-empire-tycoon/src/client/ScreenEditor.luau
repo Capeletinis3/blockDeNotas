@@ -735,7 +735,7 @@ local function fmtStat(k: string, v: number): string
 	return Util.num(v)
 end
 
-local GLASS = Color3.fromHex("#111319") -- rgba(17,19,25,.9)
+local GLASS = Color3.fromHex("#0E1626")
 
 -- Conversión HSV ↔ HEX (hsv2hex/hex2hsv de la V3).
 local function hsv2hex(h: number, s: number, v: number): string

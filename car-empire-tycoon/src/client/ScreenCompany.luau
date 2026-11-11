@@ -75,7 +75,7 @@ function Screen.build(parent: Instance)
 				previewName,
 				Ui.text("Garaje inicial · " .. Util.money(Catalog.START.money) .. " iniciales · 01/01/1970", { size = Ui.S.sm, color = T.mut }),
 			}, 6)),
-		}, { dir = "H", v = "C", gap = 18, pad = 18, bg = Color3.fromHex("#0E1016"), transparency = 0.12, name = "VistaPrevia" }),
+		}, { dir = "H", v = "C", gap = 18, pad = 18, bg = Color3.fromHex("#0C1220"), transparency = 0.12, name = "VistaPrevia" }),
 	}, 18, { Name = "Presentacion", v = "C" })
 
 	local createBtn: any = nil
@@ -153,7 +153,7 @@ function Screen.build(parent: Instance)
 			end),
 			createBtn,
 		}, 10, { BackgroundColor3 = Color3.fromHex("#080A0F"), BackgroundTransparency = 0.4, Pad = 18, wrap = phone }),
-	}, { bg = Color3.fromHex("#0E1016"), transparency = 0.05, pad = 0, gap = 0, clip = true, name = "NuevaEmpresa" })
+	}, { bg = Color3.fromHex("#0C1220"), transparency = 0.05, pad = 0, gap = 0, clip = true, name = "NuevaEmpresa" })
 
 	if phone then
 		Ui.new("UIPadding", { PaddingTop = UDim.new(0, 70), PaddingBottom = UDim.new(0, 80), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), Parent = wrap })

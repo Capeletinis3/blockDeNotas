@@ -213,6 +213,7 @@ function Garage:prompt(parent: Instance, action: string, object: string, screen:
 	-- La indicación se dibuja en el cliente con el aspecto de la V3 (WorldPrompts).
 	pp.Style = Enum.ProximityPromptStyle.Custom
 	pp:SetAttribute("CarEmpire", true)
+	pp:SetAttribute("Screen", screen) -- el punto del cliente abre esta pantalla sin caminar
 	local owner = self.plots[index].owner
 	if owner then
 		pp:SetAttribute("OwnerId", owner.UserId)

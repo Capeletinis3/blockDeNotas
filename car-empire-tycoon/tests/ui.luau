@@ -1246,6 +1246,17 @@ test("Personal en la interfaz: departamentos, mercado laboral, contratar, detall
 	M.task.wait()
 	local c = App.g.candidates[1]
 	check(c ~= nil and named("Candidato_" .. c.id) ~= nil, "candidatos del mes")
+	-- Tarjeta del candidato: salario, potencial, tres habilidades y aporte real; el resto, a pedido.
+	check(named("Salario_" .. c.id) ~= nil and named("Potencial_" .. c.id) ~= nil and named("Aporte_" .. c.id) ~= nil, "salario, potencial y aporte a la vista")
+	check(named("MasDatos_" .. c.id) == nil, "los datos extra no cargan la tarjeta")
+	clickN("VerMas_" .. c.id)
+	M.task.wait()
+	check(named("MasDatos_" .. c.id) ~= nil, "más datos a pedido")
+	clickN("VerMas_" .. c.id)
+	M.task.wait()
+	check(named("MasDatos_" .. c.id) == nil, "y se vuelven a ocultar")
+	local occ = named("OcupacionPersonal")
+	check(occ ~= nil and string.find(occ.Text, #App.g.employees .. " ", 1, true) == 1 and string.find(occ.Text, "/ " .. App.g.derived.caps.staff, 1, true) ~= nil, "límite global con datos reales")
 	local before = #App.g.employees
 	clickN("Contratar_" .. c.id)
 	check(waitFor(function()
@@ -1282,6 +1293,9 @@ test("Personal en la interfaz: departamentos, mercado laboral, contratar, detall
 	clickN("Capacitaciones")
 	M.task.wait()
 	check(App.ui.staff.view == "capacitaciones", "vista de capacitaciones")
+	for _, l in require("./.build-ui/shared/Catalog").TRAINING.levels do
+		check(named("NivelCap_" .. l.id) ~= nil, "nivel de capacitación " .. l.id)
+	end
 	App.go("juego")
 	M.task.wait()
 	noErrors("Personal")

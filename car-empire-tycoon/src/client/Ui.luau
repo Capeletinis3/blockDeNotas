@@ -25,24 +25,25 @@ local function hex(h: string): Color3
 end
 Ui.hex = hex
 
--- Tokens de :root de la V3
+-- Tokens de color. Identidad de Car Empire Tycoon: base azul oscura, paneles azulados y acentos azules
+-- vibrantes (vi = acento principal; los nombres se conservan para no tocar las pantallas).
 Ui.T = {
-	bg = hex("#080A0F"),
-	p1 = hex("#111319"),
-	p2 = hex("#171A21"),
-	p3 = hex("#1D2029"),
-	line = hex("#292D38"),
-	line2 = hex("#23262F"),
-	line3 = hex("#20232C"),
-	input = hex("#0C0E13"),
-	panel = hex("#0E1016"),
+	bg = hex("#070B14"),
+	p1 = hex("#0F1522"),
+	p2 = hex("#141B2A"),
+	p3 = hex("#1A2234"),
+	line = hex("#283349"),
+	line2 = hex("#212B3D"),
+	line3 = hex("#1D2638"),
+	input = hex("#0A101B"),
+	panel = hex("#0C1220"),
 	tx = hex("#F5F7FA"),
-	tx2 = hex("#C3C8D2"),
-	mut = hex("#A3AAB8"),
-	mut2 = hex("#7D8493"),
-	vi = hex("#7667FF"),
-	vi2 = hex("#B3AAFF"),
-	vi3 = hex("#C4BDFF"),
+	tx2 = hex("#CDD3DE"),
+	mut = hex("#A9B1C1"),
+	mut2 = hex("#8C95A7"),
+	vi = hex("#3B8BFF"),
+	vi2 = hex("#8DB8FF"),
+	vi3 = hex("#B9D3FF"),
 	bl = hex("#3B82F6"),
 	bl2 = hex("#8DB8FF"),
 	gr = hex("#42E58D"),
@@ -53,17 +54,20 @@ Ui.T = {
 	pink = hex("#FF9DC1"),
 	cyan = hex("#6FE3F0"),
 	dark = hex("#0B0D12"),
-	disabledBg = hex("#13151B"),
-	disabledTx = hex("#666C7A"),
-	disabledLine = hex("#22252E"),
-	btnLine = hex("#333847"),
-	hudLine = hex("#262A35"),
-	sep = hex("#1F222B"),
+	-- Deshabilitado: legible (contraste suficiente) pero claramente apagado.
+	disabledBg = hex("#171E2B"),
+	disabledTx = hex("#8F98AA"),
+	disabledLine = hex("#2A3447"),
+	btnLine = hex("#2E3A52"),
+	hudLine = hex("#24304A"),
+	sep = hex("#1C2536"),
 }
 local T = Ui.T
 
 -- Tamaños (px) de la V3 con base de 15 px.
-Ui.S = { base = 15, sm = 12, xs = 11, lbl = 11, chip = 11, btn = 14, btnS = 13, opt = 13, note = 13, fl = 12, inp = 14, line = 14, kvb = 15, h1 = 20, h2 = 19, h3 = 17 }
+-- Jerarquía: los textos chicos suben 1 px (legibles en Roblox) y los títulos marcan más diferencia; el texto
+-- base no cambia, así las pantallas no crecen sin necesidad.
+Ui.S = { base = 15, sm = 13, xs = 12, lbl = 12, chip = 12, btn = 15, btnS = 14, opt = 14, note = 14, fl = 13, inp = 15, line = 14, kvb = 16, h1 = 22, h2 = 20, h3 = 18 }
 Ui.textScale = 1
 
 local FAMILY = "rbxasset://fonts/families/BuilderSans.json"
@@ -455,11 +459,11 @@ end
 
 -- Botones .btn -----------------------------------------------------------------------------
 local VARIANTS = {
-	default = { bg = T.p2, a = 1, fg = T.tx, line = T.btnLine, la = 1, hover = hex("#1F232C"), hline = hex("#454B5C") },
+	default = { bg = T.p2, a = 1, fg = T.tx, line = T.btnLine, la = 1, hover = hex("#1C2638"), hline = hex("#46587A") },
 	p = { bg = T.tx, a = 1, fg = T.dark, line = T.tx, la = 1, hover = hex("#FFFFFF"), hline = hex("#FFFFFF") },
 	g = { bg = T.gr, a = 1, fg = hex("#05230F"), line = T.gr, la = 1, hover = hex("#5BF0A0"), hline = hex("#5BF0A0") },
 	d = { bg = T.re, a = 0.1, fg = T.re2, line = T.re, la = 0.5, hover = hex("#3A1C21"), hline = T.re },
-	q = { bg = T.tx, a = 0, fg = T.mut, line = T.tx, la = 0, hover = hex("#1A1D24"), hline = hex("#1A1D24"), hfg = T.tx },
+	q = { bg = T.tx, a = 0, fg = T.tx2, line = T.tx, la = 0, hover = hex("#1A2234"), hline = hex("#1A2234"), hfg = T.tx },
 }
 Ui.VARIANTS = VARIANTS
 
@@ -656,7 +660,7 @@ function Ui.opt(label: string, selected: boolean, onClick: () -> (), opts: { [st
 		b.MouseEnter:Connect(function()
 			local s = b:FindFirstChildOfClass("UIStroke")
 			if s then
-				s.Color = hex("#454B5C")
+				s.Color = hex("#46587A")
 			end
 			b.TextColor3 = T.tx
 		end)
@@ -779,7 +783,7 @@ function Ui.bar(pct: number, color: Color3?, height: number?): (Frame, Frame)
 	})
 	local bar = new("Frame", {
 		Name = "Barra",
-		BackgroundColor3 = hex("#232733"),
+		BackgroundColor3 = hex("#1E2738"),
 		BackgroundTransparency = 0,
 		Size = UDim2.new(1, 0, 0, height or 7),
 		Corner = 4,
