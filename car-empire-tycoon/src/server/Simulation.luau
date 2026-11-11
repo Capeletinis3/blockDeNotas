@@ -24,6 +24,7 @@ local Util = require(Shared.Util)
 local DesignCalc = require(Shared.DesignCalc)
 local Rules = require(Shared.Rules)
 local Staff = require(Shared.Staff)
+local Office = require(Shared.Office)
 local GameState = require(script.Parent.GameState)
 
 local round = Util.round
@@ -590,6 +591,10 @@ function Simulation.stepBuilds(g: any, ctx: any, minutes: number)
 			if b.kind == "offices" and (g.sede or 1) < b.level then
 				g.sede = b.level
 				g.counters.sedeLevel = g.sede
+				-- La decoración pasa al plano nuevo: se conserva lo compatible y lo demás vuelve al inventario.
+				if type(g.office) == "table" then
+					Office.remap(g.office, g.sede)
+				end
 				label = "Oficinas centrales: " .. Rules.sede(g).office .. " (" .. Rules.sede(g).name .. ")"
 			elseif (b.kind == "factory" or b.kind == "research") and (f[b.kind] or 1) < b.level then
 				f[b.kind] = b.level

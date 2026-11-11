@@ -4131,6 +4131,288 @@ test("[ID] Investigación: recargo por adelanto exacto, tope de 5 años, cobro �
 	check(h.rp > rpA, "los PI se generan con el tiempo simulado")
 end)
 
+
+-- [OF] Oficinas decorables (etapa 1: datos y servicios) ---------------------------------------------------
+local Office = require("./.build/shared/Office")
+local OfficeCatalog = require("./.build/shared/OfficeCatalog")
+local OfficeService = require("./.build/server/OfficeService")
+
+test("[OF] Empresa nueva: oficina del nivel 1, escritorio y silla iniciales una sola vez, inventario vacío", function()
+	local g = newCompany("Oficina Nueva")
+	local o = g.office
+	check(Office.validate(o), "datos válidos")
+	eq(o.level, 1, "plano del nivel de oficinas")
+	eq(#o.placed, 2, "escritorio y silla colocados")
+	eq(next(o.inventory), nil, "inventario vacío")
+	check(o.starter == true, "marca de entrega inicial")
+	eq(Office.grantStarter(o), 0, "volver a entregarlos no hace nada")
+	eq(#o.placed, 2, "sin duplicados")
+	for _, r in OfficeCatalog.plan(1).rooms do
+		check(o.finishes[r.id] ~= nil, "acabados básicos en " .. r.id)
+	end
+	check(GameState.validate(g), "la partida valida")
+end)
+
+test("[OF] Partida existente (esquema 17): migración aditiva sin perder datos y repetible", function()
+	local g = newCompany("Vieja Oficina")
+	local ctx = makeCtx(7)
+	local id = saveNew(g, ctx, "brisa", "Modelo Viejo")
+	g.money = 123456
+	g.sede = 2
+	local old = jsonCopy(g)
+	old.office = nil
+	old.schema = 17
+	local before = jsonCopy(old)
+	local m, err = GameState.migrate(jsonCopy(old), 1)
+	check(m ~= nil, err)
+	eq(m.schema, GameState.SCHEMA, "esquema actual")
+	eq(m.office.level, 2, "la oficina sigue el nivel real (2)")
+	eq(#m.office.placed, 2, "recibe escritorio y silla")
+	for k, v in before do
+		if k ~= "schema" then
+			eq(serde.encode("json", m[k]), serde.encode("json", v), "campo conservado: " .. k)
+		end
+	end
+	eq(m.designs[1].id, id, "diseños intactos")
+	eq(m.money, 123456, "dinero intacto")
+	check(GameState.validate(m), "válida")
+	-- Cargar otra vez la partida ya migrada no vuelve a entregar nada.
+	local again = GameState.migrate(jsonCopy(m), 2)
+	Office.sanitize(again)
+	eq(#again.office.placed, 2, "recargar no duplica el mobiliario inicial")
+	-- Perfil completo desde el guardado: misma ruta que DataService.
+	local profile, damaged = GameState.loadProfile({ profile = { slots = { ["1"] = jsonCopy(old) }, active = "1" } }, 3)
+	check(profile ~= nil and next(damaged) == nil, "el perfil carga sin ranuras dañadas")
+	eq(#profile.slots["1"].office.placed, 2, "con la oficina inicializada")
+end)
+
+test("[OF] Serialización: la oficina sobrevive a JSON (formato del guardado) idéntica y por empresa", function()
+	local a, b = newCompany("Empresa Uno"), newCompany("Empresa Dos")
+	a.money = 1e6
+	local r = OfficeService.place(a, { item = "lampara_pie_1970", room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 })
+	check(r.ok, r.msg)
+	check(OfficeService.remove(a, { instance = r.instance }).ok, "retirar")
+	local copy = jsonCopy(a)
+	eq(serde.encode("json", copy.office), serde.encode("json", a.office), "misma oficina después de serializar")
+	check(GameState.validate(copy), "la copia valida")
+	eq(Office.count(copy.office, "lampara_pie_1970"), 1, "inventario recuperado")
+	eq(Office.count(b.office, "lampara_pie_1970"), 0, "la otra empresa no comparte inventario")
+	eq(#b.office.placed, 2, "ni distribución")
+	check(a.office ~= b.office and a.office.inventory ~= b.office.inventory, "tablas independientes")
+end)
+
+test("[OF] Catálogo histórico: desde su año en adelante y para siempre; solo registros de 1970", function()
+	local n = 0
+	for id, f in OfficeCatalog.FURNITURE do
+		n += 1
+		eq(f.id, id, "id coherente")
+		eq(f.year, 1970, id .. " es de 1970")
+		check(f.price > 0 and #f.cells == 2 and #f.rotations > 0 and type(f.model) == "string", id .. ": precio, casillas, giros y modelo futuro")
+		local cat = false
+		for _, c in OfficeCatalog.CATEGORIES do
+			cat = cat or c.id == f.category
+		end
+		check(cat, id .. ": categoría conocida")
+		if f.bonus then
+			check(Catalog.STAFF.skills[f.bonus.skill] ~= nil, id .. ": bonificación sobre una habilidad existente (tope compartido)")
+			check(f.bonus.value > 0 and f.bonus.value <= Catalog.STAFF.skills[f.bonus.skill].cap * 0.1, id .. ": bonificación moderada")
+		end
+	end
+	check(n >= 7 and n <= 12, "pocos registros de prueba (" .. n .. ")")
+	local future = { year = 1985 }
+	check(not Office.available(future, 1984) and Office.available(future, 1985) and Office.available(future, 2030), "desde 1985, para siempre")
+	eq(#Office.catalogFor(1970), n, "en 1970 está todo el catálogo de prueba")
+	eq(#Office.catalogFor(2040), n, "y en 2040 sigue todo")
+	-- Un mueble futuro no se puede comprar antes de su año (validado en el servidor).
+	local g = newCompany("Museo Motors")
+	g.money = 1e6
+	OfficeCatalog.FURNITURE.prueba_1990 = { id = "prueba_1990", name = "Prueba", category = "decoracion", year = 1990, price = 10, cells = { 1, 1 }, rotations = { 0 }, model = "x" }
+	local r = OfficeService.place(g, { item = "prueba_1990", room = "oficina_principal", x = 8.5, y = 1.5, rot = 0 })
+	OfficeCatalog.FURNITURE.prueba_1990 = nil
+	check(not r.ok and string.find(r.msg, "1990", 1, true) ~= nil, "rechaza un mueble de 1990 en 1970")
+	eq(g.money, 1e6, "sin cobro")
+end)
+
+test("[OF] Rotaciones y cuadrícula: giros de 45°, casillas ocupadas, límites, accesos y diagonales", function()
+	local desk = OfficeCatalog.item("escritorio_metal_1970")
+	local sofa = OfficeCatalog.item("sofa_cuero_1970")
+	for _, rot in { 0, 45, 90, 135, 180, 225, 270, 315 } do
+		check(Office.validRotation(desk, rot), "escritorio admite " .. rot .. "°")
+	end
+	check(not Office.validRotation(desk, 30) and not Office.validRotation(desk, 360) and not Office.validRotation(desk, -45) and not Office.validRotation(desk, 45.5), "rechaza giros que no son múltiplos de 45 en [0, 360)")
+	check(not Office.validRotation(sofa, 45) and Office.validRotation(sofa, 90), "el sofá solo gira en ángulos rectos")
+	eq(#Office.footprint(desk, 5, 2.5, 0), 2, "escritorio 2×1 ocupa 2 casillas")
+	local r90 = Office.footprint(desk, 5.5, 3, 90)
+	eq(#r90, 2, "girado 90° también 2")
+	check(r90[1][1] == r90[2][1], "y en vertical (misma columna)")
+	local diag = Office.footprint(OfficeCatalog.item("mesa_reuniones_1970"), 6, 5, 45)
+	check(#diag >= 4, "la mesa en diagonal ocupa las casillas que cubre (" .. #diag .. ")")
+	local o = Office.new(1)
+	local ok, why = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	check(ok, why)
+	table.insert(o.placed, { id = "m1", item = desk.id, room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	ok, why = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 5, y = 2.5, rot = 0 })
+	check(not ok and string.find(why, "ocupado", 1, true) ~= nil, "casilla ocupada")
+	check(Office.validatePlacement(o, desk, { room = "oficina_principal", x = 5, y = 2.5, rot = 0 }, "m1"), "al moverse no choca consigo mismo")
+	ok, why = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 10, y = 2.5, rot = 0 })
+	check(not ok and string.find(why, "sale", 1, true) ~= nil, "fuera de la habitación")
+	ok, why = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 8.5, y = 2.5, rot = 0 })
+	check(not ok and string.find(why, "alineado", 1, true) ~= nil, "un mueble de 2 casillas no se centra en media casilla")
+	check(Office.validatePlacement(o, desk, { room = "oficina_principal", x = 8.5, y = 5, rot = 90 }), "girado 90°, el lado par pasa a ser vertical")
+	ok, why = Office.validatePlacement(o, OfficeCatalog.item("planta_interior_1970"), { room = "oficina_principal", x = 0.5, y = 3.5, rot = 0 })
+	check(not ok and string.find(why, "acceso", 1, true) ~= nil, "no puede bloquear la puerta")
+	ok, why = Office.validatePlacement(o, desk, { room = "direccion", x = 3, y = 2.5, rot = 0 })
+	check(not ok, "habitación que no existe en este nivel")
+	ok = Office.validatePlacement(o, desk, { room = "oficina_principal", x = 5.25, y = 2.5, rot = 0 })
+	check(not ok, "coordenadas fuera de la cuadrícula de medias casillas")
+	-- Punto de uso del avatar: gira con el mueble.
+	local p = { x = 5, y = 2.5, rot = 90 }
+	local pt = Office.interactionPoint(desk, p)
+	check(math.abs(pt.x - 4) < 1e-6 and math.abs(pt.y - 2.5) < 1e-6 and pt.facing == 270, "el punto del escritorio gira con él")
+end)
+
+test("[OF] Compra y colocación atómicas: precio del servidor, sin cobro si falla, inventario sin duplicados", function()
+	local g = newCompany("Muebles SA")
+	local ctx = makeCtx(3)
+	local lamp = OfficeCatalog.item("lampara_pie_1970")
+	g.money = 1000
+	local m0 = g.money
+	-- Ubicación inválida: no cobra.
+	local r = OfficeService.place(g, { item = lamp.id, room = "oficina_principal", x = 0.5, y = 3.5, rot = 0, price = 1 })
+	check(not r.ok, "ubicación inválida")
+	eq(g.money, m0, "sin cobro")
+	-- Sin fondos: no cobra ni coloca.
+	g.money = lamp.price - 1
+	local placed0 = #g.office.placed
+	r = OfficeService.place(g, { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0 })
+	check(not r.ok and g.money == lamp.price - 1 and #g.office.placed == placed0, "sin fondos no cambia nada")
+	-- Compra válida: cobra el precio del catálogo (ignora un precio enviado por el cliente).
+	g.money = 1000
+	r = OfficeService.place(g, { item = lamp.id, room = "oficina_principal", x = 8.5, y = 6.5, rot = 0, price = 1, opId = "op-1" })
+	check(r.ok and r.paid == lamp.price, r.msg)
+	eq(g.money, 1000 - lamp.price, "cobra el precio del catálogo")
+	-- La misma solicitud repetida no vuelve a cobrar ni crea otra unidad.
+	r = OfficeService.place(g, { item = lamp.id, room = "oficina_principal", x = 8.5, y = 5.5, rot = 0, opId = "op-1" })
+	check(r.ok and r.repeated, "solicitud repetida")
+	eq(g.money, 1000 - lamp.price, "sin segundo cobro")
+	eq(Office.owned(g.office, lamp.id), 1, "una sola lámpara")
+	local inst = g.office.placed[#g.office.placed].id
+	-- Mover y girar: gratis.
+	local money1 = g.money
+	check(OfficeService.move(g, { instance = inst, room = "oficina_principal", x = 8.5, y = 5.5, rot = 90 }).ok, "mover")
+	eq(g.money, money1, "mover es gratis")
+	-- Retirar: vuelve al inventario, sin reembolso; retirar dos veces no crea otra unidad.
+	check(OfficeService.remove(g, { instance = inst }).ok, "retirar")
+	check(not OfficeService.remove(g, { instance = inst }).ok, "retirar de nuevo falla")
+	eq(Office.count(g.office, lamp.id), 1, "una en el inventario")
+	eq(Office.placedCount(g.office, lamp.id), 0, "ninguna colocada (no está en los dos estados)")
+	eq(g.money, money1, "sin reembolso")
+	-- Volver a colocarla desde el inventario: gratis, aunque no alcance el dinero para una nueva.
+	g.money = 0
+	r = OfficeService.place(g, { item = lamp.id, room = "oficina_principal", x = 7.5, y = 6.5, rot = 0 })
+	check(r.ok and r.fromInventory and r.paid == 0, "desde el inventario es gratis")
+	eq(Office.count(g.office, lamp.id), 0, "el inventario baja a cero (nunca negativo)")
+	check(not Office.takeFromInventory(g.office, lamp.id), "no se puede sacar de un inventario vacío")
+	check(not Office.addToInventory(g.office, lamp.id, -2) and not Office.addToInventory(g.office, lamp.id, 1.5) and not Office.addToInventory(g.office, "inexistente", 1), "no acepta cantidades negativas, fraccionarias ni muebles desconocidos")
+	-- La economía existente no cambió: solo el gasto registrado en «sede».
+	check(GameState.validate(g), "la partida valida")
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes)
+	check(GameState.validate(g), "y sigue válida después de simular")
+end)
+
+test("[OF] Bonificaciones aisladas: solo lo colocado suma, rendimientos decrecientes y tope compartido; sin efecto actual", function()
+	local g = newCompany("Bonos SA")
+	local o = g.office
+	local desk = OfficeCatalog.item("escritorio_metal_1970")
+	local before = Rules.staff(g, "organizacion")
+	local one = Office.furnitureRaw(o, "organizacion")
+	eq(one, desk.bonus.value, "el escritorio inicial colocado suma su valor")
+	table.insert(o.placed, { id = "x1", item = desk.id, room = "oficina_principal", x = 5, y = 5.5, rot = 0 })
+	local two = Office.furnitureRaw(o, "organizacion")
+	check(math.abs(two - desk.bonus.value * (1 + OfficeCatalog.BONUS_DECAY)) < 1e-9, "la segunda copia suma la mitad")
+	Office.addToInventory(o, desk.id, 5)
+	eq(Office.furnitureRaw(o, "organizacion"), two, "lo guardado no suma")
+	local cap = Catalog.STAFF.skills.organizacion.cap
+	eq(Office.sharedBonus(cap, two, cap), cap, "con el personal al tope, los muebles no superan el límite")
+	check(math.abs(Office.sharedBonus(0.1, two, cap) - (0.1 + two)) < 1e-9, "por debajo del tope se suman")
+	eq(Rules.staff(g, "organizacion"), before, "la simulación todavía no aplica bonos de muebles (sin doble aplicación)")
+end)
+
+test("[OF] Acabados y ampliación: cotización por superficie/largo/luminarias, sin pérdidas al cambiar de plano", function()
+	local g = newCompany("Remodela SA")
+	local o = g.office
+	local r1 = OfficeCatalog.room(1, "oficina_principal")
+	local cost, lines = Office.remodelQuote(o, "oficina_principal", { floor = "piso_parquet_1970", wall = "pared_beige_1970", lighting = "luz_calida_1970" }, 1970)
+	local exp = r1.w * r1.d * 40 + 2 * (r1.w + r1.d) * 15 + math.ceil(r1.w * r1.d / OfficeCatalog.LIGHT_AREA) * 120
+	eq(cost, exp, "piso por casilla, paredes por tramo, luces por luminaria")
+	eq(#lines, 3, "tres líneas")
+	eq(o.finishes.oficina_principal.floor, "piso_cemento", "cotizar no cambia nada (previsualización gratis)")
+	local same = Office.remodelQuote(o, "oficina_principal", { floor = "piso_cemento" }, 1970)
+	eq(same, 0, "lo que ya tiene no se cobra")
+	check(Office.remodelQuote(o, "direccion", {}, 1970) == nil, "habitación inexistente en el nivel 1")
+	-- Ampliación: acabado elegido conservado, habitación nueva con acabado básico y muebles sin pérdidas.
+	o.finishes.oficina_principal.floor = "piso_parquet_1970"
+	Office.addToInventory(o, "planta_interior_1970", 1)
+	table.insert(o.placed, { id = "far", item = "planta_interior_1970", room = "oficina_principal", x = 9.5, y = 7.5, rot = 0 })
+	local owned = {}
+	for id in OfficeCatalog.FURNITURE do
+		owned[id] = Office.owned(o, id)
+	end
+	g.sede = 2
+	local res = Office.remap(o, 2)
+	eq(o.level, 2, "plano del nivel 2")
+	eq(o.finishes.oficina_principal.floor, "piso_parquet_1970", "acabado conservado en la habitación equivalente")
+	eq(o.finishes.sala_reuniones.floor, OfficeCatalog.DEFAULT_FINISH.floor, "la habitación nueva recibe el básico")
+	for id, n in owned do
+		eq(Office.owned(o, id), n, "sin pérdidas ni copias: " .. id)
+	end
+	eq(res.toInventory, 0, "todo entra en la oficina más grande")
+	-- Un plano más chico (caso de prueba): lo que no entra vuelve al inventario.
+	res = Office.remap(o, 1)
+	OfficeCatalog.PLANS[6] = { rooms = { { id = "oficina_principal", name = "Chica", w = 4, d = 3, access = {} } } }
+	local small = Office.remap(o, 6)
+	OfficeCatalog.PLANS[6] = nil
+	for id, n in owned do
+		eq(Office.owned(o, id), n, "plano chico, sin pérdidas: " .. id)
+	end
+	check(small.toInventory >= 1, "lo que no entra vuelve al inventario")
+end)
+
+test("[OF] Ampliación real de oficinas: la obra terminada pasa la decoración al plano nuevo", function()
+	local g = newCompany("Crece SA")
+	local ctx = makeCtx(9)
+	g.money = 1e9
+	g.counters.unitsSold = 1e6
+	g.reputation = 5
+	local r = Actions.upgradeFacility(g, ctx, { kind = "offices" })
+	check(r.ok, r.msg)
+	Simulation.simulate(g, ctx, Catalog.RULES.gameDayMinutes * 400)
+	eq(g.sede, 2, "oficinas nivel 2")
+	eq(g.office.level, 2, "la decoración sigue al nivel")
+	eq(#g.office.placed, 2, "escritorio y silla conservados")
+	check(g.office.finishes.sala_reuniones ~= nil, "acabados para la sala nueva")
+	check(GameState.validate(g), "válida")
+end)
+
+test("[OF] Reparación al cargar: datos de oficina dañados no dañan la empresa ni pierden muebles", function()
+	local g = newCompany("Rota SA")
+	local save = jsonCopy(g)
+	save.office.inventory.lampara_pie_1970 = -3
+	save.office.inventory.mueble_inexistente = 2
+	table.insert(save.office.placed, { id = "m1", item = "planta_interior_1970", room = "oficina_principal", x = 0.5, y = 3.5, rot = 0 }) -- id repetido y sobre la puerta
+	table.insert(save.office.placed, { id = "zz", item = "silla_oficina_1970", room = "habitacion_vieja", x = 1.5, y = 1.5, rot = 0 })
+	save.office.finishes.oficina_principal.floor = "piso_desconocido"
+	local profile, damaged = GameState.loadProfile({ profile = { slots = { ["1"] = save }, active = "1" } }, 5)
+	check(profile ~= nil and next(damaged) == nil, "la empresa carga")
+	local o = profile.slots["1"].office
+	check(Office.validate(o), "oficina reparada")
+	eq(o.inventory.lampara_pie_1970, nil, "cantidad negativa descartada")
+	eq(o.inventory.mueble_inexistente, nil, "mueble desconocido descartado")
+	eq(Office.count(o, "planta_interior_1970"), 1, "el mueble con datos inválidos vuelve al inventario")
+	eq(Office.count(o, "silla_oficina_1970"), 1, "el de una habitación inexistente también")
+	eq(o.finishes.oficina_principal.floor, OfficeCatalog.DEFAULT_FINISH.floor, "acabado desconocido → básico")
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

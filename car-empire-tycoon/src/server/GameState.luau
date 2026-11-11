@@ -14,10 +14,11 @@ local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
 local Staff = require(Shared.Staff)
+local Office = require(Shared.Office)
 
 local GameState = {}
 
-GameState.SCHEMA = 17
+GameState.SCHEMA = 18
 
 -- Estados de un lote. Producción: en cola / produciendo / sin fondos / pausado / completado / cancelado.
 -- Comercialización: en producción (todavía no se vende) / por lanzar (fabricado y con reseñas, espera el precio)
@@ -101,7 +102,16 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		-- préstamos futuro; hoy ninguna acción los crea (Rules.debt los suma).
 		loans = {},
 		notifications = {},
+		-- Oficinas: inventario de muebles, distribución por habitación y acabados (ver Office.luau).
+		office = GameState.newOffice(1),
 	}
+end
+
+-- Oficina de una empresa nueva: plano del nivel 1 con el escritorio y la silla iniciales (una sola vez).
+function GameState.newOffice(level: number): any
+	local o = Office.new(level)
+	Office.grantStarter(o)
+	return o
 end
 
 function GameState.uid(g: any, prefix: string): string
@@ -276,6 +286,11 @@ function GameState.validate(g: any): (boolean, string?)
 		if not isList(g[k]) then
 			return fail("La lista «" .. k .. "» está dañada.")
 		end
+	end
+	-- Oficinas (decoración)
+	local okOffice, whyOffice = Office.validate(g.office)
+	if not okOffice then
+		return fail(whyOffice or "La oficina está dañada.")
 	end
 	-- Investigación
 	if type(g.research) ~= "table" or not isList(g.research.done) then
@@ -1112,6 +1127,15 @@ MIGRATIONS[16] = function(g: any, _now: number)
 	g.schema = 17
 end
 
+-- 17 → 18: oficinas decorables (aditivo). Cada empresa recibe su inventario y distribución vacíos, los acabados
+-- básicos del plano de su nivel de oficinas y, una sola vez, el escritorio y la silla iniciales. No toca
+-- ningún otro campo.
+MIGRATIONS[17] = function(g: any, _now: number)
+	Office.sanitize(g)
+	Office.grantStarter(g.office)
+	g.schema = 18
+end
+
 function GameState.migrate(g: any, now: number): (any?, string?)
 	if type(g) ~= "table" or type(g.company) ~= "table" then
 		return nil, "La partida no tiene empresa."
@@ -1231,6 +1255,9 @@ function GameState.loadProfile(record: any, now: number): (any?, any)
 			local migrated, err = GameState.migrate(copy, now)
 			local ok, why = false, err
 			if migrated then
+				-- La oficina es decoración: si sus datos tienen algo inválido se repara (los muebles vuelven al
+				-- inventario) en lugar de dar por dañada toda la empresa.
+				pcall(Office.sanitize, migrated)
 				ok, why = GameState.validate(migrated)
 			end
 			if ok then
