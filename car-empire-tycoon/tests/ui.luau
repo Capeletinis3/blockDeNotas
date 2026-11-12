@@ -7176,6 +7176,127 @@ test("HUD y tutorial: la alerta superior respeta el paso del tutorial (t1–t6) 
 	noErrors("HUD y tutorial")
 end)
 
+-- ===================================================================================================
+-- ETAPA 11 · Escenario J: abrir y cerrar repetidamente pantallas, diálogos y el editor de oficinas.
+-- Mide conexiones activas (en instancias vivas) e instancias de la interfaz y del mundo. Entorno: Roblox
+-- simulado (tests/mock.luau); no reemplaza la medición con el MicroProfiler de Studio.
+-- ===================================================================================================
+test("[E11-J] Abrir y cerrar pantallas, diálogos y editores repetidamente: sin conexiones ni instancias acumuladas", function()
+	waitFor(function()
+		return App.payload ~= nil and App.payload.status == "ready"
+	end)
+	if not App.g then
+		local r = App.request("selectSlot", { slot = "1" })
+		if not r.ok then
+			App.request("createCompany", { slot = "1", name = "Ciclos SA", color = "#7667FF", logo = "pico" })
+		end
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	check(App.g ~= nil, "empresa abierta")
+	if App.screens.intro.active() then
+		App.screens.intro.finish()
+	end
+	App.closeAllDialogs()
+	table.clear(M.log)
+	local routes = { "juego", "fabrica", "autos", "ventas", "mercado", "investigacion", "personal", "compania", "expansion", "misiones", "estadisticas", "oficina", "juego", "editor", "juego" }
+	local dialogs = { "settings", "notifications", "help", "news", "campaign", "prevModels" }
+	local pg = player:FindFirstChild("PlayerGui")
+	local function cycle()
+		for _, route in routes do
+			App.go(route)
+			M.task.wait()
+			M.task.wait()
+		end
+		for _, kind in dialogs do
+			App.openDialog(kind, {})
+			M.task.wait()
+			App.closeAllDialogs()
+			M.task.wait()
+		end
+		App.go("juego")
+		M.task.wait()
+		M.task.wait()
+	end
+	local function measure(): (number, number, number)
+		local conns = M.liveConnections()
+		return conns, M.countTree(pg), M.countTree(M.services.Workspace)
+	end
+	cycle()
+	cycle()
+	local c0, g0, w0 = measure()
+	local _, by0 = M.liveConnections()
+	local seen = {}
+	for _, h in rawget(M.services.UserInputService, "__signals").InputEnded.handlers do
+		seen[h] = true
+	end
+	local t0 = os.clock()
+	local N = 5
+	for _ = 1, N do
+		cycle()
+	end
+	local per = (os.clock() - t0) / N
+	local c1, g1, w1 = measure()
+	local _, by1 = M.liveConnections()
+	print(string.format("      después de 2 ciclos: %d conexiones · %d instancias de interfaz · %d en Workspace", c0, g0, w0))
+	print(string.format("      después de %d ciclos más: %d conexiones · %d instancias de interfaz · %d en Workspace · %.0f ms por ciclo (Lune, no Studio)", N, c1, g1, w1, per * 1000))
+	if c1 ~= c0 then
+		local list = {}
+		for k, v in by1 do
+			if v ~= (by0[k] or 0) then
+				table.insert(list, k .. " " .. (by0[k] or 0) .. "→" .. v)
+			end
+		end
+		for k, v in by0 do
+			if by1[k] == nil then
+				table.insert(list, k .. " " .. v .. "→0")
+			end
+		end
+		table.sort(list)
+		print("      conexiones que cambiaron: " .. table.concat(list, ", "))
+	end
+	if process.env.MOCK_TRACE == "1" then
+		for _, h in rawget(M.services.UserInputService, "__signals").InputEnded.handlers do
+			if h.connected and not seen[h] then
+				print("NUEVA InputEnded:" .. tostring(h.origin))
+			end
+		end
+	end
+	eq(c1, c0, "las conexiones activas no crecen al repetir el recorrido")
+	eq(g1, g0, "las instancias de la interfaz no crecen")
+	eq(w1, w0, "las instancias del mundo (escenas, NPCs, cámaras) no crecen")
+	noErrors("recorrido repetido de pantallas")
+end)
+
+-- La autoprueba que se entrega para Studio (ServerStorage.CarEmpireStudioTests.AutoPrueba): se ejecuta acá
+-- con los mismos módulos para que no llegue rota. Esto NO es una ejecución en Studio.
+test("[E11-S] Autoprueba de Studio: primer ciclo completo en memoria con los módulos reales", function()
+	local AutoPrueba = require("./.build-ui/studio/AutoPrueba")
+	local mods = {}
+	for _, n in { "Catalog", "Rules", "DesignCalc" } do
+		mods[n] = require("./.build-ui/shared/" .. n)
+	end
+	for _, n in { "GameState", "Simulation", "Actions" } do
+		mods[n] = require("./.build-ui/server/" .. n)
+	end
+	local r = AutoPrueba({ modules = mods })
+	print(string.format("      autoprueba: %d correctas, %d fallidas", r.ok, r.fail))
+	eq(r.fail, 0, "la autoprueba no tiene fallas en el entorno simulado")
+	check(r.ok >= 20, "la autoprueba recorrió el ciclo completo (" .. r.ok .. " comprobaciones)")
+end)
+
+-- E11-05: abrir el editor justo cuando el estado ya no tiene empresa activa no rompe nada.
+test("[E11-E] Editor sin empresa activa: entrar no produce errores y la pantalla vuelve al menú", function()
+	local savedG = App.g
+	App.g = nil
+	local ok, err = pcall(function()
+		App.screens.editor.enter({})
+	end)
+	check(ok, "entrar al editor sin empresa no falla: " .. tostring(err))
+	App.g = savedG
+end)
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

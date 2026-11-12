@@ -13,6 +13,8 @@ local ROOTS = {
 	{ "src/shared", place:GetService("ReplicatedStorage"):FindFirstChild("CarEmpireShared") },
 	{ "src/server", place:GetService("ServerScriptService"):FindFirstChild("CarEmpireServer") },
 	{ "src/client", place:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts") and place:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("CarEmpireClient") },
+	-- Autoprueba de Studio (no se ejecuta sola): ServerStorage.CarEmpireStudioTests.
+	{ "src/studio", place:GetService("ServerStorage"):FindFirstChild("CarEmpireStudioTests") },
 }
 
 local ok, bad = 0, 0

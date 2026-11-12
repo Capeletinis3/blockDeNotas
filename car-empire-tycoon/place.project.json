@@ -19,6 +19,9 @@
         "Pioneer70_World": {
           "$path": "assets/vehicles/Pioneer70_World.rbxm"
         }
+      },
+      "CarEmpireStudioTests": {
+        "$path": "src/studio"
       }
     },
     "StarterPlayer": {

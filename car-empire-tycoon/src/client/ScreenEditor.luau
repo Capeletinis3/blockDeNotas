@@ -564,6 +564,11 @@ end
 	sin nada    = el borrador abierto, o el último guardado, o uno nuevo ]]
 function Screen.enter(params: any)
 	local g = App.g
+	if not g then
+		-- Sin empresa activa (por ejemplo, el estado cambió justo antes del clic): no hay editor que abrir;
+		-- App.render lleva al menú.
+		return
+	end
 	params = params or {}
 	local e = ed()
 	if e and e.companyId ~= g.company.id then

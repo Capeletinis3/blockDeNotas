@@ -42,7 +42,13 @@ function Build.prepare(opts: any?)
 	fs.writeDir(out .. "/shared")
 	fs.writeDir(out .. "/server")
 	fs.writeDir(out .. "/client")
-	for _, dir in { "shared", "server", "client" } do
+	local dirs = { "shared", "server", "client" }
+	if mock then
+		-- Autoprueba de Studio: se comprueba también en el Roblox simulado antes de entregarla.
+		fs.writeDir(out .. "/studio")
+		table.insert(dirs, "studio")
+	end
+	for _, dir in dirs do
 		for _, name in fs.readDir("src/" .. dir) do
 			local base = name:gsub("%.server%.luau$", ""):gsub("%.client%.luau$", ""):gsub("%.luau$", "")
 			local include = mock or dir == "shared" or (dir == "server" and table.find(SERVER_PURE, base) ~= nil)

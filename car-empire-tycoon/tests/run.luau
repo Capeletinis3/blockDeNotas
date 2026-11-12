@@ -1438,7 +1438,17 @@ local function makeServer(store: any, jobId: string, clock: any, opts: any?)
 					Util.mergeLive(pushed[player].game, jsonCopy(payload.live))
 				end
 			else
-				pushed[player] = jsonCopy(payload)
+				-- Como el cliente (App.onState): un historial sin cambios no se reenvía y se conserva el anterior.
+				local copy = jsonCopy(payload)
+				if copy.game and copy.game.historySame ~= nil then
+					local prev = pushed[player] and pushed[player].game
+					if prev and prev.historyKey == copy.game.historySame then
+						copy.game.modelHistory, copy.game.lotHistory = prev.modelHistory, prev.lotHistory
+					else
+						copy.game.historyMissing = true
+					end
+				end
+				pushed[player] = copy
 			end
 		end,
 		notice = o.notice or function() end,
@@ -1463,7 +1473,7 @@ local function makeServer(store: any, jobId: string, clock: any, opts: any?)
 		end or function(fn: any)
 			fn()
 		end,
-		log = function() end,
+		log = o.log or function() end,
 		saveMode = "memory",
 		prompt = o.prompt,
 	})
@@ -8764,6 +8774,666 @@ do
 		check(math.abs(res.docefalse.mu / res.seisfalse.mu - 1) < 0.15, "el efecto de una campaña es comparable con seis y doce marcas")
 	end)
 end
+
+-- ===================================================================================================
+-- ETAPA 11 · Auditoría integral: solicitudes aleatorias por la ruta real, contabilidad e independencia
+-- ===================================================================================================
+
+-- Solicitudes válidas y malformadas mezcladas, por Sessions:request (la misma ruta del RemoteFunction).
+-- Invariantes después de cada una: la partida sigue siendo válida, no hay errores internos, una acción
+-- rechazada no cambia la partida y el dinero solo cambia con acciones económicas aceptadas.
+local FUZZ_KEYS = { "budget", "candidateId", "color", "companyId", "confirm", "country", "days", "dept", "designId", "draft", "draftId", "employeeId", "id", "key", "kind", "level", "line", "logo", "lotId", "name", "newGenOf", "paused", "price", "product", "qty", "rev", "scope", "skill", "skipped", "slot", "sourceId", "speed", "station", "step", "template", "tips", "value", "visited", "item", "room", "x", "y", "rot", "instance", "changes", "quote" }
+local FUZZ_ACTIONS = {}
+for name in Actions.handlers do
+	table.insert(FUZZ_ACTIONS, name)
+end
+table.sort(FUZZ_ACTIONS)
+for _, extra in { "buyProduct", "selectSlot", "leaveCompany", "renameCompany", "setSetting", "saveNow", "sync", "nada", "__index" } do
+	table.insert(FUZZ_ACTIONS, extra)
+end
+
+local function fuzzIds(g: any): { any }
+	local ids = {}
+	local function add(v: any)
+		if v ~= nil then
+			table.insert(ids, v)
+		end
+	end
+	for _, d in g.designs or {} do
+		add(d.id)
+	end
+	for _, d in g.drafts or {} do
+		add(d.id)
+	end
+	for _, l in g.lots or {} do
+		add(l.id)
+	end
+	for _, e in g.employees or {} do
+		add(e.id)
+	end
+	for _, c in g.candidates or {} do
+		add(c.id)
+	end
+	for _, r in Catalog.RESEARCH or {} do
+		add(r.id)
+		if #ids > 60 then
+			break
+		end
+	end
+	for _, c in Catalog.COUNTRIES or {} do
+		add(c.id)
+	end
+	for id in Catalog.FACILITIES or {} do
+		add(id)
+	end
+	for _, b in Catalog.BASES or {} do
+		add(b.id)
+	end
+	return ids
+end
+
+local function fuzzValue(rng: () -> number, ids: { any }, depth: number): any
+	local r = rng()
+	if r < 0.30 and #ids > 0 then
+		return ids[1 + math.floor(rng() * #ids)]
+	end
+	local pool = {
+		function() return nil end,
+		function() return true end,
+		function() return false end,
+		function() return 0 end,
+		function() return -1 end,
+		function() return 1 end,
+		function() return 2 end,
+		function() return 3 end,
+		function() return 0.5 end,
+		function() return 1e308 end,
+		function() return -1e308 end,
+		function() return 0 / 0 end,
+		function() return math.huge end,
+		function() return -math.huge end,
+		function() return math.floor(rng() * 100000) end,
+		function() return "" end,
+		function() return "x" end,
+		function() return string.rep("a", 5000) end,
+		function() return "\0\255" end,
+		function() return "1" end,
+		function() return "#FFFFFF" end,
+		function() return "economica" end,
+		function() return "corporativa" end,
+		function() return "modelo" end,
+		function() return {} end,
+		function() return { 1, 2, 3 } end,
+		function()
+			if depth > 2 then
+				return {}
+			end
+			local t = {}
+			for _ = 1, 3 do
+				t[FUZZ_KEYS[1 + math.floor(rng() * #FUZZ_KEYS)]] = fuzzValue(rng, ids, depth + 1)
+			end
+			return t
+		end,
+	}
+	return pool[1 + math.floor(rng() * #pool)]()
+end
+
+-- Solicitudes con la forma correcta (las que arma la interfaz), con datos reales de la partida.
+local function pick(rng: () -> number, list: { any }): any
+	if #list == 0 then
+		return nil
+	end
+	return list[1 + math.floor(rng() * #list)]
+end
+local function fuzzStructured(rng: () -> number, action: string, g: any): any?
+	local OC = require("./.build/shared/OfficeCatalog")
+	local Of = require("./.build/shared/Office")
+	local designs, lots, emps, cands, drafts = {}, {}, {}, {}, {}
+	for _, d in g.designs do
+		table.insert(designs, d.id)
+	end
+	for _, l in g.lots do
+		table.insert(lots, l)
+	end
+	for _, e in g.employees do
+		table.insert(emps, e.id)
+	end
+	for _, c in g.candidates do
+		table.insert(cands, c.id)
+	end
+	for _, d in g.drafts do
+		table.insert(drafts, d.id)
+	end
+	local depts = { "produccion", "investigacion", "marketing", "administracion" }
+	local lot = pick(rng, lots)
+	local bases = {}
+	for _, b in Catalog.BASES do
+		table.insert(bases, b.id)
+	end
+	local function draft(): any
+		local ok, d = pcall(draftFor, g, pick(rng, bases), "Prueba " .. math.floor(rng() * 1000))
+		return ok and d or draftFor(g, "brisa", "Prueba")
+	end
+	local rooms = {}
+	for _, r in OC.plan(g.office.level).rooms do
+		table.insert(rooms, r.id)
+	end
+	local items = {}
+	for _, it in OC.FURNITURE do
+		table.insert(items, it.id)
+	end
+	local placed = {}
+	for k, v in g.office.placed do
+		table.insert(placed, type(v) == "table" and (v.id or v.instance) or k)
+	end
+	local research = {}
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			table.insert(research, n.id)
+		end
+	end
+	local countries = {}
+	for _, c in Catalog.EXPANSION.countries do
+		table.insert(countries, c.id)
+	end
+	local P: { [string]: () -> any } = {
+		saveDesign = function() return { draft = draft() } end,
+		saveDraft = function() return { draftId = pick(rng, drafts) or ("borrador-" .. math.floor(rng() * 9)), draft = draft(), step = 1 + math.floor(rng() * 5), visited = 5, rev = 1 } end,
+		finalizeDesign = function() return { draftId = pick(rng, drafts) or "borrador-x", draft = draft() } end,
+		deleteDraft = function() return { draftId = pick(rng, drafts) } end,
+		dupDesign = function() return { designId = pick(rng, designs) } end,
+		delDesign = function() return { designId = pick(rng, designs) } end,
+		createLot = function() return { designId = pick(rng, designs), qty = pick(rng, { 1, 10, 30, 100, 500, 50000 }), line = pick(rng, { 1, 2, 3 }) } end,
+		launchSale = function() return { lotId = lot and lot.id, price = lot and lot.refPrice and math.floor(lot.refPrice * (0.5 + rng())) or 1000 } end,
+		setLotPrice = function() return { lotId = lot and lot.id, price = lot and lot.refPrice and math.floor(lot.refPrice * (0.5 + rng())) or 1000 } end,
+		toggleLotPause = function() return { lotId = lot and lot.id } end,
+		moveLot = function() return { lotId = lot and lot.id, line = pick(rng, { 1, 2, 3 }) } end,
+		closeSale = function() return { lotId = lot and lot.id } end,
+		upgradeStation = function() return { station = pick(rng, { "chasis", "pintura", "motor", "ensamblaje", "calidad" }), line = pick(rng, { 1, 2 }) } end,
+		startCampaign = function() return { kind = pick(rng, { "modelo", "corporativa" }), designId = pick(rng, designs), budget = pick(rng, { 5000, 20000, 80000, 300000 }), days = pick(rng, { 30, 60, 90 }) } end,
+		cancelCampaign = function() return {} end,
+		startResearch = function() return { id = pick(rng, research) } end,
+		cancelResearch = function() return { id = pick(rng, research) } end,
+		hire = function() return { candidateId = pick(rng, cands), dept = pick(rng, depts) } end,
+		searchCandidates = function() return { kind = pick(rng, { "general", "departamento" }), dept = pick(rng, depts) } end,
+		fire = function() return { employeeId = pick(rng, emps) } end,
+		setDept = function() return { employeeId = pick(rng, emps), dept = pick(rng, depts) } end,
+		startTraining = function() return { scope = pick(rng, { "individual", "departamento", "general" }), level = pick(rng, { "basico", "intermedio", "avanzado" }), skill = pick(rng, { "velocidad", "calidad", "conocimiento", "analisis" }), employeeId = pick(rng, emps), dept = pick(rng, depts) } end,
+		claimMission = function() return { id = pick(rng, { "t1", "t2", "t3", "m1", "m2" }) } end,
+		claimDaily = function() return {} end,
+		expandSede = function() return {} end,
+		upgradeFacility = function() return { kind = pick(rng, { "factory", "research", "offices", "line2" }) } end,
+		expandGlobal = function() return { country = pick(rng, countries) } end,
+		officePlace = function() return { item = pick(rng, items), room = pick(rng, rooms), x = math.floor(rng() * 20) / 2, y = math.floor(rng() * 16) / 2, rot = pick(rng, { 0, 45, 90, 135, 180 }), companyId = g.company.id } end,
+		officeMove = function() return { instance = pick(rng, placed), room = pick(rng, rooms), x = math.floor(rng() * 20) / 2, y = math.floor(rng() * 16) / 2, rot = pick(rng, { 0, 45, 90 }), companyId = g.company.id } end,
+		officeRemove = function() return { instance = pick(rng, placed), companyId = g.company.id } end,
+		officeRemodel = function()
+			local room = pick(rng, rooms)
+			local kind = pick(rng, { "floor", "wall", "covering", "lighting" })
+			local list = OC.finishList(kind)
+			local f = pick(rng, list)
+			local changes = { [kind] = f and f.id }
+			local cost = room and Of.remodelQuote(g.office, room, changes, Rules.year(g))
+			return { room = room, changes = changes, rev = g.office.rev, quote = cost, companyId = g.company.id }
+		end,
+		setSpeed = function() return { speed = pick(rng, { 0, 1, 2, 3 }) } end,
+		setShowcase = function() return { designId = pick(rng, designs) } end,
+	}
+	local gen = P[action]
+	if not gen then
+		return nil
+	end
+	local ok, payload = pcall(gen)
+	if not ok then
+		return nil
+	end
+	return payload
+end
+
+local function fuzzPayload(rng: () -> number, ids: { any }, g: any, action: string): any
+	local r = rng()
+	if r < 0.05 then
+		return fuzzValue(rng, ids, 3)
+	end
+	if g and r < 0.65 then
+		local sp = fuzzStructured(rng, action, g)
+		if sp then
+			-- A veces, un campo con un valor fuera de rango o de otro tipo.
+			if rng() < 0.3 then
+				sp[FUZZ_KEYS[1 + math.floor(rng() * #FUZZ_KEYS)]] = fuzzValue(rng, ids, 0)
+			end
+			sp.requestId = rng() < 0.95 and rid() or nil
+			return sp
+		end
+	end
+	local p = {}
+	for _ = 1, 1 + math.floor(rng() * 5) do
+		p[FUZZ_KEYS[1 + math.floor(rng() * #FUZZ_KEYS)]] = fuzzValue(rng, ids, 0)
+	end
+	if rng() < 0.25 and g then
+		p.draft = draftFor(g, "brisa", "Fuzz " .. math.floor(rng() * 1000))
+		if rng() < 0.5 then
+			p.draft[FUZZ_KEYS[1 + math.floor(rng() * #FUZZ_KEYS)]] = fuzzValue(rng, ids, 0)
+		end
+	end
+	if rng() < 0.9 then
+		p.requestId = rid()
+	end
+	return p
+end
+
+-- Contabilidad: todo movimiento de dinero pasa por el agregado diario (flow). Δdinero = Δ Σ flow.
+local function flowTotals(g: any): { [string]: number }
+	local out = {}
+	for k, ds in g.stats.days do
+		local sum = 0
+		for _, v in ds.flow or {} do
+			sum += v
+		end
+		out[k] = sum
+	end
+	return out
+end
+local function flowDelta(a: { [string]: number }, b: { [string]: number }): number
+	local d = 0
+	for k, v in b do
+		d += v - (a[k] or 0)
+	end
+	return d
+end
+
+local function fuzzRun(seed: number, steps: number, start: any?)
+	local errors = {}
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "F", clock, { log = function(msg: string)
+		table.insert(errors, msg)
+	end })
+	local p = { UserId = 901, Name = "fuzz" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	if start then
+		assert(mgr:request(p, "leaveCompany", {}).ok)
+		s.profile.slots["1"] = jsonCopy(start)
+		clock.c += 3
+		assert(mgr:request(p, "selectSlot", { slot = "1" }).ok, "cargar la partida avanzada")
+	end
+	local rng = seeded(seed)
+	local accepted, rejected, mutatedOnReject, moneyNonEconomic, invalid, unbalanced = 0, 0, {}, {}, {}, {}
+	local byAction = {}
+	for i = 1, steps do
+		clock.c += 0.2
+		clock.t += 0.2
+		local g = mgr.list[p].game
+		local ids = g and fuzzIds(g) or {}
+		local action = FUZZ_ACTIONS[1 + math.floor(rng() * #FUZZ_ACTIONS)]
+		if action == "leaveCompany" and rng() < 0.8 then
+			action = "setSpeed"
+		end
+		local payload = fuzzPayload(rng, ids, g, action)
+		local before = g and serde.encode("json", g) or nil
+		local moneyBefore = g and g.money
+		local flowBefore = g and flowTotals(g)
+		local ok, res = pcall(function()
+			return mgr:request(p, action, payload)
+		end)
+		if not ok then
+			table.insert(errors, "excepción en " .. action .. ": " .. tostring(res))
+		elseif type(res) ~= "table" or type(res.ok) ~= "boolean" then
+			table.insert(errors, "respuesta sin ok en " .. action)
+		else
+			byAction[action] = byAction[action] or { 0, 0 }
+			local g2 = mgr.list[p].game
+			if res.ok then
+				accepted += 1
+				byAction[action][1] += 1
+			else
+				rejected += 1
+				byAction[action][2] += 1
+				if process.env.FUZZ_WHY == action then
+					print("        " .. action .. " rechazada: " .. tostring(res.msg))
+				end
+				if g2 and g2 == g and before ~= serde.encode("json", g2) and not res.retry then
+					table.insert(mutatedOnReject, action .. ": " .. tostring(res.msg))
+				end
+			end
+			if g2 and g2 == g then
+				local diff = flowDelta(flowBefore, flowTotals(g2))
+				if math.abs((g2.money - moneyBefore) - diff) > 0.5 then
+					table.insert(unbalanced, action .. ": dinero " .. tostring(g2.money - moneyBefore) .. " · libro " .. tostring(diff))
+				end
+			end
+			if g2 and g2 == g and g2.money ~= moneyBefore and not Actions.economic[action] then
+				table.insert(moneyNonEconomic, action .. " " .. tostring(moneyBefore) .. "→" .. tostring(g2.money))
+			end
+			if g2 then
+				local valid, why = GameState.validate(jsonCopy(g2))
+				if not valid then
+					table.insert(invalid, action .. ": " .. tostring(why))
+				end
+			end
+		end
+		if i % 25 == 0 then
+			local gt = mgr.list[p].game
+			local m0, f0 = gt and gt.money, gt and flowTotals(gt)
+			for _ = 1, 5 do
+				clock.c += 1
+				clock.t += 1
+				mgr:tick()
+			end
+			if gt and mgr.list[p].game == gt then
+				local diff = flowDelta(f0, flowTotals(gt))
+				if math.abs((gt.money - m0) - diff) > 0.5 then
+					table.insert(unbalanced, "simulación: dinero " .. tostring(gt.money - m0) .. " · libro " .. tostring(diff))
+				end
+			end
+		end
+		if not mgr.list[p].game then
+			clock.c += 3
+			local back = mgr:request(p, "selectSlot", { slot = "1" })
+			if not back.ok then
+				back = mgr:request(p, "createCompany", { slot = "1", name = "Sesion SA", color = "#7667FF", logo = "pico" })
+			end
+			assert(back.ok and mgr.list[p].game, "volver a la empresa: " .. tostring(back.msg))
+		end
+		if #errors > 5 or #invalid > 5 then
+			break
+		end
+	end
+	local function show(list: { string }, label: string)
+		for k = 1, math.min(#list, 6) do
+			print("      " .. label .. ": " .. list[k])
+		end
+	end
+	show(errors, "error")
+	show(mutatedOnReject, "rechazo con cambios")
+	show(moneyNonEconomic, "dinero fuera de acciones económicas")
+	show(invalid, "partida inválida")
+	show(unbalanced, "contabilidad")
+	local okList = {}
+	for a, c in byAction do
+		if c[1] > 0 then
+			table.insert(okList, a .. " " .. c[1])
+		end
+	end
+	table.sort(okList)
+	print(string.format("      %d aceptadas · %d rechazadas · %d acciones distintas", accepted, rejected, #FUZZ_ACTIONS))
+	print("      aceptadas por acción: " .. table.concat(okList, ", "))
+	eq(#errors, 0, "sin errores internos ni excepciones")
+	eq(#invalid, 0, "la partida sigue siendo válida")
+	eq(#mutatedOnReject, 0, "una acción rechazada no cambia la partida")
+	eq(#moneyNonEconomic, 0, "el dinero solo cambia con acciones económicas")
+	eq(#unbalanced, 0, "saldo final = saldo inicial + ingresos − egresos (libro diario)")
+	check(accepted > 100, "también se aceptaron operaciones (la prueba recorre estados reales)")
+	check(s ~= nil, "sesión")
+end
+
+test("[E11-F1] Solicitudes aleatorias por la ruta real (empresa nueva): sin errores internos, partida válida y rechazos sin efectos", function()
+	fuzzRun(20261112, 6000)
+end)
+
+test("[E11-F2] Solicitudes aleatorias por la ruta real sobre una empresa avanzada (bot, ≈1990)", function()
+	local log = Bot.play("normal", 200)
+	print("      año de partida: " .. Rules.year(log.g) .. " · " .. #log.g.designs .. " diseños · " .. #log.g.lots .. " lotes · " .. #log.g.employees .. " empleados")
+	fuzzRun(777, 6000, log.g)
+end)
+
+test("[E11-F3] Solicitudes aleatorias por la ruta real sobre una empresa de fin de partida (bot, después de 2030)", function()
+	local g = longGame().g
+	print("      sede " .. g.sede .. " · " .. #g.countries .. " países · " .. #g.employees .. " empleados · " .. #g.research.done .. " tecnologías")
+	fuzzRun(4242, 4000, g)
+end)
+
+-- Multijugador: tres jugadores en el mismo servidor. Cada uno usa identificadores de los otros (lotes,
+-- diseños, empleados, empresa) y ninguna solicitud cambia una partida ajena. Pausas y velocidades
+-- independientes, salida y regreso al menú sin afectar a los demás, desconexión y reconexión.
+test("[E11-M] Multijugador: aislamiento entre tres jugadores, pausas independientes y reconexión", function()
+	local errors = {}
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "M", clock, { log = function(msg: string)
+		table.insert(errors, msg)
+	end })
+	local players = { { UserId = 7001, Name = "a" }, { UserId = 7002, Name = "b" }, { UserId = 7003, Name = "c" } }
+	for i, p in players do
+		mgr:add(p)
+		local r = mgr:request(p, "createCompany", { slot = "1", name = "Empresa " .. string.char(64 + i), color = "#7667FF", logo = "pico" })
+		assert(r.ok, r.msg)
+		local g = mgr.list[p].game
+		r = mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Modelo " .. i), requestId = rid() })
+		assert(r.ok, r.msg)
+		r = mgr:request(p, "createLot", { designId = g.designs[1].id, qty = 10, requestId = rid() })
+		assert(r.ok, r.msg)
+	end
+	local rng = seeded(31337)
+	local foreignTouched = {}
+	for step = 1, 1500 do
+		clock.c += 0.3
+		clock.t += 0.3
+		local i = 1 + math.floor(rng() * #players)
+		local j = 1 + ((i + math.floor(rng() * 2)) % #players)
+		local actor, victim = players[i], players[j]
+		local gv = mgr.list[victim].game
+		local ga = mgr.list[actor].game
+		if gv and ga then
+			local before = serde.encode("json", gv)
+			local action = FUZZ_ACTIONS[1 + math.floor(rng() * #FUZZ_ACTIONS)]
+			if action ~= "leaveCompany" and action ~= "selectSlot" then
+				-- Pedido armado con los datos de la VÍCTIMA, enviado por el actor.
+				local payload = fuzzStructured(rng, action, gv) or {}
+				payload.requestId = rid()
+				if rng() < 0.5 then
+					payload.companyId = gv.company.id
+				end
+				pcall(function()
+					mgr:request(actor, action, payload)
+				end)
+				if serde.encode("json", gv) ~= before then
+					table.insert(foreignTouched, action .. " de " .. actor.Name .. " cambió la partida de " .. victim.Name)
+				end
+			end
+		end
+		if step % 10 == 0 then
+			clock.c += 1
+			clock.t += 1
+			mgr:tick()
+		end
+	end
+	eq(#foreignTouched, 0, "ninguna solicitud cambia la partida de otro jugador")
+	for k = 1, math.min(3, #foreignTouched) do
+		print("      " .. foreignTouched[k])
+	end
+	-- Pausas y velocidades: cada jugador tiene las suyas.
+	local a, b, c = players[1], players[2], players[3]
+	clock.c += 5
+	mgr:request(a, "setSpeed", { speed = 1 })
+	mgr:request(b, "setSpeed", { speed = 3 })
+	mgr:request(c, "setSpeed", { speed = 1 })
+	mgr:request(a, "setUiPause", { paused = true })
+	local ta, tb, tc = mgr.list[a].game.time.day * 100000 + mgr.list[a].game.time.minute, nil, nil
+	local function stamp(p: any): number
+		local t = mgr.list[p].game.time
+		return t.day * 100000 + t.minute
+	end
+	tb, tc = stamp(b), stamp(c)
+	for _ = 1, 10 do
+		clock.c += 1
+		clock.t += 1
+		mgr:tick()
+	end
+	eq(stamp(a), ta, "A en pausa (menú abierto): su empresa no avanza")
+	check(stamp(b) > tb and stamp(c) > tc, "B y C siguen avanzando")
+	check(stamp(b) - tb > stamp(c) - tc, "B avanza más rápido (velocidad 3×) que C (1×)")
+	mgr:request(a, "setUiPause", { paused = false })
+	-- A vuelve al menú y entra otra vez: B y C no se enteran.
+	local bBefore = serde.encode("json", mgr.list[b].game)
+	clock.c += 5
+	check(mgr:request(a, "leaveCompany", {}).ok, "A vuelve al menú sin salir del servidor")
+	check(mgr.list[a].game == nil, "A sin empresa activa")
+	eq(serde.encode("json", mgr.list[b].game), bBefore, "la partida de B no cambia")
+	check(mgr:request(a, "selectSlot", { slot = "1" }).ok, "A vuelve a su empresa")
+	-- Desconexión y reconexión de C mientras A y B siguen.
+	local cMoney = mgr.list[c].game.money
+	local cDesigns = #mgr.list[c].game.designs
+	mgr:remove(c)
+	check(mgr.list[c] == nil, "C salió")
+	for _ = 1, 5 do
+		clock.c += 1
+		clock.t += 1
+		mgr:tick()
+	end
+	local c2 = { UserId = 7003, Name = "c" }
+	mgr:add(c2)
+	clock.c += 5
+	check(mgr:request(c2, "selectSlot", { slot = "1" }).ok, "C vuelve a entrar y continúa")
+	eq(mgr.list[c2].game.money, cMoney, "C recupera su dinero")
+	eq(#mgr.list[c2].game.designs, cDesigns, "C recupera sus diseños")
+	check(mgr.list[a].game.company.name == "Empresa A" and mgr.list[b].game.company.name == "Empresa B", "las demás empresas siguen intactas")
+	eq(#errors, 0, "sin errores internos")
+end)
+
+-- Persistencia con fallos: el almacén falla en ráfagas mientras se juega. Al final, una salida con el
+-- servicio sano guarda el estado más reciente; al reconectar en otro servidor se recupera todo.
+test("[E11-D] Guardado con fallos intermitentes del almacén: reintentos, sin pérdida ni sobrescrituras viejas", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "D1", clock)
+	local p = { UserId = 7101, Name = "d" }
+	mgr:add(p)
+	local s = playThrough(mgr, p)
+	local g = s.game
+	check(mgr:request(p, "saveDesign", { draft = draftFor(g, "brisa", "Persistente"), requestId = rid() }).ok, "diseño")
+	check(mgr:request(p, "createLot", { designId = g.designs[1].id, qty = 20, requestId = rid() }).ok, "lote")
+	local rng = seeded(5150)
+	local failedWindows, warnings = 0, 0
+	for t = 1, 1200 do
+		clock.c += 1
+		clock.t += 1
+		if t % 97 == 0 then
+			store.failNext = 1 + math.floor(rng() * DataService.SAVE_ATTEMPTS * 2)
+			failedWindows += 1
+		end
+		mgr:tick()
+		if s.saveWarning then
+			warnings += 1
+		end
+		local lot = g.lots[1]
+		if lot and lot.saleState == "por lanzar" then
+			mgr:request(p, "launchSale", { lotId = lot.id, price = lot.refPrice, requestId = rid() })
+		end
+	end
+	store.failNext = 0
+	-- Lo guardado nunca es una versión inválida.
+	local rec = store.data["player_7101"]
+	local ok, why = GameState.validate(jsonCopy(rec.profile.slots["1"]))
+	check(ok, "lo guardado en medio de los fallos es válido: " .. tostring(why))
+	check(failedWindows > 5 and warnings > 0, "hubo fallos de escritura y se avisó al jugador (" .. failedWindows .. " ráfagas)")
+	local final = { money = g.money, day = g.time.day, minute = g.time.minute, sold = g.counters.unitsSold, designs = #g.designs }
+	mgr:remove(p)
+	check(store.data["player_7101"].lock == nil, "con el servicio sano, la salida guarda y libera el candado")
+	local mgr2 = makeServer(store, "D2", clock)
+	local p2 = { UserId = 7101, Name = "d" }
+	mgr2:add(p2)
+	clock.c += 5
+	check(mgr2:request(p2, "selectSlot", { slot = "1" }).ok, "otro servidor la abre")
+	local g2 = mgr2.list[p2].game
+	eq(g2.money, final.money, "dinero recuperado")
+	eq(g2.time.day, final.day, "fecha recuperada")
+	eq(g2.counters.unitsSold, final.sold, "ventas recuperadas")
+	eq(#g2.designs, final.designs, "diseños recuperados")
+	-- Un servidor viejo (sin candado) no puede pisar el estado más reciente.
+	local ok2, _, code = mgr.deps.data:save(7101, jsonCopy(store.data["player_7101"].profile), {}, {})
+	check(not ok2 and code == "lost_lock", "una escritura del servidor anterior se rechaza (candado de otro servidor)")
+end)
+
+-- Optimización de red (etapa 11): el historial de modelos y lotes solo viaja cuando cambia.
+test("[E11-N] Envíos al cliente: el historial sin cambios no se reenvía y el cliente siempre tiene el actual", function()
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local sizes = {}
+	local mgr, pushed = makeServer(store, "N", clock)
+	local realPush = mgr.deps.push
+	mgr.deps.push = function(player: any, payload: any)
+		if not payload.tick then
+			table.insert(sizes, { n = #serde.encode("json", payload), omitted = payload.game and payload.game.historySame ~= nil })
+		end
+		realPush(player, payload)
+	end
+	local p = { UserId = 7201, Name = "n" }
+	mgr:add(p)
+	playThrough(mgr, p)
+	local log = Bot.play("normal", 300)
+	clock.c += 3
+	assert(mgr:request(p, "leaveCompany", {}).ok)
+	mgr.list[p].profile.slots["1"] = jsonCopy(log.g)
+	clock.c += 3
+	assert(mgr:request(p, "selectSlot", { slot = "1" }).ok)
+	local s = mgr.list[p]
+	local g = s.game
+	local function same(what: string)
+		local v = pushed[p].game
+		check(not v.historyMissing, what .. ": el cliente tiene su historial")
+		eq(serde.encode("json", v.modelHistory), serde.encode("json", g.modelHistory), what .. ": historial de modelos igual al del servidor")
+		eq(serde.encode("json", v.lotHistory), serde.encode("json", g.lotHistory), what .. ": historial de lotes igual al del servidor")
+	end
+	same("al entrar")
+	check(not sizes[#sizes].omitted, "el primer envío de la partida lleva el historial")
+	-- Acciones que no tocan el historial: se omite.
+	clock.c += 3
+	mgr:request(p, "setSpeed", { speed = 1 })
+	check(sizes[#sizes].omitted, "una acción sin cambios en el historial no lo reenvía")
+	same("después de cambiar la velocidad")
+	local full, light = 0, math.huge
+	for _, x in sizes do
+		if x.omitted then
+			light = math.min(light, x.n)
+		else
+			full = math.max(full, x.n)
+		end
+	end
+	print(string.format("      envío completo %.1f KB · sin historial %.1f KB", full / 1024, light / 1024))
+	check(light < full * 0.6, "el envío sin historial es bastante más liviano")
+	-- Cerrar un lote cambia el historial: viaja de nuevo y coincide.
+	local lot = nil
+	for _, l in g.lots do
+		if l.saleState == "en venta" then
+			lot = l
+			break
+		end
+	end
+	if lot then
+		clock.c += 3
+		check(mgr:request(p, "closeSale", { lotId = lot.id, requestId = rid() }).ok, "cerrar una venta")
+		check(not sizes[#sizes].omitted, "con el historial cambiado se reenvía")
+		same("después de cerrar una venta")
+	end
+	-- Simulación con lotes que se agotan: el cliente nunca queda con un historial viejo.
+	for _ = 1, 400 do
+		clock.c += 1
+		clock.t += 1
+		mgr:tick()
+	end
+	same("después de 400 s de simulación")
+	-- Resguardo periódico y pedido explícito.
+	clock.c += Sessions.HISTORY_FULL_EVERY + 1
+	mgr:request(p, "sync", {})
+	check(not sizes[#sizes].omitted, "cada " .. Sessions.HISTORY_FULL_EVERY .. " s va completo igual")
+	clock.c += 3
+	mgr:request(p, "sync", {})
+	check(sizes[#sizes].omitted, "inmediatamente después, sin cambios, se omite")
+	clock.c += 3
+	mgr:request(p, "sync", { full = true })
+	check(not sizes[#sizes].omitted, "sync con full = true manda todo")
+	-- Otra empresa: nunca se usa el historial de la anterior.
+	clock.c += 3
+	assert(mgr:request(p, "leaveCompany", {}).ok)
+	clock.c += 3
+	assert(mgr:request(p, "createCompany", { slot = "2", name = "Otra SA", color = "#7667FF", logo = "pico" }).ok or true)
+	if mgr.list[p].game and mgr.list[p].game ~= g then
+		check(not sizes[#sizes].omitted, "al cambiar de empresa el historial va completo")
+		eq(#pushed[p].game.modelHistory, #mgr.list[p].game.modelHistory, "historial de la empresa nueva")
+	end
+end)
 
 T.finish()
 Build.clean()

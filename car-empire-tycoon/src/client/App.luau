@@ -365,6 +365,9 @@ local function structuralSig(p: any): string
 		end
 		copy.lots = lots
 		copy.lotHistory = #g.lotHistory > 0 and g.lotHistory[1].id or nil
+		-- El historial permanente solo cambia junto con los lotes (ya en la firma): basta su tamaño, sin
+		-- codificar ~150 KB en cada actualización.
+		copy.modelHistory = #(g.modelHistory or {})
 		-- Contadores que cambian con cada venta: van en tramos (las misiones se recalculan al cruzar uno).
 		local counters = table.clone(g.counters)
 		for _, k in { "unitsSold", "unitsProduced", "revenueTotal", "marginTotal" } do
@@ -736,6 +739,8 @@ local function applySettings(settings: any)
 end
 
 local lastIdentity: string? = nil
+-- Última copia completa del historial recibida (ver App.onState / Sessions:push).
+local historyCopy: any = nil
 -- Estado de interfaz que pertenece a una empresa: ids de lotes, empleados, diseños y borradores de diálogos.
 -- Al entrar a otra empresa (o a la misma recreada) se descarta, así nada apunta a ids de la anterior: las
 -- reseñas de un lote con el mismo id que uno de la otra empresa se muestran igual, y el nombre a medio
@@ -766,6 +771,22 @@ function App.onState(payload: any)
 		payload = App.payload
 	end
 	local hadGame = App.g ~= nil
+	-- Historial sin cambios: el servidor no lo reenvía (historySame) y se conserva la copia anterior de esta
+	-- misma empresa. Si no hay copia que coincida, se pide el estado completo y mientras tanto va vacío.
+	local pg = payload.game
+	if pg then
+		local companyId = pg.company and pg.company.id
+		if pg.historySame ~= nil then
+			if historyCopy and historyCopy.key == pg.historySame and historyCopy.company == companyId then
+				pg.modelHistory, pg.lotHistory = historyCopy.modelHistory, historyCopy.lotHistory
+			else
+				pg.modelHistory, pg.lotHistory = {}, {}
+				task.spawn(App.request, "sync", { full = true })
+			end
+		else
+			historyCopy = { key = pg.historyKey, company = companyId, modelHistory = pg.modelHistory, lotHistory = pg.lotHistory }
+		end
+	end
 	App.payload = payload
 	App.g = payload.game
 	App.profile = payload.profile

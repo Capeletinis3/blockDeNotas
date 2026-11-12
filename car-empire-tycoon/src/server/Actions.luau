@@ -526,20 +526,23 @@ function Actions.createLot(g: any, ctx: any, payload: any): any
 			return fail("Todas tus líneas están fabricando. Esperá a que una termine su lote.")
 		end
 	end
+	-- Todas las validaciones antes de crear el lote: un pedido rechazado no consume identificadores ni cambia nada.
 	local snap = Simulation.designSnapshot(g, d)
-	local lot = Simulation.makeLot(g, snap, qty, snap.calc.price)
-	local total = qty * lot.unitCost
+	local unitCost = Rules.lotUnitCost(g, snap.calc.unitCost) -- el mismo costo que usa makeLot
+	local total = qty * unitCost
 	if not Simulation.canAfford(g, total) then
-		return fail("Fondos insuficientes: el lote cuesta " .. money(total) .. " (" .. Util.num(qty) .. " × " .. money(lot.unitCost) .. ") y tenés " .. money(g.money) .. ".")
+		return fail("Fondos insuficientes: el lote cuesta " .. money(total) .. " (" .. Util.num(qty) .. " × " .. money(unitCost) .. ") y tenés " .. money(g.money) .. ".")
 	end
 	local price = arg(payload, "price")
+	local chosen: number? = nil
 	if price ~= nil then
-		local p = Rules.validPrice(price)
-		if not p then
+		chosen = Rules.validPrice(price)
+		if not chosen then
 			return fail("Precio inválido: tiene que ser un número entero de dólares mayor que cero.")
 		end
-		lot.price = p
 	end
+	local lot = Simulation.makeLot(g, snap, qty, chosen or snap.calc.price)
+	total = qty * lot.unitCost
 	Simulation.spend(g, total, "fabricacion", "Lote de " .. Util.num(qty) .. " × " .. d.name)
 	lot.prepaid = true
 	lot.costSpent = total

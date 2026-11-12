@@ -37,8 +37,9 @@ Signal.__type = "RBXScriptSignal"
 function Signal.new()
 	return setmetatable({ handlers = {} }, Signal)
 end
+local TRACE_CONNECT = require("@lune/process").env.MOCK_TRACE == "1"
 function Signal:Connect(fn)
-	local c = { fn = fn, connected = true }
+	local c = { fn = fn, connected = true, origin = TRACE_CONNECT and debug.traceback("", 2) or nil }
 	table.insert(self.handlers, c)
 	return {
 		Connected = true,
@@ -622,9 +623,48 @@ local function defaults(className: string)
 	return p
 end
 
+-- Registro (débil) de todas las instancias: para medir fugas de conexiones e instancias en las pruebas.
+M.allInstances = setmetatable({}, { __mode = "k" }) :: { [any]: boolean }
+-- Conexiones activas en instancias que siguen existiendo (en Roblox, Destroy las desconecta).
+function M.liveConnections(): (number, { [string]: number })
+	local total, byEvent = 0, {}
+	for inst in M.allInstances do
+		if not rawget(inst, "__destroyed") then
+			for name, sig in rawget(inst, "__signals") do
+				for _, h in sig.handlers do
+					if h.connected then
+						total += 1
+						byEvent[name] = (byEvent[name] or 0) + 1
+					end
+				end
+			end
+			for name, sig in rawget(inst, "__changed") do
+				for _, h in sig.handlers do
+					if h.connected then
+						total += 1
+						byEvent["cambio:" .. name] = (byEvent["cambio:" .. name] or 0) + 1
+					end
+				end
+			end
+		end
+	end
+	return total, byEvent
+end
+-- Instancias vivas dentro de un árbol (sin contar las destruidas).
+function M.countTree(root: any): number
+	local n = 0
+	for _, d in root:GetDescendants() do
+		if not rawget(d, "__destroyed") then
+			n += 1
+		end
+	end
+	return n
+end
+
 function Instance.new(className: string, parent: any?)
 	assert(type(className) == "string", "Instance.new: clase inválida")
 	local inst = setmetatable({ __props = defaults(className), __children = {}, __signals = {}, __attrs = {}, __changed = {}, ClassName = className }, InstMt)
+	M.allInstances[inst] = true
 	if parent then
 		inst.Parent = parent
 	end
@@ -687,6 +727,17 @@ InstMt.__newindex = function(inst, k, v)
 			table.insert(rawget(v, "__children"), inst)
 			v.ChildAdded:Fire(inst)
 		end
+		-- Como en Roblox: AncestryChanged(child, parent) en la instancia y en todos sus descendientes.
+		local function ancestry(node: any)
+			local sig = rawget(node, "__signals").AncestryChanged
+			if sig then
+				sig:Fire(inst, v)
+			end
+			for _, c in table.clone(rawget(node, "__children")) do
+				ancestry(c)
+			end
+		end
+		ancestry(inst)
 		return
 	end
 	if k == "Size" and props.Size ~= nil and M.typeof(v) ~= M.typeof(props.Size) then

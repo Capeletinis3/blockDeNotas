@@ -78,7 +78,7 @@ local function utcDate(t: number): string
 end
 
 -- Estado que se envía al cliente -----------------------------------------------------------
-function Sessions:payload(s: any): any
+function Sessions:payload(s: any, omitHistory: string?, historyKey: string?): any
 	local slots = {}
 	local usable = {}
 	if s.profile then
@@ -91,6 +91,10 @@ function Sessions:payload(s: any): any
 				slots[key] = GameState.summary(g)
 			end
 		end
+	end
+	local view = s.game and GameState.view(s.game, omitHistory) or nil
+	if view then
+		view.historyKey = historyKey or GameState.historyKey(s.game)
 	end
 	return {
 		status = s.status,
@@ -107,17 +111,35 @@ function Sessions:payload(s: any): any
 		demo = s.demo,
 		menuPaused = s.uiPaused == true,
 		friends = s.game and FriendIdentity.summary(s.game, s.friends) or nil,
-		game = s.game and GameState.view(s.game) or nil,
+		game = view,
 	}
 end
 
+--[[ Envío completo. El historial de modelos y lotes (la mayor parte del estado en partidas avanzadas) va solo
+	si cambió desde el último envío a este jugador para esta misma partida; si no, el cliente conserva el suyo
+	(GameState.view, historySame). Igual se manda entero cada HISTORY_FULL_EVERY segundos como resguardo. ]]
+Sessions.HISTORY_FULL_EVERY = 120
 function Sessions:push(s: any)
 	if s.leaving then
 		return
 	end
-	s.sentKey = s.game and GameState.structKey(s.game) or nil
-	s.fullAt = self.deps.clock()
-	self.deps.push(s.player, self:payload(s))
+	local g = s.game
+	local now = self.deps.clock()
+	s.sentKey = g and GameState.structKey(g) or nil
+	s.fullAt = now
+	local omit: string? = nil
+	local hk: string? = nil
+	if g then
+		hk = GameState.historyKey(g)
+		if s.histGame == g and s.histKey == hk and now - (s.histAt or -math.huge) < Sessions.HISTORY_FULL_EVERY then
+			omit = hk
+		else
+			s.histGame, s.histKey, s.histAt = g, hk, now
+		end
+	else
+		s.histGame, s.histKey, s.histAt = nil, nil, nil
+	end
+	self.deps.push(s.player, self:payload(s, omit, hk))
 end
 
 --[[ Envío del segundo a segundo: si la estructura de la partida no cambió (mismos lotes y estados, mismo
@@ -720,7 +742,8 @@ function Sessions:menuAction(s: any, action: string, payload: any): any?
 		s.damaged[key] = nil
 		return { ok = true, msg = "Ranura " .. key .. " eliminada. Las otras empresas no se tocaron." }
 	elseif action == "setSetting" then
-		local k, v = payload and payload.key, payload and payload.value
+		local k = type(payload) == "table" and payload.key or nil
+		local v = type(payload) == "table" and payload.value or nil
 		local allowed = type(k) == "string" and SETTINGS_ALLOWED[k] or nil
 		if not allowed or not Util.contains(allowed, v) then
 			return { ok = false, msg = "Opción inválida." }
@@ -779,6 +802,9 @@ function Sessions:request(player: any, action: any, payload: any): any
 		return { ok = false, msg = "Demasiadas acciones seguidas. Esperá un momento.", retry = true }
 	end
 	if action == "sync" then
+		if type(payload) == "table" and payload.full == true then
+			s.histKey = nil -- el cliente pide todo (por ejemplo, perdió su copia del historial)
+		end
 		self:push(s)
 		return { ok = true, quiet = true }
 	end

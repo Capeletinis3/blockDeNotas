@@ -1466,8 +1466,38 @@ function GameState.trim(g: any, protect: string?)
 end
 
 -- Vista para el cliente -----------------------------------------------------------------------
-function GameState.view(g: any): any
-	local v = Util.deepCopy(g)
+-- Firma del historial (modelHistory y lotHistory): cambia al registrar o cerrar un lote, al compactar o resumir
+-- entradas. Sirve para no reenviar al cliente ~150 KB que no cambiaron (Sessions:push).
+function GameState.historyKey(g: any): string
+	local compact = 0
+	for _, e in g.modelHistory do
+		if e.compact then
+			compact += 1
+		end
+	end
+	local last = g.modelHistory[#g.modelHistory]
+	local others = g.records and g.records.others
+	return table.concat({
+		tostring(#g.modelHistory), tostring(compact), last and tostring(last.key) or "", tostring(#g.lotHistory), g.lotHistory[1] and tostring(g.lotHistory[1].id) or "",
+		tostring(g.counters.lotsLaunched or 0), tostring(others and others.models or 0),
+	}, "|")
+end
+
+-- omitHistory (opcional): la firma del historial que el cliente ya tiene; la vista va sin modelHistory ni
+-- lotHistory y con historySame = esa firma (el cliente conserva los suyos).
+function GameState.view(g: any, omitHistory: string?): any
+	local v
+	if omitHistory then
+		v = {}
+		for k, x in g do
+			if k ~= "modelHistory" and k ~= "lotHistory" then
+				v[k] = Util.deepCopy(x)
+			end
+		end
+		v.historySame = omitHistory
+	else
+		v = Util.deepCopy(g)
+	end
 	local function lastN(list: { any }, n: number): { any }
 		local out = {}
 		for i = math.max(1, #list - n + 1), #list do
