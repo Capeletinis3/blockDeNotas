@@ -12,6 +12,7 @@ local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
+local DesignCalc = require(Shared.DesignCalc)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
@@ -95,11 +96,147 @@ local function typeCard(typeId: string, b: any): Frame
 	return Ui.card(rows, { gap = 6, name = "Tipo_" .. typeId })
 end
 
+--[[ Mercado internacional: presencia, preferencias por país y evolución de la oportunidad. Todo sale de las
+	reglas (Rules.worldDemand, Rules.countryDemand, Rules.expansionRequirements): no hay ventas por país. ]]
+local E = Catalog.EXPANSION
+
+-- Evolución de la demanda mundial en años de referencia: { year, base, total } (con los países abiertos hoy).
+function Screen.evolution(g: any): { any }
+	local now = Rules.year(g)
+	local out, seen = {}, {}
+	for _, y in { now, now + 5, now + 10, Catalog.CALENDAR.endYear } do
+		local yy = math.min(y, Catalog.CALENDAR.endYear)
+		if not seen[yy] then
+			seen[yy] = true
+			local base, total = Rules.worldDemand(g, yy + 0.5)
+			table.insert(out, { year = yy, base = base, total = total })
+		end
+	end
+	return out
+end
+
+-- Tipo disponible para fabricar (o el motivo del primer chasis de ese tipo).
+local function typeAccess(g: any, typeId: string): (boolean, string?)
+	local why = nil
+	for _, b in Catalog.BASES do
+		if b.type == typeId then
+			local w = DesignCalc.baseAvailable(g, b)
+			if w == nil then
+				return true, nil
+			end
+			why = why or w
+		end
+	end
+	return false, why
+end
+
+function Screen.world(g: any, main: Frame)
+	local n = Rules.expansion(g)
+	local base, total = Rules.worldDemand(g)
+	local q = Rules.expansionQuote(g)
+	local opened, pending = {}, {}
+	for _, c in E.countries do
+		table.insert(Rules.countryOpen(g, c.id) and opened or pending, c.name)
+	end
+	local pres: { Instance? } = {
+		Ui.row({ Ui.grow(Ui.lbl("Presencia mundial")), Ui.chip(n .. " de " .. #E.countries .. " países", n > 0 and "cg" or "cn", { name = "PaisesAbiertos" }) }, 8),
+		Ui.between("Países abiertos", #opened > 0 and table.concat(opened, ", ") or "ninguno", { size = Ui.S.sm }),
+		Ui.between("Países pendientes", #pending > 0 and table.concat(pending, ", ") or "ninguno", { size = Ui.S.sm }),
+		Ui.between("Demanda mundial actual", Util.num(total, 1) .. " autos/min", { name = "DemandaMundial" }),
+		Ui.between("Aporte de las expansiones", "+" .. Util.num(total - base, 1) .. " autos/min (×" .. Util.num(Rules.marketFactor(g), 2) .. ")", { name = "AporteExpansion" }),
+		Ui.between("Capacidad productiva adicional", "+" .. Util.round(E.line * n * 100) .. " % por línea", { name = "CapacidadExtra" }),
+	}
+	if q then
+		table.insert(pres, Ui.between("Próximo costo de expansión", Util.money(q.cost), { name = "ProximoCosto" }))
+		local sold = g.counters.unitsSold
+		table.insert(pres, Ui.between("Progreso hacia la próxima apertura", Util.num(sold) .. " / " .. Util.num(q.sold) .. " autos vendidos", { size = Ui.S.sm }))
+		table.insert(pres, (Ui.bar(math.min(1, sold / math.max(1, q.sold)) * 100, T.bl, 6)))
+		if Rules.nextSede(g) ~= nil then
+			table.insert(pres, Ui.text("Además hacen falta las oficinas centrales de nivel " .. #Catalog.SEDES .. ".", { size = Ui.S.xs, color = T.ye }))
+		end
+	else
+		table.insert(pres, Ui.note("g", "Presencia en los diez mercados internacionales disponibles."))
+	end
+	table.insert(pres, Ui.button("Abrir el mapa mundial", "p", function()
+		App.go("expansion")
+	end, { small = true, icon = "globe", name = "MercadoAbrirMapa" }))
+	Ui.card(pres, { gap = 6, name = "PresenciaMundial" }).Parent = main
+
+	-- Preferencias por país: elegir un país actualiza solo las barras.
+	local yf = Rules.yearFrac(g)
+	local sel = Rules.country(App.ui.mktCountry) and App.ui.mktCountry or E.countries[1].id
+	local bars = Ui.col({}, 6, { Name = "BarrasPreferencias" })
+	local chips = {}
+	local function fill(id: string)
+		App.ui.mktCountry = id
+		bars:ClearAllChildren()
+		local l = Ui.new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6) })
+		l.Parent = bars
+		local c = Rules.country(id)
+		local contrib, sum = Rules.countryDemand(c, yf)
+		local maxP = 0
+		for _, t in Catalog.TYPE_ORDER do
+			maxP = math.max(maxP, c.prefs[t] or 1)
+		end
+		Ui.text(c.name .. (Rules.countryOpen(g, id) and " · abierto" or "") .. ": +" .. Util.num(sum, 1) .. " autos/min este año, repartidos así", { size = Ui.S.xs, color = T.mut }).Parent = bars
+		for _, t in Catalog.TYPE_ORDER do
+			local p = c.prefs[t] or 1
+			local bar = Ui.bar(p / maxP * 100, (contrib[t] or 0) > 0 and T.bl or T.mut, 6)
+			Ui.col({
+				Ui.row({ Ui.grow(Ui.inline(Catalog.TYPES[t], { size = Ui.S.xs, color = T.tx2 })), Ui.inline("×" .. Util.num(p, 1) .. " · " .. Util.num(contrib[t] or 0, 1) .. "/min", { size = Ui.S.xs, weight = W.semi }) }, 6),
+				bar,
+			}, 3, { Name = "Pref_" .. t }).Parent = bars
+		end
+		for cid, b in chips do
+			local on = cid == id
+			b:SetAttribute("selected", on)
+			b.BackgroundColor3 = on and T.vi or T.input
+			b.BackgroundTransparency = on and 0.8 or 0
+			b.TextColor3 = on and T.tx or T.tx2
+			local st = b:FindFirstChildOfClass("UIStroke")
+			if st then
+				st.Color = on and T.vi or T.line
+				st.Thickness = on and 2 or 1
+			end
+		end
+	end
+	local chipRow = {}
+	for _, c in E.countries do
+		local b = Ui.opt(c.name, c.id == sel, function()
+			fill(c.id)
+		end, { name = "PrefPais_" .. c.id, height = 32 })
+		chips[c.id] = b
+		table.insert(chipRow, b)
+	end
+	Ui.card({
+		Ui.lbl("Preferencias por mercado"),
+		Ui.text("Importancia relativa de cada tipo en cada país (parámetros del juego, no estadísticas reales). Reparte el +" .. Util.round(E.demand * 100) .. " % que aporta el país sin sumar volumen; un tipo sin demanda en su época no recibe nada.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.35 }),
+		Ui.row(chipRow, 6, { wrap = true, Name = "PaisesPreferencias" }),
+		bars,
+	}, { gap = 8, name = "PreferenciasMercado" }).Parent = main
+	fill(sel)
+
+	-- Evolución comercial: demanda mundial por año y oportunidad por tipo (con lo que ya podés fabricar).
+	local evo: { Instance? } = { Ui.lbl("Evolución comercial"), Ui.text("Demanda mundial (autos/min real a 1×) en años de referencia, sin y con los países que tenés abiertos hoy.", { size = Ui.S.xs, color = T.mut }) }
+	for _, r in Screen.evolution(g) do
+		table.insert(evo, Ui.between(tostring(r.year), Util.num(r.base, 1) .. " → " .. Util.num(r.total, 1), { size = Ui.S.sm, name = "Evolucion_" .. r.year }))
+	end
+	local later = math.min(Rules.year(g) + 10, Catalog.CALENDAR.endYear) + 0.5
+	for _, t in Catalog.TYPE_ORDER do
+		local now, soon = Rules.demand(g, t, yf), Rules.demand(g, t, later)
+		local ok, why = typeAccess(g, t)
+		table.insert(evo, Ui.between(Catalog.TYPES[t] .. (ok and "" or (" · " .. tostring(why))), Util.num(now, 1) .. " → " .. Util.num(soon, 1) .. " en " .. math.floor(later), { size = Ui.S.xs, color = ok and T.tx2 or T.mut, name = "Oportunidad_" .. t }))
+	end
+	Ui.card(evo, { gap = 6, name = "EvolucionComercial" }).Parent = main
+end
+
 function Screen.build(main: Frame, side: Frame)
 	local g = App.g
-	local tabs, tab = Sheet.tabs("mercado", { { "tipos", "Demanda por tipo" }, { "rivales", "Marcas rivales" } }, "tipos")
+	local tabs, tab = Sheet.tabs("mercado", { { "tipos", "Demanda por tipo" }, { "rivales", "Marcas rivales" }, { "mundo", "Mercado internacional" } }, "tipos")
 	tabs.Parent = main
-	if tab == "tipos" then
+	if tab == "mundo" then
+		Screen.world(g, main)
+	elseif tab == "tipos" then
 		local shown = 0
 		for _, typeId in Catalog.TYPE_ORDER do
 			local b = Screen.breakdown(g, typeId)

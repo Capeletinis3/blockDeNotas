@@ -402,6 +402,7 @@ local FULLSCREEN = {
 	editor = true, fabrica = true, autos = true, ventas = true, mercado = true, investigacion = true,
 	personal = true, compania = true, misiones = true, estadisticas = true, menu = true, nueva = true,
 	oficina = true, -- editor de oficinas: pausa la empresa mientras está abierto
+	expansion = true, -- Compañía › Expansión internacional (mapa mundial)
 }
 
 --[[ Protección del borrador del editor: antes de salir del editor, abrir otro borrador o volver al menú se

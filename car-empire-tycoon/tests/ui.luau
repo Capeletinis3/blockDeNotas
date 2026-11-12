@@ -1052,7 +1052,7 @@ test("Fin de partida: expansión global, récords y años extra en las cuatro re
 	for _, res in { { 1600, 900 }, { 1280, 720 }, { 844, 390 }, { 390, 844 } } do
 		M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(res[1], res[2])
 		M.task.wait()
-		for _, route in { "compania", "autos", "juego", "mercado" } do
+		for _, route in { "compania", "autos", "juego", "mercado", "expansion" } do
 			lateGame()
 			App.ui.tabs.autos = "historia"
 			App.renderError = nil
@@ -1061,7 +1061,9 @@ test("Fin de partida: expansión global, récords y años extra en las cuatro re
 			local bad = overflow()
 			check(#bad == 0, route .. " (fin de partida) en " .. res[1] .. "×" .. res[2] .. " no se sale" .. (#bad > 0 and (": " .. bad[1]) or ""))
 			if route == "compania" then
-				check(named("Expansion") ~= nil and named("Pais_JP") ~= nil, "tarjeta y países para elegir")
+				check(named("Expansion") ~= nil and named("AbrirMapaMundial") ~= nil, "tarjeta de expansión con acceso al mapa mundial")
+			elseif route == "expansion" then
+				check(named("MapaMundial") ~= nil and named("Marcador_JP") ~= nil and named("PanelPais") ~= nil, "mapa mundial y panel del país")
 			elseif route == "autos" then
 				check(named("Records") ~= nil and M.find(App.content, "Otros 312 modelos") ~= nil, "récords permanentes y «Otros modelos»")
 				check(named("MostrarMas") ~= nil, "la historia se muestra de a 20 modelos")
@@ -3303,6 +3305,193 @@ test("Instalaciones (etapa 8): comparación antes/después con valores reales, o
 	App.go("juego")
 	M.task.wait()
 	noErrors("Instalaciones etapa 8")
+end)
+
+test("Expansión internacional (etapa 9): mapa con diez países, estados, selección, zoom, panel, compra y mercado mundial", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local Office = require("./.build-ui/shared/Office")
+	local Util9 = require("./.build-ui/shared/Util")
+	local WorldMap = require("./.build-ui/client/WorldMap")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local EX = App.screens.expansion
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	local sg = sess.game
+	sg.money = 5e9
+	sg.sede = 5
+	Office.remap(sg.office, 5)
+	sg.facilities.builds = {}
+	sg.counters.unitsSold = 0
+	sg.expansion = 0
+	sg.countries = {}
+	sg.claimed.s13, sg.claimed.s16, sg.claimed.s18 = nil, nil, nil
+	inst:push(sess)
+	waitFor(function()
+		return App.g.sede == 5 and App.g.expansion == 0 and App.g.counters.unitsSold == 0
+	end)
+	App.ui.expSel, App.ui.expMap = nil, nil
+	App.go("expansion")
+	M.task.wait()
+	check(App.menuPaused(), "la pantalla pausa la empresa")
+	local map = named("MapaMundial")
+	check(map ~= nil, "mapa mundial")
+	-- 25. Diez países.
+	local markers = {}
+	for _, c in Catalog.EXPANSION.countries do
+		markers[c.id] = named("Marcador_" .. c.id)
+		check(markers[c.id] ~= nil, "25. marcador de " .. c.name)
+	end
+	local count = 0
+	for _, d in map:GetDescendants() do
+		if string.sub(d.Name, 1, 9) == "Marcador_" then
+			count += 1
+		end
+	end
+	eq(count, 10, "25. exactamente diez marcadores")
+	-- 26. Posiciones: la proyección y la geografía relativa.
+	for id, m in markers do
+		local geo = WorldMap.COUNTRY_GEO[id]
+		local x, y = WorldMap.project(geo[1], geo[2])
+		check(math.abs(m:GetAttribute("x") - x) < 1e-9 and math.abs(m:GetAttribute("y") - y) < 1e-9 and x > 0 and x < 1 and y > 0 and y < 1, "26. " .. id .. " en su proyección")
+	end
+	local function X(id: string): number
+		return markers[id]:GetAttribute("x")
+	end
+	local function Y(id: string): number
+		return markers[id]:GetAttribute("y")
+	end
+	check(X("US") < X("BR") and X("BR") < X("DE") and X("DE") < X("PL") and X("PL") < X("AE") and X("AE") < X("IN") and X("IN") < X("TH") and X("TH") < X("AU") and X("AU") < X("JP"), "26. de oeste a este: EE. UU., Brasil, Alemania, Polonia, Emiratos, India, Tailandia, Australia, Japón")
+	check(Y("DE") < Y("JP") and Y("JP") < Y("AE") and Y("AE") < Y("TH") and Y("TH") < Y("BR") and Y("BR") < Y("AU") and Y("AU") < Y("ZA") + 0.02, "26. de norte a sur")
+	-- 29. Bloqueado: faltan autos vendidos.
+	for id, m in markers do
+		eq(m:GetAttribute("estado"), "bloqueado", "29. sin ventas suficientes: " .. id .. " bloqueado")
+	end
+	check(find("Autos vendidos: 0/110.000") ~= nil, "requisito de ventas visible con su progreso")
+	-- Ventas suficientes: disponibles.
+	sg.counters.unitsSold = 200000
+	inst:push(sess)
+	waitFor(function()
+		return App.g.counters.unitsSold == 200000
+	end)
+	App.forceRender()
+	M.task.wait()
+	map = named("MapaMundial")
+	for _, c in Catalog.EXPANSION.countries do
+		markers[c.id] = named("Marcador_" .. c.id)
+		eq(markers[c.id]:GetAttribute("estado"), "disponible", "29. " .. c.id .. " disponible")
+	end
+	-- 27. Clic en un marcador: selecciona y cambia solo el panel (el mapa es el mismo objeto).
+	M.click(markers.JP)
+	M.task.wait()
+	eq(App.ui.expSel, "JP", "27. Japón seleccionado")
+	check(named("MapaMundial") == map, "27. elegir otro país no reconstruye el mapa")
+	eq(markers.JP:GetAttribute("seleccionado"), true, "27. marcador seleccionado")
+	eq(named("NombrePais").Text, "Japón", "27. panel de Japón")
+	M.click(markers.BR)
+	M.task.wait()
+	check(markers.BR:GetAttribute("seleccionado") == true and markers.JP:GetAttribute("seleccionado") == false, "27. la selección pasa a Brasil")
+	M.click(markers.JP)
+	M.task.wait()
+	-- 28. Zoom con límites, desplazamiento y encuadre completo.
+	clickN("AcercarMapa")
+	check(math.abs(App.ui.expMap.zoom - WorldMap.ZOOM_STEP) < 1e-9, "28. acercar")
+	for _ = 1, 10 do
+		clickN("AcercarMapa")
+	end
+	eq(App.ui.expMap.zoom, WorldMap.MAX_ZOOM, "28. zoom con tope")
+	local cx = App.ui.expMap.cx
+	EX.map.panBy(0.2, 0)
+	check(App.ui.expMap.cx < cx, "28. desplazar")
+	for _ = 1, 50 do
+		EX.map.panBy(1, 1)
+	end
+	check(math.abs(App.ui.expMap.cx - 0.5 / App.ui.expMap.zoom) < 1e-9 and math.abs(App.ui.expMap.cy - 0.5 / App.ui.expMap.zoom) < 1e-9, "28. el desplazamiento tiene límites")
+	map.MouseWheelBackward:Fire(0, 0)
+	check(App.ui.expMap.zoom < WorldMap.MAX_ZOOM, "28. rueda del mouse aleja")
+	clickN("EncuadreCompleto")
+	check(App.ui.expMap.zoom == 1 and App.ui.expMap.cx == 0.5 and App.ui.expMap.cy == 0.5, "28. ver todo")
+	-- Información al pasar el cursor.
+	markers.DE.MouseEnter:Fire()
+	check(named("InfoPais") ~= nil and string.find(named("InfoPais").Text, "Alemania", 1, true) ~= nil, "información al pasar el cursor")
+	markers.DE.MouseLeave:Fire()
+	-- 30. Panel con datos reales.
+	local q = Rules.expansionQuote(App.g)
+	local pt = table.concat(M.texts(named("PanelPais")), " | ")
+	check(string.find(pt, Util9.money(q.cost), 1, true) ~= nil and q.cost == Rules.expansionCost(App.g, 80000000), "30. costo de la primera apertura: " .. Util9.money(q.cost))
+	check(string.find(pt, "×1,00 → ×1,15", 1, true) ~= nil, "30. impacto en la demanda mundial")
+	local _, jpTotal = Rules.countryDemand(Rules.country("JP"), Rules.yearFrac(App.g))
+	check(string.find(pt, "+" .. Util9.num(jpTotal, 1) .. " autos/min", 1, true) ~= nil, "30. demanda que suma Japón este año")
+	check(named("ImpactoProduccion") ~= nil and named("Preferencias") ~= nil and named("Requisitos") ~= nil, "30. producción, preferencias y requisitos")
+	for _, t in Catalog.TYPE_ORDER do
+		check(named("Pref_" .. t) ~= nil, "30. preferencia " .. t)
+	end
+	-- 31. Confirmación: abrir no cobra; confirmar cobra una vez.
+	local m0 = App.g.money
+	clickN("Expandirse_JP")
+	eq(topKind(), "confirm", "31. pide confirmación")
+	M.task.wait()
+	eq(App.g.money, m0, "31. abrir la confirmación no cobra")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return App.g.expansion == 1
+	end), "31. confirma y abre Japón")
+	eq(App.g.money, m0 - q.cost, "31. cobrado una vez")
+	-- 32. Actualización inmediata: marcador abierto, aviso breve y presencia comercial.
+	App.go("expansion")
+	M.task.wait()
+	eq(named("Marcador_JP"):GetAttribute("estado"), "abierto", "32. Japón abierto en el mapa")
+	check(named("NuevaExpansion") ~= nil and find("Tu compañía llegó a Japón.") ~= nil, "32. «¡Nueva expansión internacional!»")
+	App.ui.expSel = "JP"
+	App.forceRender()
+	M.task.wait()
+	check(named("PresenciaComercial") ~= nil and named("Expandirse_JP") == nil, "32. presencia comercial en lugar del botón")
+	eq(App.g.countries[1], "JP", "32. país registrado")
+	local q2 = Rules.expansionQuote(App.g)
+	check(q2.cost > q.cost, "el siguiente cuesta más (" .. Util9.money(q2.cost) .. ")")
+	-- 33. Cambio de empresa: la selección y la vista no se arrastran.
+	App.ui.expSel = "JP"
+	App.ui.expMap.zoom = 3
+	App.ui.expCompany = "otra-empresa"
+	App.forceRender()
+	M.task.wait()
+	check(App.ui.expSel ~= "JP" and App.ui.expMap.zoom == 1, "33. al cambiar de empresa se reinician selección y vista")
+	-- Mercado › Mercado internacional.
+	App.ui.tabs.mercado = "mundo"
+	App.go("mercado")
+	M.task.wait()
+	check(named("PresenciaMundial") ~= nil and named("PreferenciasMercado") ~= nil and named("EvolucionComercial") ~= nil, "mercado internacional: presencia, preferencias y evolución")
+	check(string.find(table.concat(M.texts(named("PresenciaMundial")), " "), "1 de 10 países", 1, true) ~= nil, "1 de 10 países")
+	local barsBefore = named("BarrasPreferencias")
+	clickN("PrefPais_US")
+	M.task.wait()
+	check(named("BarrasPreferencias") == barsBefore and string.find(table.concat(M.texts(barsBefore), " "), "Estados Unidos", 1, true) ~= nil, "elegir un país actualiza solo las barras")
+	App.ui.tabs.mercado = nil
+	-- Los diez abiertos: el texto correcto (no «todo el planeta»).
+	sg.countries = {}
+	for _, c in Catalog.EXPANSION.countries do
+		table.insert(sg.countries, c.id)
+	end
+	sg.expansion = 10
+	inst:push(sess)
+	waitFor(function()
+		return App.g.expansion == 10
+	end)
+	App.go("expansion")
+	M.task.wait()
+	check(find("Presencia en los diez mercados internacionales disponibles.") ~= nil, "con los diez: «Presencia en los diez mercados internacionales disponibles.»")
+	sg.expansion, sg.countries = 0, {}
+	sg.claimed.s13, sg.claimed.s16, sg.claimed.s18 = nil, nil, nil
+	inst:push(sess)
+	App.go("juego")
+	M.task.wait()
+	noErrors("Expansión internacional")
 end)
 
 test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()

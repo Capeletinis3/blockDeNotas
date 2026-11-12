@@ -552,11 +552,23 @@ Catalog.EXPANSION = {
 	line = 0.12, -- +12 % de autos por minuto en cada línea por país (capacidad global de la empresa)
 	soldBase = 110000,
 	soldStep = 35000,
-	-- Países reales en orden de apertura (el mapa mundial definitivo se hará en una etapa visual posterior).
+	-- Países disponibles (ids y orden estables: las partidas viejas que solo guardaban la cantidad de regiones
+	-- toman los primeros N de esta lista). Se abren en el orden que elija el jugador.
+	--[[ prefs = perfil de preferencias del mercado de ese país por tipo de vehículo (Catalog.TYPE_ORDER).
+		PARÁMETROS FICTICIOS DE EQUILIBRIO DEL JUEGO, no estadísticas de mercados reales. Solo reparten entre
+		tipos el +15 % de demanda que aporta cada país (Rules.countryWeights): el volumen total es el mismo que con
+		pesos iguales y un tipo sin demanda en su época sigue sin demanda. Un tipo que no figura pesa 1. ]]
 	countries = {
-		{ id = "BR", name = "Brasil" }, { id = "US", name = "Estados Unidos" }, { id = "DE", name = "Alemania" }, { id = "PL", name = "Polonia" },
-		{ id = "JP", name = "Japón" }, { id = "TH", name = "Tailandia" }, { id = "IN", name = "India" }, { id = "AU", name = "Australia" },
-		{ id = "AE", name = "Emiratos Árabes Unidos" }, { id = "ZA", name = "Sudáfrica" },
+		{ id = "BR", name = "Brasil", prefs = { compacto = 1.5, sedan = 1.1, clasico = 0.8, pickup = 1.3, deportivo = 0.7, suv = 0.9, superdeportivo = 0.6, electrico = 0.7 } },
+		{ id = "US", name = "Estados Unidos", prefs = { compacto = 0.6, sedan = 1.1, clasico = 1.2, pickup = 1.6, deportivo = 1.2, suv = 1.5, superdeportivo = 1.1, electrico = 1.0 } },
+		{ id = "DE", name = "Alemania", prefs = { compacto = 1.1, sedan = 1.4, clasico = 0.9, pickup = 0.6, deportivo = 1.4, suv = 1.0, superdeportivo = 1.3, electrico = 1.2 } },
+		{ id = "PL", name = "Polonia", prefs = { compacto = 1.5, sedan = 1.2, clasico = 1.0, pickup = 0.8, deportivo = 0.7, suv = 1.0, superdeportivo = 0.6, electrico = 0.8 } },
+		{ id = "JP", name = "Japón", prefs = { compacto = 1.6, sedan = 1.2, clasico = 0.7, pickup = 0.6, deportivo = 1.3, suv = 0.8, superdeportivo = 0.9, electrico = 1.4 } },
+		{ id = "TH", name = "Tailandia", prefs = { compacto = 1.2, sedan = 1.0, clasico = 0.7, pickup = 1.6, deportivo = 0.7, suv = 1.1, superdeportivo = 0.6, electrico = 0.9 } },
+		{ id = "IN", name = "India", prefs = { compacto = 1.6, sedan = 1.1, clasico = 0.7, pickup = 0.9, deportivo = 0.6, suv = 1.2, superdeportivo = 0.6, electrico = 1.0 } },
+		{ id = "AU", name = "Australia", prefs = { compacto = 0.8, sedan = 1.0, clasico = 1.0, pickup = 1.5, deportivo = 1.1, suv = 1.5, superdeportivo = 0.9, electrico = 0.8 } },
+		{ id = "AE", name = "Emiratos Árabes Unidos", prefs = { compacto = 0.6, sedan = 1.1, clasico = 0.9, pickup = 0.9, deportivo = 1.3, suv = 1.6, superdeportivo = 1.6, electrico = 0.8 } },
+		{ id = "ZA", name = "Sudáfrica", prefs = { compacto = 1.3, sedan = 1.0, clasico = 0.8, pickup = 1.5, deportivo = 0.8, suv = 1.1, superdeportivo = 0.6, electrico = 0.7 } },
 	},
 	regions = {}, -- nombres (compatibilidad): se completa abajo con los de `countries`
 }
@@ -924,12 +936,12 @@ Catalog.MISSIONS = {
 	{ id = "s10", kind = "historia", title = "Vendé 50.000 autos", desc = "Una de las marcas grandes del país.", counter = "unitsSold", goal = 50000, reward = { money = 10000000, pi = 200, xp = 4000 }, go = "ventas" },
 	{ id = "s11", kind = "historia", title = "Llegá al Imperio automotriz", desc = "Oficinas centrales al máximo: abren la expansión internacional.", counter = "sedeLevel", goal = 5, reward = { money = 40000000, pi = 300, xp = 6000 }, go = "compania" },
 	{ id = "s12", kind = "historia", title = "Completá todas las investigaciones", desc = "Todas las tecnologías del departamento de I+D.", counter = "researchTree", goal = 0, reward = { money = 50000000, xp = 8000 }, go = "investigacion" },
-	{ id = "s13", kind = "historia", title = "Primera expansión internacional", desc = "Abrí tu primer país desde Compañía › Instalaciones.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "compania" },
+	{ id = "s13", kind = "historia", title = "Primera expansión internacional", desc = "Abrí tu primer país desde Compañía › Expansión internacional.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "expansion" },
 	{ id = "s14", kind = "historia", title = "Vendé 250.000 autos", desc = "Una marca internacional.", counter = "unitsSold", goal = 250000, reward = { money = 60000000, xp = 8000 }, go = "ventas" },
 	{ id = "s15", kind = "historia", title = "Liderá cuatro tipos de vehículo", desc = "Al menos 35 % de cuota en cuatro tipos a la vez.", counter = "leaderTypes", goal = 4, reward = { money = 80000000, xp = 10000 }, go = "mercado" },
-	{ id = "s16", kind = "historia", title = "Abrí cinco países", desc = "Expansión internacional en cinco países.", counter = "expansion", goal = 5, reward = { money = 150000000, xp = 12000 }, go = "compania" },
+	{ id = "s16", kind = "historia", title = "Abrí cinco países", desc = "Expansión internacional en cinco países.", counter = "expansion", goal = 5, reward = { money = 150000000, xp = 12000 }, go = "expansion" },
 	{ id = "s17", kind = "historia", title = "Vendé 1.000.000 de autos", desc = "Una de las marcas más grandes del mundo.", counter = "unitsSold", goal = 1000000, reward = { money = 250000000, xp = 20000 }, go = "ventas" },
-	{ id = "s18", kind = "historia", title = "Presencia en todo el mundo", desc = "Abrí los diez países de la expansión internacional.", counter = "expansion", goal = 10, reward = { money = 500000000, xp = 30000 }, go = "compania" },
+	{ id = "s18", kind = "historia", title = "Presencia en los diez mercados internacionales", desc = "Abrí los diez países disponibles de la expansión internacional.", counter = "expansion", goal = 10, reward = { money = 500000000, xp = 30000 }, go = "expansion" },
 	{ id = "y1", kind = "anual", title = "Vendé autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "soldYear", goal = 120, goalScale = "reach", reward = { money = 12000, pi = 3, xp = 150 }, go = "ventas" },
 	{ id = "y2", kind = "anual", title = "Producí autos este año", desc = "Se reinicia cada año. La meta crece con tu sede.", counter = "producedYear", goal = 150, goalScale = "reach", reward = { money = 10000, pi = 3, xp = 120 }, go = "fabrica" },
 	{ id = "y3", kind = "anual", title = "Ganancia del año", desc = "Ingresos por ventas − costo de fabricación de lo vendido este año.", counter = "marginYear", goal = 90000, goalScale = "reach", reward = { money = 15000, pi = 4, xp = 150 }, go = "estadisticas" },

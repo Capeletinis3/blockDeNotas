@@ -186,7 +186,7 @@ function Screen.nextAction(g: any): any
 			ok = ok and c[1]
 		end
 		if ok then
-			return { label = "Expansión global", sub = ex.name .. " · " .. Util.money(ex.cost), go = "compania", key = "8" }
+			return { label = "Expansión internacional", sub = "País a elección · " .. Util.money(ex.cost), go = "expansion", key = "8" }
 		end
 	end
 	local selling = 0
@@ -922,7 +922,7 @@ local function leftCards(g: any): { Instance }
 		}, 9)
 	else
 		local ex = Rules.nextExpansion(g)
-		sedeBody = Ui.text(ex and ("Oficinas al máximo. Próximo país (a elección en Compañía): <b><font color=\"#F5F7FA\">" .. Util.money(ex.cost) .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos") or ("Oficinas al máximo · " .. Rules.expansion(g) .. " países abiertos."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
+		sedeBody = Ui.text(ex and ("Oficinas al máximo. Próximo país (a elección en Compañía › Expansión internacional): <b><font color=\"#F5F7FA\">" .. Util.money(ex.cost) .. "</font></b> · " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(ex.sold) .. " autos vendidos") or ("Oficinas al máximo · " .. Rules.expansion(g) .. " países abiertos."), { size = Ui.S.xs, color = T.mut, lineHeight = 1.4 })
 	end
 	table.insert(out, hcCard("Sede", {
 		cardHead("sede", "building", T.ye, T.ye, 0.15, "Oficinas centrales · nivel " .. g.sede, g.derived.sedeName),

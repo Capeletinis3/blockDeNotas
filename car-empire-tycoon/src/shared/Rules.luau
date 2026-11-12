@@ -382,15 +382,55 @@ function Rules.countryOpen(g: any, id: string): boolean
 	return table.find(Rules.openedCountries(g), id) ~= nil
 end
 
--- Próxima apertura (el jugador elige el país): { level, name, cost, sold } o nil (sin Imperio o con todos
--- abiertos). El costo y las ventas pedidas dependen de cuántos países van, no de cuál se elige.
-function Rules.nextExpansion(g: any): any
+-- Cotización de la próxima apertura, haya o no oficinas al máximo: { level, name, cost, sold } o nil si ya
+-- están todos abiertos. El costo y las ventas pedidas dependen de cuántos países van, no de cuál se elige.
+function Rules.expansionQuote(g: any): any
 	local E = Catalog.EXPANSION
 	local n = Rules.expansion(g) + 1
-	if Rules.nextSede(g) ~= nil or n > #E.countries then
+	if n > #E.countries then
 		return nil
 	end
 	return { level = n, name = "un país a elección", cost = Rules.expansionCost(g, Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000), sold = E.soldBase + E.soldStep * (n - 1) }
+end
+
+-- Próxima apertura (el jugador elige el país): la cotización, o nil sin oficinas al máximo o con todos abiertos.
+function Rules.nextExpansion(g: any): any
+	if Rules.nextSede(g) ~= nil then
+		return nil
+	end
+	return Rules.expansionQuote(g)
+end
+
+--[[ Requisitos de la próxima apertura con su progreso, también antes de tener las oficinas al máximo:
+	{ { ok, text, cur, need, kind } } con kind = "oficinas" | "ventas" | "dinero". Vacía si ya están todos. ]]
+function Rules.expansionRequirements(g: any): { any }
+	local q = Rules.expansionQuote(g)
+	if not q then
+		return {}
+	end
+	local max = #Catalog.SEDES
+	return {
+		{ ok = (g.sede or 1) >= max, text = "Oficinas centrales de nivel " .. max .. " (tenés nivel " .. (g.sede or 1) .. ")", cur = g.sede or 1, need = max, kind = "oficinas" },
+		{ ok = g.counters.unitsSold >= q.sold, text = "Autos vendidos: " .. Util.num(g.counters.unitsSold) .. "/" .. Util.num(q.sold), cur = g.counters.unitsSold, need = q.sold, kind = "ventas" },
+		{ ok = g.money >= q.cost, text = "Dinero: " .. Util.money(g.money) .. " / " .. Util.money(q.cost), cur = g.money, need = q.cost, kind = "dinero" },
+	}
+end
+
+-- Estado de un país para el mapa: "abierto", "disponible" (se cumplen todos los requisitos) o "bloqueado".
+function Rules.countryState(g: any, id: string): string
+	if Rules.countryOpen(g, id) then
+		return "abierto"
+	end
+	local reqs = Rules.expansionRequirements(g)
+	if #reqs == 0 then
+		return "bloqueado"
+	end
+	for _, r in reqs do
+		if not r.ok then
+			return "bloqueado"
+		end
+	end
+	return "disponible"
 end
 
 function Rules.expansionChecks(g: any): { any }
@@ -749,13 +789,91 @@ function Rules.appeal(calc: any, spec: any): (number, any)
 	return a, { quality = idx.quality, objective = obj, indices = idx }
 end
 
--- Demanda total del tipo este año (autos/min real). Igual para todas las empresas.
+-- Demanda base del tipo (sin la expansión internacional), autos/min real a 1×.
+function Rules.baseDemand(type: string, yearFrac: number): number
+	local curve = Catalog.DEMAND[type]
+	return curve and Catalog.interp(curve, yearFrac) or 0
+end
+
+--[[ Preferencias de un país normalizadas para el año: w[tipo] = p[tipo] × S / Σ p[t] × D[t], con D = demanda
+	base de cada tipo y S = Σ D. Así Σ D[t] × w[t] = S: el país reparte EXACTAMENTE el mismo volumen que con
+	pesos iguales (+15 % de la demanda base total), solo que más en los tipos que prefiere. Con todos los pesos
+	iguales w = 1 (lo de antes). Determinista; un tipo con D = 0 no recibe nada aunque su peso sea alto. ]]
+function Rules.countryWeights(country: any, yearFrac: number): { [string]: number }
+	local prefs: { [string]: number } = (country and country.prefs) or {}
+	local S: number, P: number = 0, 0
+	for _, t in Catalog.TYPE_ORDER do
+		local d: number = Rules.baseDemand(t, yearFrac)
+		local pt: number = prefs[t] or 1
+		S += d
+		P += pt * d
+	end
+	local out: { [string]: number } = {}
+	for _, t in Catalog.TYPE_ORDER do
+		local pt: number = prefs[t] or 1
+		out[t] = (S > 0 and P > 0) and pt * S / P or 1
+	end
+	return out
+end
+
+-- Factor de mercado de un tipo: 1 + 15 % × Σ (peso del tipo en cada país abierto). En promedio ponderado por
+-- la demanda base es Rules.marketFactor (el mismo crecimiento global de antes).
+local factorCache = setmetatable({}, { __mode = "k" })
+function Rules.typeMarketFactor(g: any, type: string, yearFrac: number?): number
+	local yf = yearFrac or Rules.yearFrac(g)
+	local opened = Rules.openedCountries(g)
+	if #opened == 0 then
+		return 1
+	end
+	local key = table.concat(opened, ",") .. "@" .. tostring(yf)
+	local c = factorCache[g]
+	if not c or c.key ~= key then
+		local sum: { [string]: number } = {}
+		for _, id in opened do
+			for t, w in Rules.countryWeights(Rules.country(id), yf) do
+				local prev: number = sum[t] or 0
+				sum[t] = prev + w
+			end
+		end
+		c = { key = key, sum = sum }
+		factorCache[g] = c
+	end
+	local w: number = tonumber(c.sum[type]) or #opened
+	return 1 + Catalog.EXPANSION.demand * w
+end
+
+-- Demanda total del tipo este año (autos/min real). Igual para todas las empresas: base × factor del tipo
+-- (la expansión internacional, repartida según las preferencias de los países abiertos).
 function Rules.demand(g: any, type: string, yearFrac: number?): number
 	local curve = Catalog.DEMAND[type]
 	if not curve then
 		return 0
 	end
-	return Catalog.interp(curve, yearFrac or Rules.yearFrac(g)) * Rules.marketFactor(g)
+	local yf = yearFrac or Rules.yearFrac(g)
+	return Catalog.interp(curve, yf) * Rules.typeMarketFactor(g, type, yf)
+end
+
+-- Demanda que aporta un país (abierto o no) este año: { [tipo] = autos/min, total }. Es la parte del +15 %
+-- que ese país suma a cada tipo; se reparte con los rivales y el resto del mercado como cualquier demanda.
+function Rules.countryDemand(country: any, yearFrac: number): ({ [string]: number }, number)
+	local out: { [string]: number }, total: number = {}, 0
+	for t, w in Rules.countryWeights(country, yearFrac) do
+		local v: number = Rules.baseDemand(t, yearFrac) * Catalog.EXPANSION.demand * w
+		out[t] = v
+		total += v
+	end
+	return out, total
+end
+
+-- Demanda mundial: base y con la expansión, sumando todos los tipos (autos/min real a 1×).
+function Rules.worldDemand(g: any, yearFrac: number?): (number, number)
+	local yf = yearFrac or Rules.yearFrac(g)
+	local base, total = 0, 0
+	for _, t in Catalog.TYPE_ORDER do
+		base += Rules.baseDemand(t, yf)
+		total += Rules.demand(g, t, yf)
+	end
+	return base, total
 end
 
 -- Precio justo de un auto de ese tipo, ese año y ese atractivo (referencia de los rivales).

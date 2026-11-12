@@ -2148,7 +2148,11 @@ test("[F8] Ingresos y gastos después de la sede máxima: siempre hay en qué in
 	eq(g.money, m - nx.cost, "cobra el costo")
 	eq(g.countries[1], "ZA", "queda registrado el país elegido")
 	check(not Actions.expandGlobal(g, ctx, { country = "ZA" }).ok, "no se abre dos veces el mismo país")
-	check(math.abs(Rules.demand(g, "sedan") / dem - (1 + Catalog.EXPANSION.demand)) < 1e-6, "+15 % de demanda")
+	-- Etapa 9: el +15 % es del total mundial; cada tipo recibe su parte según las preferencias del país.
+	local wZA = Rules.countryWeights(Rules.country("ZA"), Rules.yearFrac(g)).sedan
+	check(math.abs(Rules.demand(g, "sedan") / dem - (1 + Catalog.EXPANSION.demand * wZA)) < 1e-6, "sedán: +15 % × peso de Sudáfrica")
+	local base, total = Rules.worldDemand(g)
+	check(math.abs(total / base - (1 + Catalog.EXPANSION.demand)) < 1e-6, "+15 % de demanda mundial")
 	check(corpCost() > camp and Rules.lineRate(g) > line, "campañas corporativas más caras y líneas más rápidas")
 	check(Rules.nextExpansion(g).cost > nx.cost, "la siguiente región cuesta más")
 	g.money = 1e12
@@ -7613,6 +7617,345 @@ test("[IS8] Unidades de PI: minuto real a 1×, hora de juego, líneas activas e 
 	end
 end)
 
+
+-- Etapa 9: expansión internacional y mercado mundial (casos 1–24 y 34–40) -------------------------------------
+do
+	local E = Catalog.EXPANSION
+	local function rel(a: number, b: number): boolean
+		return math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a), math.abs(b))
+	end
+	local function setYear9(g: any, y: number)
+		g.time.day = (y - Catalog.CALENDAR.startYear) * 12
+		g.time.minute = 0
+	end
+	-- Empresa lista para expandirse (oficinas 5 y ventas de sobra), sin tocar sus países.
+	local function ready(g: any)
+		g.sede = 5
+		g.office.level = 5
+		g.counters.unitsSold = 1e6
+		g.money = 1e12
+	end
+	local function expandCharges(g: any): (number, number)
+		local n, sum = 0, 0
+		for _, l in g.ledger do
+			if l.type == "sede" and string.find(l.note or "", "Expansión global:", 1, true) == 1 then
+				n += 1
+				sum += math.abs(l.amount)
+			end
+		end
+		return n, sum
+	end
+	local function quoteCost(g: any, n: number): number
+		return Rules.expansionCost(g, Util.round(E.cost * math.pow(E.growth, n - 1) / 1000000) * 1000000)
+	end
+
+	test("[EX1] Apertura 1–14: requisitos, primer país libre, costo por cantidad, duplicados, inexistentes, diez y once", function()
+		local ctx = makeCtx(91)
+		-- 1. Empresa sin expansión.
+		local g = newCompany("Mundo EX1")
+		check(Rules.expansion(g) == 0 and #Rules.openedCountries(g) == 0 and Rules.marketFactor(g) == 1, "1. sin países y mercado ×1")
+		for _, t in Catalog.TYPE_ORDER do
+			check(Rules.typeMarketFactor(g, t) == 1 and rel(Rules.demand(g, t), Rules.baseDemand(t, Rules.yearFrac(g))), "1. demanda base en " .. t)
+		end
+		-- 2. Sin oficinas nivel 5.
+		g.sede = 4
+		g.counters.unitsSold = 1e6
+		g.money = 1e12
+		local m0 = g.money
+		local r = Actions.expandGlobal(g, ctx, { country = "BR" })
+		check(not r.ok and string.find(r.msg, "oficinas", 1, true) ~= nil, "2. sin oficinas 5: " .. tostring(r.msg))
+		eq(Rules.countryState(g, "BR"), "bloqueado", "2. bloqueado en el mapa")
+		local reqs = Rules.expansionRequirements(g)
+		check(#reqs == 3 and not reqs[1].ok and reqs[1].kind == "oficinas", "2. el requisito de oficinas se muestra aunque falten")
+		-- 3. Ventas insuficientes.
+		ready(g)
+		g.counters.unitsSold = E.soldBase - 1
+		r = Actions.expandGlobal(g, ctx, { country = "BR" })
+		check(not r.ok and string.find(r.msg, "Autos vendidos", 1, true) ~= nil, "3. ventas insuficientes: " .. tostring(r.msg))
+		-- 4. Dinero insuficiente.
+		g.counters.unitsSold = E.soldBase
+		g.money = quoteCost(g, 1) - 1
+		r = Actions.expandGlobal(g, ctx, { country = "BR" })
+		check(not r.ok and string.find(r.msg, "Dinero", 1, true) ~= nil, "4. sin dinero: " .. tostring(r.msg))
+		check(g.expansion == 0 and #(g.countries or {}) == 0 and g.money == quoteCost(g, 1) - 1, "2–4. los rechazos no cambian nada")
+		-- 5–6. Primera apertura: Brasil.
+		g.money = 1e12
+		m0 = g.money
+		local c1 = quoteCost(g, 1)
+		eq(Rules.expansionQuote(g).cost, c1, "costo de la primera apertura")
+		r = Actions.expandGlobal(g, ctx, { country = "BR", cost = 1, price = 0 })
+		check(r.ok, "5/6. abre Brasil primero: " .. tostring(r.msg))
+		check(m0 - g.money == c1 and g.expansion == 1 and g.countries[1] == "BR", "5. cobra " .. Util.money(c1) .. " (el cliente no fija el precio) y registra el país")
+		-- 7–8. Otra empresa abre Japón primero: mismo costo.
+		local g2 = newCompany("Japon EX1")
+		ready(g2)
+		local mj = g2.money
+		check(Actions.expandGlobal(g2, ctx, { country = "JP" }).ok, "7. Japón como primer país")
+		eq(mj - g2.money, c1, "8. el mismo costo sin importar el país")
+		eq(g2.countries[1], "JP", "7. Japón registrado")
+		-- 9. Segunda apertura más cara.
+		local c2 = quoteCost(g, 2)
+		check(c2 > c1, "9. la segunda cuesta más (" .. Util.money(c2) .. ")")
+		m0 = g.money
+		g.counters.unitsSold = 1e6
+		local r9 = Actions.expandGlobal(g, ctx, { country = "ZA" })
+		check(r9.ok and m0 - g.money == c2, "9. segunda apertura con el costo creciente: " .. tostring(r9.msg))
+		-- 10–11. Duplicado e inexistente.
+		m0 = g.money
+		check(not Actions.expandGlobal(g, ctx, { country = "BR" }).ok, "10. Brasil otra vez: rechazado")
+		check(not Actions.expandGlobal(g, ctx, { country = "XX" }).ok and not Actions.expandGlobal(g, ctx, { country = { "JP" } }).ok and not Actions.expandGlobal(g, ctx, {}).ok, "11. país inexistente o inválido: rechazado")
+		eq(g.money, m0, "10–11. sin cobros")
+		-- Estado incoherente: no cobra.
+		local g3 = newCompany("Raro EX1")
+		ready(g3)
+		g3.expansion, g3.countries = 1, { "BR", "US" }
+		local m3 = g3.money
+		check(not Actions.expandGlobal(g3, ctx, { country = "JP" }).ok and g3.money == m3, "estado incoherente: rechazado sin cobrar")
+		-- 12–13. Las diez en un orden libre y la undécima rechazada.
+		local order = { "IN", "AE", "US", "PL", "TH", "DE", "AU", "JP" }
+		for i, id in order do
+			local before = g.money
+			local cost = quoteCost(g, g.expansion + 1)
+			check(Actions.expandGlobal(g, ctx, { country = id }).ok and before - g.money == cost, "12. apertura " .. (i + 2) .. ": " .. id)
+		end
+		eq(g.expansion, 10, "12. diez países")
+		eq(#g.countries, 10, "12. los diez registrados")
+		check(Rules.expansionQuote(g) == nil and Rules.nextExpansion(g) == nil, "13. no hay undécima")
+		m0 = g.money
+		check(not Actions.expandGlobal(g, ctx, { country = "BR" }).ok and g.money == m0, "13. una undécima se rechaza")
+		local n, sum = expandCharges(g)
+		local want = 0
+		for k = 1, 10 do
+			want += quoteCost(g, k)
+		end
+		check(n == 10 and sum == want, "diez cobros por el total exacto (" .. Util.money(sum) .. ")")
+		-- 14. Pedidos repetidos por la red.
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "EX1", clock)
+		local p = { UserId = 9101 }
+		mgr:add(p)
+		local gs = playThrough(mgr, p).game
+		ready(gs)
+		local id = rid()
+		local ms = gs.money
+		check(mgr:request(p, "expandGlobal", { country = "TH", requestId = id }).ok, "14. abre Tailandia")
+		local again = mgr:request(p, "expandGlobal", { country = "TH", requestId = id })
+		check(again.ok and gs.money == ms - quoteCost(gs, 1) and gs.expansion == 1, "14. el mismo pedido reenviado no cobra de nuevo")
+		clock.c += Sessions.RATE_WINDOW
+		check(not mgr:request(p, "expandGlobal", { country = "TH", requestId = rid() }).ok and gs.expansion == 1, "14. un pedido nuevo del mismo país se rechaza")
+		check(mgr.list[p].pendingSave == true or mgr.list[p].lastSave > 0, "13. la apertura pide guardar enseguida")
+	end)
+
+	test("[EX2] Mercado y producción 15–24: +15 % por país repartido, rivales, ventas, capacidad, campañas y años", function()
+		local ctx = makeCtx(92)
+		-- 15. +15 % del total por país, en varios años y combinaciones.
+		for _, y in { 1975, 1990, 2010, 2030 } do
+			local g = newCompany("Total " .. y .. " EX2")
+			setYear9(g, y)
+			local yf = Rules.yearFrac(g)
+			for k, c in E.countries do
+				g.countries = g.countries or {}
+				table.insert(g.countries, c.id)
+				g.expansion = k
+				local base, total = Rules.worldDemand(g, yf)
+				check(rel(total, base * (1 + E.demand * k)), "15. " .. y .. ", " .. k .. " países: total = base × " .. Util.num(1 + E.demand * k, 2))
+			end
+		end
+		-- 16. Distribución según las preferencias: proporcional a la preferencia en los tipos con demanda.
+		local g = newCompany("Pesos EX2")
+		setYear9(g, 2015)
+		local yf = Rules.yearFrac(g)
+		local jp = Rules.country("JP")
+		local w = Rules.countryWeights(jp, yf)
+		local sumDW, sumD = 0, 0
+		for _, t in Catalog.TYPE_ORDER do
+			local d = Rules.baseDemand(t, yf)
+			sumDW += d * w[t]
+			sumD += d
+			check(rel(w[t] / w.sedan, jp.prefs[t] / jp.prefs.sedan), "16. peso de " .. t .. " proporcional a su preferencia")
+		end
+		check(rel(sumDW, sumD), "16. el reparto conserva el volumen (Σ demanda × peso = Σ demanda)")
+		g.countries, g.expansion = { "JP" }, 1
+		for _, t in Catalog.TYPE_ORDER do
+			check(rel(Rules.demand(g, t, yf), Rules.baseDemand(t, yf) * (1 + E.demand * w[t])), "16. demanda de " .. t .. " con Japón")
+		end
+		-- Pesos iguales = comportamiento anterior.
+		local flat = { id = "XX", prefs = {} }
+		for t, v in Rules.countryWeights(flat, yf) do
+			check(v == 1, "pesos iguales = expansión anterior (" .. t .. ")")
+		end
+		-- 17. Sin doble aplicación.
+		for _, t in Catalog.TYPE_ORDER do
+			local m = Rules.market(g, t)
+			check(rel(m.demand, Rules.demand(g, t, yf)), "17. el reparto usa una sola vez la demanda (" .. t .. ")")
+		end
+		local g0 = newCompany("Sin EX2")
+		setYear9(g0, 2015)
+		eq(Rules.playerMult(g), Rules.playerMult(g0), "17. el multiplicador comercial no incluye la expansión")
+		-- 18. Rivales: mismos modelos y pesos con o sin expansión.
+		for _, t in { "sedan", "suv", "pickup" } do
+			local a, b = Rules.market(g0, t), Rules.market(g, t)
+			check(#a.rivals > 0 and #a.rivals == #b.rivals and rel(a.total, b.total), "18. los rivales siguen participando igual en " .. t)
+		end
+		-- 23. Países distintos, repartos distintos.
+		local us = Rules.countryWeights(Rules.country("US"), yf)
+		check(w.compacto > us.compacto and us.pickup > w.pickup, "23. Japón prefiere compactos y EE. UU. pickups")
+		local diff = 0
+		for _, t in Catalog.TYPE_ORDER do
+			diff += math.abs(w[t] - us[t])
+		end
+		check(diff > 0.5, "23. distribuciones distintas")
+		-- 24. Tipos sin demanda en su época: sin demanda aunque se prefieran.
+		local old = newCompany("1975 EX2")
+		setYear9(old, 1975)
+		old.countries = {}
+		for _, c in E.countries do
+			table.insert(old.countries, c.id)
+		end
+		old.expansion = 10
+		for _, t in { "suv", "electrico" } do
+			eq(Rules.demand(old, t), 0, "24. " .. t .. " en 1975: sin demanda con los diez países")
+			eq(Rules.market(old, t).demand, 0, "24. ni en el reparto")
+		end
+		-- 19–20. Ventas y capacidad con mercados abiertos.
+		local s = newCompany("Ventas EX2")
+		s.money = 1e9
+		local rate0 = Rules.lineRate(s)
+		local id = saveNew(s, ctx, "brisa", "Mundial EX2")
+		check(Actions.createLot(s, ctx, { designId = id, qty = 300 }).ok, "lote")
+		local lot = s.lots[1]
+		local unit, qty = lot.unitCost, lot.qty
+		ready(s)
+		s.money = 1e12
+		for _, c in E.countries do
+			check(Actions.expandGlobal(s, ctx, { country = c.id }).ok, "abre " .. c.id)
+		end
+		check(rel(Rules.lineRate(s), rate0 * (1 + E.line * 10)), "20. cada línea fabrica +" .. Util.round(E.line * 1000) .. " % con diez países")
+		check(not Rules.ownsLine(s, 2) and not Rules.ownsLine(s, 3) and Rules.lineCount(s) == 1, "20. abrir países no da líneas")
+		check(lot.unitCost == unit and lot.qty == qty, "20. el lote conserva costo y cantidad")
+		check(s.facilities.research == 1 and s.facilities.factory == 1, "oficinas, fábrica y centro sin beneficios nuevos")
+		for _ = 1, 3000 do
+			if lot.saleState == "en venta" or lot.saleState == "agotado" then
+				break
+			end
+			Simulation.simulate(s, ctx, 10)
+			if lot.saleState == "por lanzar" then
+				check(Actions.launchSale(s, ctx, { lotId = lot.id, price = lot.refPrice }).ok, "sale a la venta")
+			end
+		end
+		local revenueOnlySales = true
+		for _ = 1, 600 do
+			Simulation.simulate(s, ctx, 10)
+			check(lot.sold <= lot.produced, "19. ventas ≤ fabricadas")
+		end
+		for _, l in s.ledger do
+			if l.amount > 0 and l.type ~= "venta" and l.type ~= "ventas" and l.type ~= "recompensa" and l.type ~= "prestamo" then
+				revenueOnlySales = revenueOnlySales and string.find(l.note or "", "Expansión", 1, true) == nil
+			end
+		end
+		check(revenueOnlySales, "la expansión no genera ingresos directos")
+		check(lot.sold > 0, "19. vende con los mercados abiertos (" .. lot.sold .. ")")
+		-- 21. Campañas: la corporativa escala con el mercado; la de modelo no; sin doble aplicación.
+		local cg = newCompany("Campana EX2")
+		cg.money = 1e10
+		local era = Rules.marketingEra(cg)
+		local req = { kind = "corporativa", budget = Util.round(Catalog.MARKETING.budgetMin * era) * 2, days = 30 }
+		local before = Rules.campaignPlan(cg, req)
+		ready(cg)
+		cg.money = 1e12
+		local beforeSede5 = Rules.campaignPlan(cg, req)
+		check(Actions.expandGlobal(cg, ctx, { country = "DE" }).ok, "abre Alemania")
+		local after = Rules.campaignPlan(cg, req)
+		check(rel(after.cost / beforeSede5.cost, Rules.marketFactor(cg)) or math.abs(after.cost - Util.round(beforeSede5.cost * 1.15 / 10) * 10) <= 10, "21. la corporativa cuesta ×" .. Util.num(Rules.marketFactor(cg), 2) .. " (" .. Util.money(beforeSede5.cost) .. " → " .. Util.money(after.cost) .. ")")
+		check(before.boost == after.boost, "21. el efecto no depende de la expansión")
+		check(Actions.startCampaign(cg, ctx, req).ok, "campaña corporativa")
+		local camp = Util.deepCopy(cg.campaign)
+		check(Actions.expandGlobal(cg, ctx, { country = "PL" }).ok, "abre Polonia con la campaña en curso")
+		check(cg.campaign.cost == camp.cost and cg.campaign.boost == camp.boost and cg.campaign.days == camp.days, "21. la campaña iniciada antes no cambia")
+		local fakeLot = { designId = "x" }
+		eq(Rules.campaignMult(cg, fakeLot), 1 + Rules.campaignBoost(cg), "21. el multiplicador de campaña se aplica una sola vez")
+		-- 22. Cambio de año con mercados abiertos.
+		local yg = newCompany("Anio EX2")
+		yg.countries, yg.expansion = { "AE", "IN" }, 2
+		setYear9(yg, 1999)
+		yg.time.day += 11
+		local w1999 = Rules.countryWeights(Rules.country("AE"), Rules.yearFrac(yg)).suv
+		Simulation.simulate(yg, ctx, Rules.monthMinutes(yg.time.day) + 10)
+		eq(Rules.year(yg), 2000, "22. pasó a 2000")
+		local base2, total2 = Rules.worldDemand(yg)
+		check(rel(total2, base2 * 1.3), "22. en 2000 el total sigue siendo base × 1,30")
+		check(Rules.countryWeights(Rules.country("AE"), Rules.yearFrac(yg)).suv ~= w1999, "22. los pesos se recalculan con la demanda del año")
+	end)
+
+	test("[EX3] Persistencia 34–40: países guardados, recuperación, migración, inversiones, misiones e integridad", function()
+		local ctx = makeCtx(93)
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "EX3", clock)
+		local p = { UserId = 9301 }
+		mgr:add(p)
+		local g = playThrough(mgr, p).game
+		ready(g)
+		for _, id in { "AU", "JP", "BR" } do
+			clock.c += Sessions.RATE_WINDOW
+			check(mgr:request(p, "expandGlobal", { country = id, requestId = rid() }).ok, "abre " .. id)
+		end
+		local money = g.money
+		-- 34–35. Guardar y recuperar.
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar")
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "createCompany", { slot = "2", name = "Segunda EX3", color = Catalog.BRAND_COLORS[2][1], logo = "pico" }).ok, "segunda empresa")
+		local g2 = mgr.list[p].game
+		check(Rules.expansion(g2) == 0 and #Rules.openedCountries(g2) == 0, "cada empresa con su expansión")
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar la segunda")
+		mgr:remove(p)
+		local mgr2 = makeServer(store, "EX3b", clock)
+		mgr2:add(p)
+		check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abrir la primera")
+		local g1 = mgr2.list[p].game
+		eq(table.concat(g1.countries, ","), "AU,JP,BR", "34/35. países en el orden elegido")
+		eq(g1.expansion, 3, "34/35. cantidad de aperturas")
+		eq(g1.money, money, "37. inversiones conservadas sin cobros nuevos")
+		local n, sum = expandCharges(g1)
+		check(n == 3 and sum == quoteCost(g1, 1) + quoteCost(g1, 2) + quoteCost(g1, 3), "37/39. tres cobros por el total exacto")
+		-- 36. Migración: una partida vieja con regiones (solo la cantidad) toma los primeros del catálogo.
+		local old = newCompany("Vieja EX3")
+		ready(old)
+		old.expansion, old.countries = 3, {}
+		local back = jsonCopy(old)
+		check(GameState.validate(back), "36. partida con regiones antiguas válida")
+		eq(table.concat(Rules.openedCountries(back), ","), "BR,US,DE", "36. las tres regiones son Brasil, Estados Unidos y Alemania")
+		eq(Rules.countryState(back, "US"), "abierto", "36. el mapa las muestra abiertas")
+		local mo = back.money
+		check(Actions.expandGlobal(back, ctx, { country = "ZA" }).ok, "36. abre un cuarto país")
+		check(table.concat(back.countries, ",") == "BR,US,DE,ZA" and mo - back.money == quoteCost(back, 4), "36. se completa la lista y cobra la cuarta apertura")
+		-- 38. Misiones: contadores con g.expansion y sin premio doble.
+		local mg = newCompany("Misiones EX3")
+		ready(mg)
+		for i, c in E.countries do
+			check(Actions.expandGlobal(mg, ctx, { country = c.id }).ok, "abre " .. c.id)
+			if i == 1 or i == 5 or i == 10 then
+				local mid = i == 1 and "s13" or (i == 5 and "s16" or "s18")
+				local mm = Catalog.mission(mid)
+				eq(Rules.missionValue(mg, mm), i, "38. " .. mid .. " cuenta " .. i .. " países")
+				eq(Rules.missionState(mg, mm), "lista", "38. " .. mid .. " lista")
+				local m0 = mg.money
+				check(Actions.claimMission(mg, ctx, { id = mid }).ok and mg.money - m0 == mm.reward.money, "38. premio de " .. mid)
+				check(not Actions.claimMission(mg, ctx, { id = mid }).ok, "38. " .. mid .. " sin premio doble")
+			end
+		end
+		eq(Catalog.mission("s18").title, "Presencia en los diez mercados internacionales", "38. el título no promete todo el planeta")
+		-- 39. Integridad: lo único que cambia la expansión es el dinero pagado y la lista de países.
+		local ig = newCompany("Integridad EX3")
+		ready(ig)
+		local snap = jsonCopy(ig)
+		check(Actions.expandGlobal(ig, ctx, { country = "IN" }).ok, "abre India")
+		check(snap.money - ig.money == quoteCost(ig, 1), "39. solo cobra la apertura")
+		check(serde.encode("json", snap.facilities) == serde.encode("json", jsonCopy(ig.facilities)) and serde.encode("json", snap.lots) == serde.encode("json", jsonCopy(ig.lots)), "39. instalaciones y lotes intactos")
+		check(GameState.validate(jsonCopy(ig)), "39. la partida sigue siendo válida")
+	end)
+end
 
 T.finish()
 Build.clean()

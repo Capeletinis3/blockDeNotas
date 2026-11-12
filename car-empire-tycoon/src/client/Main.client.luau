@@ -41,6 +41,7 @@ App.screens.mercado = require(script.Parent.ScreenMarket)
 App.screens.investigacion = require(script.Parent.ScreenResearch)
 App.screens.personal = require(script.Parent.ScreenStaff)
 App.screens.compania = require(script.Parent.ScreenCompania)
+App.screens.expansion = require(script.Parent.ScreenExpansion)
 App.screens.misiones = require(script.Parent.ScreenMissions)
 App.screens.estadisticas = require(script.Parent.ScreenStats)
 

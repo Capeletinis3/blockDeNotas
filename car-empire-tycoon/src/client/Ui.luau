@@ -883,7 +883,7 @@ end
 function Ui.between(left: string, right: string, opts: { [string]: any }?): Frame
 	local o = opts or {}
 	return new("Frame", {
-		Name = "Entre",
+		Name = o.name or "Entre",
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		List = { dir = "H", gap = 10, v = "C" },

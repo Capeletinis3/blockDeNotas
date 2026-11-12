@@ -155,6 +155,11 @@ function Actions.expandGlobal(g: any, ctx: any, payload: any): any
 	if Rules.countryOpen(g, country.id) then
 		return fail("Ya tenés presencia en " .. country.name .. ".")
 	end
+	-- Estado coherente: los países guardados no pueden ser más que las aperturas pagadas.
+	local before = Rules.openedCountries(g)
+	if #before ~= Rules.expansion(g) or (type(g.countries) == "table" and #g.countries > Rules.expansion(g)) then
+		return fail("El estado de la expansión no es coherente; no se cobró nada.")
+	end
 	nx.name = country.name
 	for _, check in Rules.expansionChecks(g) do
 		if not check[1] then
@@ -169,8 +174,13 @@ function Actions.expandGlobal(g: any, ctx: any, payload: any): any
 	g.countries = list
 	g.expansion = #list
 	Simulation.addXp(g, ctx, 1000)
-	Simulation.notify(g, ctx, "ok", "¡Nuevo país: " .. nx.name .. "!", "compania")
-	return { ok = true, msg = "Abriste " .. nx.name .. ": la demanda de todos los tipos sube a ×" .. Util.num(Rules.marketFactor(g), 2) .. " y cada línea fabrica " .. Util.num(Rules.lineRate(g), 0) .. " autos/min." }
+	Simulation.notify(g, ctx, "ok", "¡Nueva expansión internacional! Tu compañía llegó a " .. nx.name .. ".", "expansion")
+	return {
+		ok = true,
+		country = country.id,
+		opened = g.expansion,
+		msg = "Abriste " .. nx.name .. ": la demanda mundial sube a ×" .. Util.num(Rules.marketFactor(g), 2) .. " (repartida según las preferencias de cada país) y cada línea fabrica " .. Util.num(Rules.lineRate(g), 0) .. " autos/min.",
+	}
 end
 
 -- Diseños -------------------------------------------------------------------------------
