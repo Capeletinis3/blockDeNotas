@@ -7209,7 +7209,7 @@ do
 			eq(Rules.piPerMinute(g), before, "20. durante la obra sigue en " .. before .. " PI/min")
 			finishBuild(g, ctx, "research")
 			eq(Rules.piPerMinute(g), want[lvl], "20. al terminar: " .. want[lvl] .. " PI/min")
-			table.insert(rows, string.format("nivel %d → %d: %d → %d PI/min (%d → %d PI por hora a 1×), %s, %d días", lvl - 1, lvl, before, want[lvl], before * 60, want[lvl] * 60, Util.money(nx.cost), nx.days))
+			table.insert(rows, string.format("nivel %d → %d: %d → %d PI por minuto real a 1× (%s → %s PI por hora de juego), %s, %d días", lvl - 1, lvl, before, want[lvl], Util.num(Rules.perGameMinutes(before, 60), 1), Util.num(Rules.perGameMinutes(want[lvl], 60), 1), Util.money(nx.cost), nx.days))
 		end
 		for _, l in rows do
 			print("      " .. l)
@@ -7551,6 +7551,68 @@ do
 		check(facilitiesImpossible(g) == nil, "sin estados imposibles al final")
 	end)
 end
+
+-- Correcciones de la etapa 8: unidades de PI (minuto real vs. hora de juego) -----------------------------------
+test("[IS8] Unidades de PI: minuto real a 1×, hora de juego, líneas activas e inactivas, 2× y 3×, fórmulas sin cambios", function()
+	local function close(a: number, b: number): boolean
+		return math.abs(a - b) < 1e-9
+	end
+	-- 7. Fórmulas y valores sin cambios.
+	eq(Catalog.RULES.minutesPerRealSecond, 10, "7. 1 s real = 10 min de juego")
+	check(close(Rules.realMinutes(600), 1) and close(Rules.realMinutes(60), 0.1), "7. Rules.realMinutes: 600 min de juego = 1 min real")
+	check(close(Rules.perGameMinutes(3, 60), 0.3), "2. 3 PI por minuto real = 0,3 PI por hora de juego")
+	-- 1 y 2 con la simulación real, en cada nivel del centro.
+	local ctx = makeCtx(88)
+	for lvl, pi in { 3, 8, 20, 45, 90 } do
+		local g = newCompany("Unidades " .. lvl .. " IS8")
+		g.facilities.research = lvl
+		eq(Rules.piPerMinute(g), pi, "1. nivel " .. lvl .. ": " .. pi .. " PI por minuto real a 1×")
+		g.rp = 0
+		Simulation.simulate(g, ctx, Catalog.RULES.minutesPerRealSecond * 60) -- un minuto real a 1×
+		check(close(g.rp, pi), "1. un minuto real a 1× suma " .. Util.num(g.rp, 3) .. " PI")
+		g.rp = 0
+		Simulation.simulate(g, ctx, 60) -- una hora de juego
+		check(close(g.rp, Rules.piPerGameHour(g)) and close(g.rp, pi / 10), "2. una hora de juego suma " .. Util.num(g.rp, 3) .. " PI = Rules.piPerGameHour")
+	end
+	-- 3. Antes y después de mejorar el centro, con la misma unidad.
+	check(close(Rules.perGameMinutes(3, 60), 0.3) and close(Rules.perGameMinutes(8, 60), 0.8), "3. centro 1 → 2: 0,3 → 0,8 PI por hora de juego")
+	-- 4. Líneas activas e inactivas.
+	local g = newCompany("Lineas IS8")
+	g.money = 5000000
+	local id = saveNew(g, ctx, "brisa", "Linea IS8")
+	check(Actions.createLot(g, ctx, { designId = id, qty = 20 }).ok, "lote")
+	Simulation.simulate(g, ctx, 10)
+	eq(Rules.activeLines(g), 1, "4. una línea fabricando")
+	check(close(Rules.piPerGameHour(g), (3 + Catalog.RESEARCH_RULES.linePi) / 10), "4. con la línea: 0,5 PI por hora de juego")
+	g.rp = 0
+	Simulation.simulate(g, ctx, 60)
+	check(close(g.rp, 0.5), "4. y la simulación suma 0,5 en una hora de juego (" .. Util.num(g.rp, 3) .. ")")
+	for _ = 1, 500 do
+		if g.lots[1].prodState == "completado" then
+			break
+		end
+		Simulation.simulate(g, ctx, 10)
+	end
+	eq(Rules.activeLines(g), 0, "4. la línea terminó")
+	check(close(Rules.piPerGameHour(g), 0.3), "4. sin líneas activas: 0,3 PI por hora de juego")
+	-- 5. 2× y 3×: más PI por segundo real, los mismos PI por hora de juego.
+	local store = newStore()
+	local clock = { t = 1000, c = 0 }
+	local mgr = makeServer(store, "IS8", clock)
+	local p = { UserId = 8801 }
+	mgr:add(p)
+	local gs = playThrough(mgr, p).game
+	for _, sp in { 1, 2, 3 } do
+		check(mgr:request(p, "setSpeed", { speed = sp, requestId = rid() }).ok, sp .. "×")
+		local rp0, m0, d0 = gs.rp, gs.time.minute, gs.time.day
+		ticks(mgr, clock, 6)
+		local gameMin = (gs.time.day - d0) * 1e9 + gs.time.minute - m0
+		check(gs.time.day == d0 and close(gameMin, 60 * sp), sp .. "×: 6 s reales = " .. gameMin .. " min de juego")
+		check(close(gs.rp - rp0, 3 * sp / 10), "5. a " .. sp .. "× en 6 s reales: +" .. Util.num(gs.rp - rp0, 3) .. " PI (×" .. sp .. " por segundo real)")
+		check(close((gs.rp - rp0) / (gameMin / 60), Rules.piPerGameHour(gs)), "5. a " .. sp .. "×: los mismos PI por hora de juego")
+	end
+end)
+
 
 T.finish()
 Build.clean()

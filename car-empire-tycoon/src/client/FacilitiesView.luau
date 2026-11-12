@@ -43,7 +43,9 @@ local function pct(v: number): string
 	return (v > 0 and "+" or "") .. Util.num(v, 0) .. " %"
 end
 
--- Habitaciones y superficie del plano de oficinas de nivel n (OfficeCatalog.PLANS).
+--[[ Habitaciones y superficie del plano de oficinas de nivel n (OfficeCatalog.PLANS), en CASILLAS de la
+	cuadrícula (Office.roomArea = ancho × fondo en casillas). Cada casilla mide OfficeCatalog.CELL studs de lado;
+	no hay una escala física definida, así que no se muestran metros. ]]
 local function officePlan(n: number): (number, number)
 	local rooms, area = 0, 0
 	for _, r in OfficeCatalog.plan(n).rooms do
@@ -53,6 +55,13 @@ local function officePlan(n: number): (number, number)
 	return rooms, area
 end
 View.officePlan = officePlan
+
+-- Superficie en casillas con su equivalente en studs² (casillas × CELL²).
+local function areaText(cells: number): string
+	local cell = OfficeCatalog.CELL
+	return Util.num(cells) .. (cells == 1 and " casilla" or " casillas") .. " (" .. Util.num(cells * cell * cell) .. " studs²)"
+end
+View.areaText = areaText
 
 --[[ Mantenimiento mensual después de pagar `cost` más (el mismo cálculo de Rules.maintenance: lo invertido ×
 	tasa × (1 − finanzas)). El cobro real tiene además un tope por las ventas del mes anterior. ]]
@@ -82,7 +91,7 @@ function View.info(g: any, kind: string): any
 			{ "Alcance comercial", "×" .. Util.num(s.reach, 1) },
 			{ "Capacitaciones hasta", trainingFor(n) },
 			{ "Fábrica y centro hasta nivel", tostring(n) },
-			{ "Oficina", rooms .. (rooms == 1 and " habitación · " or " habitaciones · ") .. area .. " m²" },
+			{ "Oficina", rooms .. (rooms == 1 and " habitación · " or " habitaciones · ") .. areaText(area) },
 			{ "Etapa de la empresa", s.name },
 		}
 		local nx = out.next and out.next.def
@@ -94,7 +103,7 @@ function View.info(g: any, kind: string): any
 				{ "Capacitaciones hasta", trainingFor(n), trainingFor(nx.level) },
 				{ "Fábrica y centro hasta nivel", tostring(n), tostring(nx.level) },
 				{ "Habitaciones de la oficina", tostring(rooms), tostring(rooms2) },
-				{ "Superficie de la oficina", area .. " m²", area2 .. " m²" },
+				{ "Superficie de la oficina (casillas)", areaText(area), areaText(area2) },
 				{ "Etapa de la empresa", s.name, nx.name },
 			}
 		end
@@ -129,17 +138,19 @@ function View.info(g: any, kind: string): any
 		out.level = n
 		out.levelText = "Nivel " .. n .. " · " .. r.name
 		out.current = {
-			{ "PI por minuto (centro)", tostring(r.pi) },
-			{ "PI extra por línea fabricando", "+" .. Catalog.RESEARCH_RULES.linePi },
+			{ "PI por minuto real a 1× (centro)", tostring(r.pi) },
+			{ "PI extra por línea fabricando (por minuto real)", "+" .. Catalog.RESEARCH_RULES.linePi },
 		}
 		local nx = out.next and out.next.def
 		local total = Rules.piPerMinute(g)
-		table.insert(out.current, { "PI por minuto en total", Util.num(total, 1) .. " (centro " .. r.pi .. " + líneas " .. Util.num(Rules.piLines(g), 0) .. ")" })
+		table.insert(out.current, { "PI por minuto real a 1× en total", Util.num(total, 1) .. " (centro " .. r.pi .. " + líneas " .. Util.num(Rules.piLines(g), 0) .. ")" })
+		table.insert(out.current, { "PI por hora de juego", Util.num(Rules.piPerGameHour(g), 2) })
 		if nx then
 			out.compare = {
-				{ "PI por minuto (centro)", tostring(r.pi), tostring(nx.pi) },
-				{ "PI por minuto en total", Util.num(total, 1), Util.num(total - r.pi + nx.pi, 1) },
-				{ "PI por hora de juego a 1×", Util.num(total * 60, 0), Util.num((total - r.pi + nx.pi) * 60, 0) },
+				{ "PI por minuto real a 1× (centro)", tostring(r.pi), tostring(nx.pi) },
+				{ "PI por minuto real a 1× en total", Util.num(total, 1), Util.num(total - r.pi + nx.pi, 1) },
+				-- Misma unidad antes y después: Rules.perGameMinutes (60 minutos del juego).
+				{ "PI por hora de juego", Util.num(Rules.perGameMinutes(total, 60), 2), Util.num(Rules.perGameMinutes(total - r.pi + nx.pi, 60), 2) },
 			}
 		end
 	else

@@ -448,6 +448,19 @@ function Rules.piPerMinute(g: any): number
 	return Rules.piCenter(g) + Rules.piLines(g)
 end
 
+--[[ Conversión de una tasa por MINUTO REAL a 1× (como Rules.piPerMinute) a lo que se acumula en `gameMinutes`
+	minutos DEL JUEGO, con la misma regla que usa la simulación (Rules.realMinutes: 1 s real = 10 min de juego).
+	Por ejemplo, 3 PI por minuto real dan 3 × 60/600 = 0,3 PI por hora de juego, a cualquier velocidad (2× y
+	3× hacen pasar más horas de juego por segundo real, no más PI por hora de juego). Solo para mostrar. ]]
+function Rules.perGameMinutes(perRealMinute: number, gameMinutes: number): number
+	return perRealMinute * Rules.realMinutes(gameMinutes)
+end
+
+-- PI que se acumulan en una hora de juego con la generación actual.
+function Rules.piPerGameHour(g: any): number
+	return Rules.perGameMinutes(Rules.piPerMinute(g), 60)
+end
+
 -- Sin tope de acumulación de PI (se conserva por compatibilidad con pantallas y pruebas anteriores).
 function Rules.piCap(_g: any): number
 	return math.huge

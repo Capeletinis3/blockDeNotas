@@ -3233,7 +3233,18 @@ test("Instalaciones (etapa 8): comparación antes/después con valores reales, o
 	eq(ri.compare[1][2] .. "→" .. ri.compare[1][3], "3→8", "centro: 3 → 8 PI/min del catálogo")
 	local total = Rules.piPerMinute(App.g)
 	eq(ri.compare[2][3], Util8.num(total - 3 + 8, 1), "centro: total después = total − centro actual + centro nuevo")
-	has(t, { "PI por minuto (centro)", "PI por minuto en total", "PI por hora de juego a 1×", "Mantenimiento mensual (máximo)", "Costo", "Duración", "REQUISITOS" }, "centro: comparación, costo, duración y requisitos")
+	has(t, { "PI por minuto real a 1× (centro)", "PI por minuto real a 1× en total", "PI por hora de juego", "Mantenimiento mensual (máximo)", "Costo", "Duración", "REQUISITOS" }, "centro: comparación, costo, duración y requisitos")
+	-- Hora de juego: la misma conversión que la simulación (Rules.realMinutes), igual antes y después.
+	local hourRow = nil
+	for _, r in ri.compare do
+		if r[1] == "PI por hora de juego" then
+			hourRow = r
+		end
+	end
+	check(hourRow ~= nil, "fila de PI por hora de juego")
+	eq(hourRow[2], Util8.num(Rules.perGameMinutes(total, 60), 2), "hora de juego antes = PI/min real × realMinutes(60)")
+	eq(hourRow[3], Util8.num(Rules.perGameMinutes(total - 3 + 8, 60), 2), "hora de juego después, misma unidad")
+	check(not string.find(t, "m²", 1, true), "sin metros cuadrados")
 	local nx = Rules.nextFacility(App.g, "research")
 	eq(ri.compare[#ri.compare][3], Util8.money(FV.maintenanceAfter(App.g, nx.cost)), "mantenimiento después = (invertido + costo) × tasa")
 	-- Fábrica: autos por minuto por línea y capacidad total.
@@ -3253,7 +3264,19 @@ test("Instalaciones (etapa 8): comparación antes/después con valores reales, o
 		end
 	end
 	check(found, "oficinas: 2 → " .. rooms3 .. " habitaciones")
-	has(t, { "Fábrica y centro hasta nivel", "Superficie de la oficina", "Límite global de empleados" }, "oficinas: comparación")
+	has(t, { "Fábrica y centro hasta nivel", "Superficie de la oficina (casillas)", "Límite global de empleados" }, "oficinas: comparación")
+	check(not string.find(t, "m²", 1, true), "oficinas: sin metros cuadrados")
+	-- Superficie de los cinco planos, en casillas (ancho × fondo de cada habitación) y su equivalente en studs².
+	local wantCells = { 80, 156, 251, 398, 584 }
+	for lvl = 1, 5 do
+		local rooms, cells = FV.officePlan(lvl)
+		local sum = 0
+		for _, r in OfficeCatalog.plan(lvl).rooms do
+			sum += r.w * r.d
+		end
+		check(rooms == #OfficeCatalog.plan(lvl).rooms and cells == sum and cells == wantCells[lvl], "nivel " .. lvl .. ": " .. rooms .. " habitaciones, " .. cells .. " casillas")
+		eq(FV.areaText(cells), Util8.num(cells) .. " casillas (" .. Util8.num(cells * OfficeCatalog.CELL * OfficeCatalog.CELL) .. " studs²)", "nivel " .. lvl .. ": texto en casillas y studs²")
+	end
 	-- Obra en curso: niveles, lo pagado y el avance; sin botón.
 	check(App.request("upgradeFacility", { kind = "research" }).ok, "obra del centro")
 	waitFor(function()

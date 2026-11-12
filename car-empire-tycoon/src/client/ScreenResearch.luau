@@ -456,7 +456,7 @@ local function topZone(g: any): Frame
 	local rate = Ui.inline("", { size = Ui.S.xs, color = T.mut, name = "GeneracionPI" })
 	local function upd(gg: any)
 		rp.Text = Util.num(math.floor(gg.rp))
-		rate.Text = "+" .. Util.num(piRate(gg), 1) .. " PI/min a 1× · centro " .. Util.num(Rules.piCenter(gg), 1) .. " + líneas " .. Util.num(Rules.piLines(gg), 1)
+		rate.Text = "+" .. Util.num(piRate(gg), 1) .. " PI por minuto real a 1× · centro " .. Util.num(Rules.piCenter(gg), 1) .. " + líneas " .. Util.num(Rules.piLines(gg), 1)
 	end
 	upd(g)
 	App.live(upd)

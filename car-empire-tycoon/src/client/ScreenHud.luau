@@ -167,7 +167,7 @@ function Screen.nextAction(g: any): any
 		end
 	end
 	if researchFree(g) and g.counters.researchDone == 0 then
-		return { label = "Investigar", sub = "Tu sede genera " .. Util.num(Rules.piPerMinute(g), 0) .. " PI por minuto", go = "investigacion", key = "6" }
+		return { label = "Investigar", sub = "Tu sede genera " .. Util.num(Rules.piPerMinute(g), 0) .. " PI por minuto real", go = "investigacion", key = "6" }
 	end
 	local nx = Rules.nextSede(g)
 	if nx then
@@ -414,7 +414,7 @@ local function hud1(g: any): Frame
 	end
 	if not phone then
 		local function piText(gg: any): string
-			return Util.num(math.floor(gg.rp)) .. " PI · " .. Util.num(gg.derived.piPerMinute, gg.derived.piPerMinute < 10 and 1 or 0) .. "/min"
+			return Util.num(math.floor(gg.rp)) .. " PI · " .. Util.num(gg.derived.piPerMinute, gg.derived.piPerMinute < 10 and 1 or 0) .. "/min real"
 		end
 		local f, v = res("flask", T.vi2, T.vi, 0.18, "INVESTIGACIÓN", piText(g), { name = "PI" })
 		App.live(function(gg: any)
@@ -1068,7 +1068,7 @@ local TIPS = {
 	t2 = "En <b>Producción</b> (tecla 3) tocá <b>Lanzar lote</b>, elegí el diseño y cuántas unidades fabricar.",
 	t3 = "No hace falta hacer nada: cada auto terminado se vende solo. Mirá el ritmo en <b>Ventas</b> (tecla 4).",
 	t4 = "En <b>Producción</b> (tecla 3), bajá hasta <b>Estaciones</b> y mejorá una.",
-	t5 = "En <b>Investigación</b> (tecla 6) elegí una tecnología disponible. Tu sede genera PI por minuto.",
+	t5 = "En <b>Investigación</b> (tecla 6) elegí una tecnología disponible. Tu sede genera PI por minuto real.",
 	t6 = "Diseñá un auto de otro tipo: vende en otro segmento y no le quita ventas al primero.",
 }
 

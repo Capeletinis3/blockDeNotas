@@ -85,14 +85,30 @@ Comprobado sin cambios:
 
 **Centro de investigación** (prueba [IS3], sin líneas fabricando):
 
-| Mejora | PI/min | PI por hora a 1× | Costo | Días |
-|---|---|---|---|---|
-| 1 → 2 | 3 → 8 | 180 → 480 | $150.000 | 45 |
-| 2 → 3 | 8 → 20 | 480 → 1.200 | $1.200.000 | 90 |
-| 3 → 4 | 20 → 45 | 1.200 → 2.700 | $25.000.000 | 150 |
-| 4 → 5 | 45 → 90 | 2.700 → 5.400 | $150.000.000 | 240 |
+| Mejora | PI por minuto real a 1× | PI por hora real a 1× | PI por hora de juego | Costo | Días |
+|---|---|---|---|---|---|
+| 1 → 2 | 3 → 8 | 180 → 480 | 0,3 → 0,8 | $150.000 | 45 |
+| 2 → 3 | 8 → 20 | 480 → 1.200 | 0,8 → 2 | $1.200.000 | 90 |
+| 3 → 4 | 20 → 45 | 1.200 → 2.700 | 2 → 4,5 | $25.000.000 | 150 |
+| 4 → 5 | 45 → 90 | 2.700 → 5.400 | 4,5 → 9 | $150.000.000 | 240 |
 
-Cada línea fabricando suma 2 PI/min en cualquier nivel.
+- La hora de juego se calcula con `Rules.perGameMinutes(pi, 60)`. Como 1 s real equivale a 10 min de juego,
+  una hora de juego son 6 s reales.
+  - A 2× y 3× pasan más horas de juego por segundo real, pero los PI por hora de juego son los mismos.
+  - Corrección posterior a la entrega de la etapa 8: se mostraba la hora real (PI por minuto × 60) con la
+    etiqueta "por hora de juego".
+- Cada línea fabricando suma 2 PI por minuto real en cualquier nivel.
+- **Superficie de las oficinas:** se mide en casillas de la cuadrícula (ancho × fondo). Cada casilla mide
+  `OfficeCatalog.CELL` = 2 studs de lado; no hay escala física definida, así que no se muestran metros.
+  - Antes se mostraba la misma cifra con la etiqueta m².
+
+| Plano | Casillas | studs² |
+|---|---|---|
+| 1 | 80 | 320 |
+| 2 | 156 | 624 |
+| 3 | 251 | 1.004 |
+| 4 | 398 | 1.592 |
+| 5 | 584 | 2.336 |
 
 **Fábrica** (sin mejoras de estaciones ni personal):
 
