@@ -211,7 +211,98 @@ No se guarda nada hasta confirmar.
 ## 12. Limitaciones y pendientes
 
 - **No verificado en Roblox Studio:** la presentación de las doce fichas, la legibilidad de los textos nuevos y el diálogo de campaña.
-- **Comparación de campaña en la interfaz:** se ve solo con modelos a la venta con stock. En la prueba de interfaz no había ninguno a la venta en ese momento; la estimación se probó en el servidor (`[RV3]`), donde coincide exactamente con el reparto real.
+- **Comparación de campaña en la interfaz:** se ve solo con modelos a la venta con stock. En la prueba de interfaz no había ninguno a la venta en ese momento; la estimación se probó en el servidor (`[RV3]` y `[RV6]`). Ver el punto 13.
 - **Normalización:** los cambios de catálogo de una marca (precio o alcance) mueven su parte dentro del tipo, pero no la presión total, que está anclada a la referencia anterior. Las reacciones en partida sí la mueven.
 - **Nombres:** falta la revisión legal mencionada en el punto 3.
 - **Estrategia simple del bot:** su biestabilidad es una propiedad del equilibrio actual, previa a esta etapa. Conviene vigilarla si se tocan el resto del mercado o los costos.
+
+## 13. Corrección de la etapa 10
+
+### 13.1 Estimación de campañas (`Rules.campaignPreview`)
+
+Antes, las unidades adicionales salían del lote promocionado solo. Eso tenía dos errores:
+
+- contaba como crecimiento lo que se quitaba a los otros modelos propios del mismo tipo;
+- podía proyectar más autos que el stock disponible.
+
+Ahora la estimación:
+
+- **Suma todos los lotes propios en venta** de cada tipo afectado, con las mismas fórmulas del reparto real (`Rules.market`, `lotWeightAt`). Los modelos no promocionados pierden peso porque el total del tipo crece.
+- **Da el incremento neto de la empresa:** `diff` (autos/min) y `units` (autos en la duración) restan las pérdidas de los otros modelos propios.
+- **Respeta el stock:** cada lote se limita con `min(stock disponible, ritmo × minutos reales)`, sin y con campaña. `stockCap` avisa cuando algún lote llegaría al tope.
+- **No modifica el estado:** se verifica comparando una copia de la partida antes y después.
+
+Si toda la ganancia es redistribución (el modelo promocionado ya vendería todo su stock), el resultado es cero o negativo, nunca crecimiento.
+
+### 13.2 Duración
+
+La duración estimada es `plan.days / Rules.campaignSpeed(g)`: Comunicación alarga la campaña, como en la partida real. No cambió el costo ni el comportamiento real de las campañas.
+
+El diálogo aclara que la estimación usa el personal actual y no garantiza ventas. Muestra:
+
+- "Diferencia neta de la empresa";
+- "Autos adicionales netos en ≈ N días", con aviso de stock si corresponde.
+
+### 13.3 Pruebas nuevas (entorno simulado, Lune)
+
+**`[RV6]`, 17 comprobaciones:**
+
+- no muta el estado;
+- el promocionado gana y el otro modelo propio pierde;
+- el neto es menor que la ganancia bruta del promocionado;
+- las unidades no superan el stock de ningún lote;
+- redistribución pura da `units ≤ 0`;
+- la duración sin personal es igual a la del plan, y con Comunicación es `60 × (1 + comunicación)`;
+- contra la simulación real con copias idénticas: **estimado 7.4 autos netos, real 8 en 45 días**.
+
+**`[RV7]`, 14 comprobaciones:** comparación de seis contra doce, con los números del punto 13.4.
+
+La compatibilidad con partidas viejas sigue cubierta por `[RV4]` (migración, noticias antiguas, idempotencia).
+
+### 13.4 Comparación seis contra doce
+
+**Primer auto 1970:** $40.020 y 30 vendidos con ambos catálogos.
+
+**Cuota de un lote estándar por segmento**, en %, seis → doce:
+
+| Segmento | 1975 | 1990 | 2010 | 2025 |
+|---|---|---|---|---|
+| Compacto | 3.1→3.2 | 3.0→2.9 | 2.8→2.8 | 2.7→2.7 |
+| Sedán | 3.1→3.1 | 2.9→2.9 | 2.6→2.7 | 2.6→2.6 |
+| Clásico | 3.2→3.2 | 3.2→3.2 | 3.1→3.2 | 3.2→3.1 |
+| Pickup | 3.3→3.3 | 3.2→3.2 | 3.2→3.2 | 3.2→3.2 |
+| Deportivo | 3.3→3.3 | 3.2→3.2 | 3.1→3.2 | 3.2→3.1 |
+| SUV | — | 3.0→3.0 | 2.8→2.8 | 2.6→2.7 |
+| Superdeportivo | 3.3→3.3 | 3.2→3.2 | 3.2→3.2 | 3.1→3.2 |
+| Eléctrico | — | — | 3.4→3.4 | 2.9→2.8 |
+
+**Modelos rivales a la venta**, seis → doce:
+
+| Año | 1970 | 1980 | 1990 | 2000 | 2010 | 2020 | 2030 |
+|---|---|---|---|---|---|---|---|
+| Modelos | 9→17 | 13→28 | 16→36 | 17→39 | 17→41 | 19→51 | 19→52 |
+
+**Dos sedanes propios** (1980), ventas de un sedán → dos sedanes:
+
+- seis: 12.13 → 23.43 autos/min;
+- doce: 12.00 → 23.19 autos/min.
+
+**Campañas** (sede 3, mismo escenario), en autos/min:
+
+| Catálogo | Personal | Sin publicidad | Campaña de modelo | Campaña corporativa |
+|---|---|---|---|---|
+| Seis | Sin | 96.66 | 110.46 (+27.6 netos, bruto +36.0, $85.200) | 109.01 (+24.7 netos, $153.360) |
+| Seis | Con | 96.66 | 111.87 (+33.8 netos, bruto +44.1, $77.230) | 110.29 (+30.3 netos, $139.010) |
+| Doce | Sin | 95.99 | 109.75 (+27.5 netos, bruto +35.8, $85.200) | 108.30 (+24.6 netos, $153.360) |
+| Doce | Con | 95.99 | 111.17 (+33.8 netos, bruto +43.9, $77.230) | 109.58 (+30.2 netos, $139.010) |
+
+**Partida completa con el bot y la economía real:**
+
+| Catálogo | Autos vendidos | Ingresos |
+|---|---|---|
+| Seis | 473.833 | $9.342.669.220 |
+| Doce | 477.356 | $9.438.567.960 |
+
+En ambos casos el bot llegó a 112 tecnologías, sede 5 y 8 países. Con la estrategia simple (resto 46), vendió 28.188 con seis y 28.834 con doce.
+
+**Conclusión:** doce marcas duplican la variedad de modelos rivales, pero la presión sobre el jugador queda dentro de ±0,1 puntos de cuota. No hizo falta tocar costos ni fórmulas.

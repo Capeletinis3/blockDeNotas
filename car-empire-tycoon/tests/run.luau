@@ -8538,6 +8538,233 @@ do
 	end)
 end
 
+-- Corrección de la etapa 10: estimación neta de campañas y equilibrio seis contra doce ---------------------------
+do
+	local function close(a: number, b: number, eps: number?): boolean
+		return math.abs(a - b) <= (eps or 1e-9) * math.max(1, math.abs(a), math.abs(b))
+	end
+	local function withCatalog(list: any, fn: () -> any): any
+		local saved = Catalog.RIVALS
+		Catalog.RIVALS = list
+		local ok, res = pcall(fn)
+		Catalog.RIVALS = saved
+		assert(ok, res)
+		return res
+	end
+	-- Empresa con dos sedanes propios a la venta (mismo segmento).
+	local function twoSedans(seed: number, qty1: number, qty2: number): (any, any, any, any)
+		local ctx = makeCtx(seed)
+		local g = newCompany("Dos " .. seed .. " RV6")
+		g.money = 1e8
+		g.facilities.lines["2"] = true
+		g.time.day = (1980 - 1970) * 12
+		local d1 = saveNew(g, ctx, "brisa", "Promo " .. seed)
+		local d2 = saveNew(g, ctx, "brisa", "Otro " .. seed)
+		local l1 = findLot(g, Actions.createLot(g, ctx, { designId = d1, qty = qty1 }).lotId)
+		local l2 = findLot(g, Actions.createLot(g, ctx, { designId = d2, qty = qty2 }).lotId)
+		assert(launchWhenReady(g, ctx, l1.id, l1.refPrice) and launchWhenReady(g, ctx, l2.id, l2.refPrice), "a la venta")
+		return g, ctx, l1, l2
+	end
+	local function planFor(g: any, kind: string, designId: string?, days: number): any
+		return Rules.campaignPlan(g, { kind = kind, designId = designId, budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g)), days = days })
+	end
+
+	test("[RV6] Estimación de campañas: incremento NETO de la empresa, stock de cada modelo y duración con comunicación", function()
+		local g, ctx, l1, l2 = twoSedans(1, 600, 600)
+		local plan = planFor(g, "modelo", l1.designId, 60)
+		local snap = serde.encode("json", jsonCopy(g))
+		local pv = Rules.campaignPreview(g, plan)
+		eq(serde.encode("json", jsonCopy(g)), snap, "no modifica la partida")
+		local a, b
+		for _, x in pv.lots do
+			if x.lot == l1 then
+				a = x
+			elseif x.lot == l2 then
+				b = x
+			end
+		end
+		check(a.with > a.without and b.with < b.without, "1. la campaña sube al promocionado y le quita al otro modelo propio")
+		check(close(pv.diff, (a.with - a.without) + (b.with - b.without)), "1. diferencia = ganancia del promocionado − pérdida del otro (neta)")
+		check(pv.diff < a.with - a.without, "1. el neto es menor que la ganancia bruta del promocionado")
+		check(close(pv.units, (a.unitsWith - a.unitsWithout) + (b.unitsWith - b.unitsWithout)), "1. autos adicionales = suma neta de todos los lotes")
+		for _, x in pv.lots do
+			local avail = Rules.lotAvailable(x.lot)
+			check(x.unitsWith <= avail and x.unitsWithout <= avail, "1. nunca más que el stock de cada modelo")
+		end
+		-- Solo redistribución: el promocionado no tiene stock para vender más; el otro pierde → no es crecimiento.
+		local h, _, p1, _ = twoSedans(2, 600, 600)
+		local hp = planFor(h, "modelo", p1.designId, 60)
+		local base = Rules.campaignPreview(h, hp)
+		local p1u0 = 0
+		for _, x in base.lots do
+			if x.lot == p1 then
+				p1u0 = x.unitsWithout
+			end
+		end
+		-- Dejar al promocionado con el stock justo para lo que vendería sin campaña.
+		p1.produced = p1.sold + (p1.discarded or 0) + math.max(1, math.floor(p1u0))
+		local red = Rules.campaignPreview(h, hp)
+		local gross = 0
+		for _, x in red.lots do
+			if x.lot == p1 then
+				gross = x.with - x.without
+			end
+		end
+		check(gross > 0 and red.units <= 1e-6 and red.stockCap, "1. si solo pasa ventas de un modelo propio al otro, no se muestra como crecimiento (neto " .. Util.num(red.units, 2) .. " autos)")
+		-- 2. Duración con la comunicación del personal actual.
+		eq(pv.days, plan.days, "2. sin personal: los días contratados")
+		Simulation.refreshCandidates(g, ctx, "marketing")
+		for _ = 1, 3 do
+			Simulation.refreshCandidates(g, ctx, "marketing")
+			check(Actions.hire(g, ctx, { candidateId = g.candidates[1].id, dept = "marketing" }).ok, "contrata en Marketing")
+		end
+		g.sede = 3
+		local co = Rules.staff(g, "comunicacion")
+		check(co > 0, "2. comunicación activa (" .. Util.num(co, 3) .. ")")
+		local plan2 = planFor(g, "modelo", l1.designId, 60)
+		local pv2 = Rules.campaignPreview(g, plan2)
+		check(close(pv2.days, 60 / Rules.campaignSpeed(g)) and close(pv2.days, 60 * (1 + co)), "2. duración esperada = días / Rules.campaignSpeed (" .. Util.num(pv2.days, 1) .. " días)")
+		eq(plan2.days, 60, "2. lo contratado no cambia")
+		-- 3. La estimación frente a la simulación real (copias idénticas, con y sin campaña, la misma duración).
+		local real, _, r1, _ = twoSedans(3, 800, 800)
+		local rplan = planFor(real, "modelo", r1.designId, 45)
+		local rpv = Rules.campaignPreview(real, rplan)
+		local with, without = jsonCopy(real), jsonCopy(real)
+		local cw = makeCtx(5)
+		check(Actions.startCampaign(with, cw, { kind = "modelo", designId = r1.designId, budget = rplan.budget, days = 45 }).ok, "campaña en la copia")
+		local function soldAll(x: any): number
+			local n = 0
+			for _, l in x.lots do
+				n += l.sold
+			end
+			return n
+		end
+		local s0w, s0n = soldAll(with), soldAll(without)
+		local minutes = math.floor(rpv.days * Catalog.RULES.gameDayMinutes / 10) * 10
+		Simulation.simulate(with, cw, minutes)
+		Simulation.simulate(without, makeCtx(5), minutes)
+		local actual = (soldAll(with) - s0w) - (soldAll(without) - s0n)
+		print(string.format("      estimación %.1f autos netos · simulación real %d (%.0f días)", rpv.units, actual, rpv.days))
+		check(math.abs(actual - rpv.units) <= math.max(6, 0.3 * math.abs(rpv.units)), "3. la estimación neta se acerca a lo que pasa en la simulación")
+	end)
+
+	test("[RV7] Equilibrio seis contra doce: primer auto, cuotas por segmento, modelos por año, dos autos propios y campañas", function()
+		local ctx = makeCtx(107)
+		-- Primer automóvil de 1970 con el capital original (lote de 30 al precio recomendado).
+		local function firstCar(): any
+			local g = newCompany("Primero RV7")
+			local id = saveNew(g, ctx, "brisa", "Primero 70")
+			local r = Actions.createLot(g, ctx, { designId = id, qty = 30 })
+			local lot = findLot(g, r.lotId)
+			launchWhenReady(g, ctx, r.lotId, lot.refPrice)
+			runUntil(g, ctx, function()
+				return lot.saleState == "agotado"
+			end, 60)
+			local h = findHist(g, r.lotId) or lot
+			return { (h.revenue or 0) - (h.costSpent or 0), h.sold or 0 }
+		end
+		local f6 = withCatalog(Catalog.RIVALS_V1, firstCar)
+		local f12 = firstCar()
+		local p6, s6, p12, s12 = f6[1], f6[2], f12[1], f12[2]
+		print(string.format("      primer auto 1970: seis %s (%d vendidos) · doce %s (%d vendidos)", Util.money(p6), s6, Util.money(p12), s12))
+		check(p6 > 0 and p12 > 0 and math.abs(p12 / p6 - 1) < 0.1, "primer auto rentable con los dos catálogos (×" .. Util.num(p12 / p6, 3) .. ")")
+		-- Cuota del jugador por segmento con un lote estándar (atractivo del año, precio recomendado).
+		local function shareOf(t: string, y: number): number
+			local g = newCompany("Cuota RV7")
+			g.time.day = (y - 1970) * 12
+			local base = Rules.eraBaseline(y + 0.5)
+			local lot = { id = "x", saleState = "en venta", produced = 1, sold = 0, discarded = 0, price = 100, refPrice = 100, appeal = base + 5, design = { type = t, spec = { segment = "Masivo" } }, reviews = nil }
+			table.insert(g.lots, lot)
+			local m = Rules.market(g, t)
+			return m.lots.x and m.lots.x / m.total or 0
+		end
+		local rows = {}
+		local worst = 0
+		for _, t in Catalog.TYPE_ORDER do
+			for _, y in { 1975, 1990, 2010, 2025 } do
+				if Rules.baseDemand(t, y + 0.5) > 0 then
+					local a = withCatalog(Catalog.RIVALS_V1, function()
+						return shareOf(t, y)
+					end)
+					local b = shareOf(t, y)
+					worst = math.max(worst, math.abs(b / a - 1))
+					table.insert(rows, string.format("%s %d %.1f→%.1f", t, y, a * 100, b * 100))
+				end
+			end
+		end
+		print("      cuota de un lote estándar (seis → doce, %): " .. table.concat(rows, " · "))
+		check(worst < 0.12, "cuota del jugador por segmento: diferencia máxima " .. Util.num(worst * 100, 1) .. " %")
+		-- Modelos rivales disponibles por década.
+		local counts = {}
+		for y = 1970, 2030, 10 do
+			local n6 = withCatalog(Catalog.RIVALS_V1, function()
+				local n = 0
+				for _, t in Catalog.TYPE_ORDER do
+					n += #Rules.rivalOffers(t, y + 0.5)
+				end
+				return n
+			end)
+			local n12 = 0
+			for _, t in Catalog.TYPE_ORDER do
+				n12 += #Rules.rivalOffers(t, y + 0.5)
+			end
+			table.insert(counts, y .. ": " .. n6 .. "→" .. n12)
+			check(n12 >= n6 and n12 <= 60, y .. ": más modelos rivales, en cantidad acotada")
+		end
+		print("      modelos rivales a la venta (seis → doce): " .. table.concat(counts, " · "))
+		-- Dos autos propios en el mismo segmento.
+		local function twoCars(): any
+			local g, _, l1, l2 = twoSedans(9, 600, 600)
+			l2.saleState = "por lanzar"
+			local solo = Rules.lotSalesRate(g, l1)
+			l2.saleState = "en venta"
+			local m = Rules.market(g, "sedan")
+			return { solo, Rules.lotSalesRate(g, l1, m) + Rules.lotSalesRate(g, l2, m) }
+		end
+		local t6, t12 = withCatalog(Catalog.RIVALS_V1, twoCars), twoCars()
+		local s6a, b6, s12a, b12 = t6[1], t6[2], t12[1], t12[2]
+		print(string.format("      dos sedanes propios: seis %.2f → %.2f autos/min · doce %.2f → %.2f autos/min", s6a, b6, s12a, b12))
+		check(b6 > s6a and b12 > s12a and math.abs(b12 / b6 - 1) < 0.1, "dos autos propios comparten demanda igual con los dos catálogos")
+		-- Campañas: de modelo y corporativa, sin y con personal de Marketing.
+		local function campaigns(staff: boolean): any
+			local g, c, l1, _ = twoSedans(11, 600, 600)
+			g.sede = 3 -- lugar para contratar; igual en los dos escenarios (la sede cambia el alcance)
+			if staff then
+				for _ = 1, 3 do
+					Simulation.refreshCandidates(g, c, "marketing")
+					Actions.hire(g, c, { candidateId = g.candidates[1].id, dept = "marketing" })
+				end
+			end
+			local mp = Rules.campaignPreview(g, planFor(g, "modelo", l1.designId, 60))
+			local cp = Rules.campaignPreview(g, planFor(g, "corporativa", nil, 60))
+			local gross, corpLoses = 0, false
+			for _, x in mp.lots do
+				if x.hit then
+					gross += x.unitsWith - x.unitsWithout
+				end
+			end
+			for _, x in cp.lots do
+				corpLoses = corpLoses or x.with < x.without - 1e-12
+			end
+			return { mw = mp.without, mn = mp.with, mu = mp.units, gross = gross, cn = cp.with, cu = cp.units, corpLoses = corpLoses, cost = planFor(g, "corporativa", nil, 60).cost, mcost = planFor(g, "modelo", l1.designId, 60).cost }
+		end
+		local res = {}
+		for _, cat in { { "seis", Catalog.RIVALS_V1 }, { "doce", Catalog.RIVALS } } do
+			for _, staff in { false, true } do
+				local r = withCatalog(cat[2], function()
+					return campaigns(staff)
+				end)
+				res[cat[1] .. tostring(staff)] = r
+				print(string.format("      %s %s personal: sin publicidad %.2f/min · modelo %.2f/min (%+.1f autos netos, bruto %+.1f, %s) · corporativa %.2f/min (%+.1f autos netos, %s)", cat[1], staff and "con" or "sin", r.mw, r.mn, r.mu, r.gross, Util.money(r.mcost), r.cn, r.cu, Util.money(r.cost)))
+			end
+		end
+		check(res.docefalse.mu > 0 and res.docefalse.mu < res.docefalse.gross, "de modelo: el neto (" .. Util.num(res.docefalse.mu, 1) .. ") es menor que la ganancia bruta del promocionado (" .. Util.num(res.docefalse.gross, 1) .. ")")
+		check(res.docefalse.cu > 0 and not res.docefalse.corpLoses, "corporativa: ningún modelo propio pierde ventas")
+		check(res.docetrue.mcost < res.docefalse.mcost and res.docetrue.mu > res.docefalse.mu, "con personal de Marketing: más barata y con más efecto")
+		check(math.abs(res.docefalse.mu / res.seisfalse.mu - 1) < 0.15, "el efecto de una campaña es comparable con seis y doce marcas")
+	end)
+end
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

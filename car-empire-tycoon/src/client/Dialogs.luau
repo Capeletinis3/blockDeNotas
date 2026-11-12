@@ -982,9 +982,10 @@ Dialogs.campaign = function(box: Frame, _params: any)
 				Ui.lbl("Comparación estimada"),
 				Ui.between("Sin campaña", Util.num(pv.without, 2) .. " autos/min", { size = Ui.S.xs, name = "SinCampana" }),
 				Ui.between("Con la campaña", Util.num(pv.with, 2) .. " autos/min", { size = Ui.S.xs, name = "ConCampana" }),
-				Ui.between("Diferencia", "+" .. Util.num(pv.diff, 2) .. " autos/min ≈ " .. Util.num(math.floor(pv.units)) .. " autos en la campaña" .. (pv.stockCap and " (limitado por el stock)" or ""), { size = Ui.S.xs, color = T.gr, name = "DiferenciaCampana" }),
+				Ui.between("Diferencia neta de la empresa", (pv.diff >= 0 and "+" or "−") .. Util.num(math.abs(pv.diff), 2) .. " autos/min", { size = Ui.S.xs, color = pv.diff > 0 and T.gr or T.mut, name = "DiferenciaCampana" }),
+				Ui.between("Autos adicionales netos en ≈ " .. Util.num(math.ceil(pv.days)) .. " días", (pv.units >= 0 and "+" or "−") .. Util.num(math.floor(math.abs(pv.units) + 0.5)) .. " (" .. Util.num(math.floor(pv.unitsWithout + 0.5)) .. " → " .. Util.num(math.floor(pv.unitsWith + 0.5)) .. ")" .. (pv.stockCap and " · con tope de stock" or ""), { size = Ui.S.xs, color = pv.units > 0 and T.gr or T.mut, name = "UnidadesNetas" }),
 				Ui.between("Inversión", Util.money(plan.cost), { size = Ui.S.xs }),
-				Ui.text("Estimación con los precios, el stock y los rivales de hoy a 1×: cambia si cambian los precios, se agota el stock o llega una generación rival nueva. No es una venta garantizada.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
+				Ui.text("Neto: suma todos tus modelos a la venta; lo que la campaña le quita a tus otros modelos del mismo tipo se descuenta. Duración según la comunicación de tu personal actual. Estimación con los precios, el stock, los rivales y el personal de hoy a 1×: cambia si cambian, se agota el stock o llega una generación rival nueva. No es una venta garantizada.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
 			}, 4, { Name = "ComparacionCampana" }).Parent = b
 		else
 			Ui.note("b", Rules.campaign(g) and "Ya hay una campaña activa: la comparación se ve cuando termine." or "No tenés modelos a la venta con stock afectados por esta campaña: la estimación se ve cuando estén a la venta.").Parent = b

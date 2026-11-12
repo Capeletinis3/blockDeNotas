@@ -1178,18 +1178,29 @@ function Rules.lotRateAt(g: any, lot: any, price: number): number
 	return m.demand * w / total
 end
 
---[[ Comparación de una campaña antes de contratarla (sin tocar el estado): ventas por minuto real de tus lotes
-	a la venta sin campaña y con la campaña propuesta (su efecto con la creatividad actual), por el mismo reparto
-	de Rules.market. Devuelve { without, with, diff, boost, lots = { { lot, without, with } }, units, stockCap }
-	o nil si no hay lotes a la venta afectados. `units` = autos extra estimados durante la campaña (a 1×, sin
-	pausas), con tope en el stock disponible: depende del stock, los precios y los rivales de esos días. ]]
+--[[ Comparación de una campaña antes de contratarla (sin tocar el estado), con el mismo reparto de Rules.market:
+	  without / with = ventas por minuto real a 1× de TODOS tus lotes a la venta, sin y con la campaña propuesta
+	                   (su efecto con la creatividad actual). La campaña sube el peso de los modelos promocionados y
+	                   eso también le quita ventas a tus otros modelos del mismo tipo: diff = with − without es el
+	                   cambio NETO de la empresa, no la ganancia de los promocionados.
+	  days           = duración esperada en días de juego: los días contratados con la comunicación ACTUAL del
+	                   personal (Rules.campaignSpeed); si el personal cambia durante la campaña, cambia.
+	  unitsWithout / unitsWith = autos que venderían todos tus lotes en esa duración, cada uno con tope en su stock
+	                   disponible (min(stock, ritmo × tiempo)).
+	  units          = unitsWith − unitsWithout: autos ADICIONALES netos de la empresa (si la campaña solo pasa ventas
+	                   de un modelo propio a otro, no cuenta como crecimiento; puede ser 0 o negativo).
+	  stockCap       = algún lote llega a su tope de stock en alguno de los dos escenarios.
+	Devuelve nil si no hay lotes a la venta afectados. Es una estimación con los precios, el stock, los rivales y el
+	personal de hoy: no es una venta garantizada. ]]
 function Rules.campaignPreview(g: any, plan: any): any
 	if not plan then
 		return nil
 	end
 	local boost = plan.boost * (1 + Rules.staff(g, "mk_creatividad"))
 	local yf = Rules.yearFrac(g)
-	local out = { without = 0, with = 0, diff = 0, boost = boost, lots = {}, units = 0, stockCap = false }
+	local days = plan.days / Rules.campaignSpeed(g)
+	local realMin = days * Catalog.CALENDAR.realSecondsPerDay / 60
+	local out = { without = 0, with = 0, diff = 0, boost = boost, lots = {}, days = days, unitsWithout = 0, unitsWith = 0, units = 0, stockCap = false }
 	local byType = {}
 	for _, lot in g.lots do
 		if lot.saleState == "en venta" and Rules.lotAvailable(lot) > 0 then
@@ -1198,7 +1209,6 @@ function Rules.campaignPreview(g: any, plan: any): any
 		end
 	end
 	local affected = 0
-	local realMin = plan.days * Catalog.CALENDAR.realSecondsPerDay / 60
 	for t, lots in byType do
 		local m = Rules.market(g, t)
 		local extra = 0
@@ -1217,22 +1227,23 @@ function Rules.campaignPreview(g: any, plan: any): any
 			local w = weights[lot]
 			local r0 = m.demand * w[1] / m.total
 			local r1 = m.demand * w[2] / (m.total + extra)
-			out.without += r0
-			out.with += r1
-			local add = (r1 - r0) * realMin
-			local cap = math.max(0, Rules.lotAvailable(lot) - r0 * realMin)
-			if add > cap then
-				add = cap
+			local avail = Rules.lotAvailable(lot)
+			local u0, u1 = math.min(avail, r0 * realMin), math.min(avail, r1 * realMin)
+			if r0 * realMin >= avail or r1 * realMin >= avail then
 				out.stockCap = true
 			end
-			out.units += math.max(0, add)
-			table.insert(out.lots, { lot = lot, without = r0, with = r1, hit = w[3] })
+			out.without += r0
+			out.with += r1
+			out.unitsWithout += u0
+			out.unitsWith += u1
+			table.insert(out.lots, { lot = lot, without = r0, with = r1, hit = w[3], unitsWithout = u0, unitsWith = u1 })
 		end
 	end
 	if affected == 0 then
 		return nil
 	end
 	out.diff = out.with - out.without
+	out.units = out.unitsWith - out.unitsWithout
 	return out
 end
 
