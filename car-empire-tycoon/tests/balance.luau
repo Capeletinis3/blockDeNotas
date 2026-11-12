@@ -145,6 +145,8 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 	local log = {
 		milestones = {}, research = {}, unlocks = {}, minMoney = g.money, decades = {}, byType = {}, spent = { produccion = 0, investigacion = 0, mejoras = 0, desarrollo = 0, campanas = 0 },
 		designs = 0, generations = 0,
+		-- Obras: { kind, level, cost, startMin, startYear, finishMin, finishYear, moneyBefore, moneyAfter }.
+		builds = {},
 	}
 	local t = 0
 	local function mark(key: string, text: string?)
@@ -392,6 +394,15 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 			doneBefore = #g.research.done
 			trackUnlocks()
 		end
+		-- Obras terminadas: el nivel (o la línea 2) llegó al destino.
+		for _, b in log.builds do
+			if not b.finishMin then
+				local reached = (b.kind == "line2" and Rules.ownsLine(g, 2)) or (b.kind ~= "line2" and Rules.facilityLevel(g, b.kind) >= b.level)
+				if reached then
+					b.finishMin, b.finishYear = t / 60, Rules.year(g)
+				end
+			end
+		end
 		if g.counters.unitsSold > 0 then
 			mark("primera venta")
 		end
@@ -420,7 +431,11 @@ function Bot.play(_label: string, minutes: number, opts: any?): any
 						return
 					end
 				end
-				Actions.upgradeFacility(g, ctx, { kind = kind })
+				local before = g.money
+				local r = Actions.upgradeFacility(g, ctx, { kind = kind })
+				if r.ok then
+					table.insert(log.builds, { kind = kind, level = nx.level, cost = nx.cost, startMin = t / 60, startYear = Rules.year(g), moneyBefore = before, moneyAfter = g.money })
+				end
 			end
 			tryBuild("offices", 1)
 			tryBuild("line2", 1.5)

@@ -528,6 +528,8 @@ function Office.remap(o: any, newLevel: number): any
 		finishes[to] = finishes[to] or f
 	end
 	o.level = lvl
+	-- El plano cambió: una versión nueva para que el cliente descarte borradores hechos sobre el anterior.
+	o.rev = (tonumber(o.rev) or 0) + 1
 	local moved = Office.evictInvalid(o)
 	o.finishes = {}
 	for _, r in OfficeCatalog.plan(lvl).rooms do

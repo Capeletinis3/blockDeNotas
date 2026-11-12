@@ -6895,6 +6895,663 @@ do
 	end)
 end
 
+-- Etapa 8: instalaciones y crecimiento empresarial (casos 1–36, visual y recorrido de crecimiento) ------------
+do
+	local FI = require("./.build/server/FriendIdentity")
+	local OfficeCatalog8 = require("./.build/shared/OfficeCatalog")
+	local Office8 = require("./.build/shared/Office")
+	local OfficeService8 = require("./.build/server/OfficeService")
+	local Nav8 = require("./.build/shared/OfficeNavigation")
+	local Visuals = require("./.build/shared/FacilityVisuals")
+	local F = Catalog.FACILITIES
+	local function close(a: number, b: number, eps: number?): boolean
+		return math.abs(a - b) < (eps or 1e-6)
+	end
+	local function build(g: any, kind: string): any
+		return Rules.build(g, kind)
+	end
+	-- Simula exactamente lo que le falta a la obra (con la velocidad del personal), en pasos de 10 minutos.
+	local function finishBuild(g: any, ctx: any, kind: string)
+		local b = build(g, kind)
+		assert(b, "sin obra " .. kind)
+		local left = (b.days - b.progress) / Rules.buildSpeed(g)
+		Simulation.simulate(g, ctx, math.ceil(left * Catalog.RULES.gameDayMinutes / 10 + 1e-9) * 10)
+	end
+	local function upgrade(g: any, ctx: any, kind: string): any
+		return Actions.upgradeFacility(g, ctx, { kind = kind })
+	end
+	local function sedeCharges(g: any): (number, number)
+		local n, sum = 0, 0
+		for _, l in g.ledger do
+			if l.type == "sede" and string.sub(l.note or "", 1, 5) == "Obra:" then
+				n += 1
+				sum += math.abs(l.amount)
+			end
+		end
+		return n, sum
+	end
+	-- Progreso que habilita las oficinas de nivel n (ventas y reputación del catálogo).
+	local function meetOffices(g: any, n: number)
+		local req = Catalog.SEDES[n].req
+		g.counters.unitsSold = math.max(g.counters.unitsSold, req.sold)
+		g.reputation = math.max(g.reputation, req.rep)
+	end
+	local function friendsList(n: number): { any }
+		local out = {}
+		for i = 1, n do
+			table.insert(out, { userId = 8000 + i, username = "amigo" .. (8000 + i), displayName = "Amigo " .. (8000 + i) })
+		end
+		return out
+	end
+	local function hire(g: any, ctx: any): any
+		Simulation.ensureMarket(g, ctx)
+		if #g.candidates == 0 then
+			Simulation.refreshCandidates(g, ctx, nil)
+		end
+		return Actions.hire(g, ctx, { candidateId = g.candidates[1].id })
+	end
+	-- Invariantes de las instalaciones.
+	local function facilitiesImpossible(g: any): string?
+		local f = g.facilities
+		if not (g.sede >= 1 and g.sede <= 5 and f.factory >= 1 and f.factory <= 5 and f.research >= 1 and f.research <= 5) then
+			return "nivel fuera de rango"
+		end
+		if f.factory > g.sede or f.research > g.sede then
+			return "fábrica o centro por encima de las oficinas"
+		end
+		local seen = {}
+		for _, b in f.builds do
+			if seen[b.kind] then
+				return "dos obras en " .. b.kind
+			end
+			seen[b.kind] = true
+			if b.kind ~= "line2" and b.level ~= Rules.facilityLevel(g, b.kind) + 1 then
+				return "obra con destino incoherente: " .. b.kind
+			end
+			if b.kind == "line2" and Rules.ownsLine(g, 2) then
+				return "obra de la línea 2 ya comprada"
+			end
+			if not (b.progress >= 0 and b.progress <= b.days) then
+				return "avance fuera de rango"
+			end
+		end
+		if type(g.office) == "table" and g.office.level ~= g.sede then
+			return "plano de oficina distinto del nivel de las oficinas"
+		end
+		if Rules.lineCount(g) > F.maxLines then
+			return "más líneas que el máximo"
+		end
+		return nil
+	end
+
+	test("[IS1] Instalaciones 1–10: inicial, primera obra, fondos, requisitos, máximo, duplicados, cobro y fin únicos, recarga", function()
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "IS1", clock)
+		local p = { UserId = 8101 }
+		mgr:add(p)
+		local g = playThrough(mgr, p).game
+		local function req(kind: string, id: string?): any
+			clock.c += Sessions.RATE_WINDOW
+			return mgr:request(p, "upgradeFacility", { kind = kind, requestId = id or rid() })
+		end
+		-- 1. Empresa nueva: instalaciones iniciales del catálogo.
+		check(g.sede == 1 and g.facilities.factory == 1 and g.facilities.research == 1 and #g.facilities.builds == 0, "1. oficinas, fábrica y centro en nivel 1, sin obras")
+		check(Rules.ownsLine(g, 1) and not Rules.ownsLine(g, 2) and not Rules.ownsLine(g, 3), "1. solo la línea 1")
+		eq(g.facilities.invested, 0, "1. nada invertido")
+		eq(g.office.level, 1, "1. oficina del plano 1")
+		local caps = Rules.caps(g)
+		check(caps.lines == 1 and close(caps.perLine, F.factory.levels[1].perLine) and caps.pi == 3 and caps.staff == 3, "1. capacidades iniciales: 1 línea, 15 autos/min, 3 PI/min, 3 empleados")
+		-- 3. Fondos insuficientes: la línea 2 cuesta 150.000 y la empresa empieza con 90.000.
+		local m0 = g.money
+		local r = req("line2")
+		check(not r.ok and string.find(r.msg, "Dinero", 1, true) ~= nil, "3. sin fondos: " .. tostring(r.msg))
+		check(g.money == m0 and #g.facilities.builds == 0 and g.facilities.invested == 0, "3. no cobra ni empieza nada")
+		-- 4. Requisitos: la fábrica 2 pide oficinas 2, y las oficinas 2 piden ventas y reputación.
+		g.money = 5000000
+		r = req("factory")
+		check(not r.ok and string.find(r.msg, "Oficinas centrales de nivel 2", 1, true) ~= nil, "4. fábrica sin oficinas: " .. tostring(r.msg))
+		r = req("offices")
+		check(not r.ok and string.find(r.msg, "Autos vendidos", 1, true) ~= nil, "4. oficinas sin ventas: " .. tostring(r.msg))
+		eq(g.money, 5000000, "4. sin cobros")
+		-- 2. Primera ampliación válida: la línea 2.
+		local nx = Rules.nextFacility(g, "line2")
+		r = req("line2")
+		check(r.ok, "2. línea 2: " .. tostring(r.msg))
+		local b = build(g, "line2")
+		check(b ~= nil and b.from == 1 and b.level == 2 and b.cost == nx.cost and b.days == F.line2.days and b.progress == 0 and b.startDay == Rules.absDay(g), "2. obra con origen, destino, costo, duración y día de inicio")
+		eq(5000000 - g.money, nx.cost, "7. cobrada una vez")
+		eq(g.facilities.invested, nx.cost, "suma a lo invertido (mantenimiento)")
+		-- 6. Duplicada: otra obra de la misma instalación y el mismo pedido reenviado.
+		r = req("line2")
+		check(not r.ok, "6. no se empieza la misma obra dos veces: " .. tostring(r.msg))
+		meetOffices(g, 2)
+		local id = rid()
+		local mo = g.money
+		check(req("offices", id).ok, "oficinas 2")
+		local again = req("offices", id)
+		check(again.ok and g.money == mo - Rules.facilityDef("offices", 2).cost, "6/7. el pedido reenviado no cobra de nuevo")
+		check(not req("offices").ok, "6. ni una segunda obra de oficinas")
+		local n, sum = sedeCharges(g)
+		eq(n, 2, "7. dos obras, dos cobros")
+		eq(sum, nx.cost + Rules.facilityDef("offices", 2).cost, "7. por el importe exacto")
+		-- 10. Guardar en mitad de la obra y cargar en otro servidor.
+		ticks(mgr, clock, 20)
+		local snapB = jsonCopy(g.facilities)
+		local money = g.money
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar y volver al menú")
+		mgr:remove(p)
+		local mgr2 = makeServer(store, "IS1b", clock)
+		mgr2:add(p)
+		check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abrir de nuevo")
+		local g2 = mgr2.list[p].game
+		eq(serde.encode("json", jsonCopy(g2.facilities)), serde.encode("json", snapB), "10. obras, avance, costos pagados, niveles y líneas idénticos")
+		eq(g2.money, money, "10. sin cobrar de nuevo al cargar")
+		-- 8 y 9. Termina una sola vez y aplica el beneficio.
+		local bl = build(g2, "line2")
+		local left = math.ceil((bl.days - bl.progress) * Catalog.CALENDAR.realSecondsPerDay)
+		ticks(mgr2, clock, left - 2)
+		check(not Rules.ownsLine(g2, 2), "8. no termina antes de tiempo")
+		local xp0 = g2.xp + Rules.xpForLevel(g2.level) * 0
+		local s2 = mgr2.list[p]
+		local savedAt = s2.lastSave
+		for _ = 1, 3 do
+			s2.lastAutosave = clock.c + 1 -- que no coincida con el autoguardado periódico
+			ticks(mgr2, clock, 1)
+		end
+		check(Rules.ownsLine(g2, 2) and build(g2, "line2") == nil, "9. línea 2 activa al terminar")
+		check(s2.pendingSave == true or s2.lastSave ~= savedAt, "10. una obra terminada se guarda enseguida")
+		eq(Rules.caps(g2).lines, 2, "9. capacidad: dos líneas")
+		local notes = 0
+		for _, nt in g2.notifications do
+			if string.find(nt.text, "Obra terminada: Línea de producción 2", 1, true) then
+				notes += 1
+			end
+		end
+		eq(notes, 1, "8. un solo aviso")
+		check(g2.xp ~= xp0 or g2.level > 1, "8. otorga experiencia")
+		-- Oficinas: termina y no vuelve a aplicar.
+		for _ = 1, 400 do
+			if g2.sede == 2 then
+				break
+			end
+			ticks(mgr2, clock, 1)
+		end
+		eq(g2.sede, 2, "9. oficinas nivel 2")
+		local inv = g2.facilities.invested
+		ticks(mgr2, clock, 120)
+		check(g2.sede == 2 and g2.facilities.invested == inv and #g2.facilities.builds == 0, "8. sigue en 2: ningún efecto repetido")
+		-- 5. Nivel máximo.
+		g2.sede, g2.facilities.factory, g2.facilities.research = 5, 5, 5
+		g2.office.level = 5
+		for _, k in { "offices", "factory", "research" } do
+			clock.c += Sessions.RATE_WINDOW
+			local rr = mgr2:request(p, "upgradeFacility", { kind = k, requestId = rid() })
+			check(not rr.ok and string.find(rr.msg, "máximo", 1, true) ~= nil and Rules.nextFacility(g2, k) == nil, "5. " .. k .. " en el máximo: " .. tostring(rr.msg))
+		end
+		clock.c += Sessions.RATE_WINDOW
+		check(not mgr2:request(p, "upgradeFacility", { kind = "line3", requestId = rid() }).ok, "la línea 3 no se construye con dinero")
+		check(not mgr2:request(p, "upgradeFacility", { kind = "factory", level = 9, days = 0, cost = 0, requestId = rid() }).ok, "el cliente no fija nivel, días ni costo")
+	end)
+
+	test("[IS2] Producción 11–17: líneas 1/2/3, línea 3 prémium sin la 2, producción durante una ampliación, capacidad y lotes", function()
+		local ctx = makeCtx(81)
+		local g = newCompany("Lineas IS2")
+		g.money = 1e9
+		-- 11. La línea 1 desde el inicio.
+		check(Rules.ownsLine(g, 1) and Rules.freeLine(g) == 1, "11. línea 1 disponible")
+		-- 14. Línea 3 (de la cuenta) sin la 2: se usan la 1 y la 3, la 2 no aparece sola.
+		local undo = Simulation.grantLine3(g)
+		check(Rules.ownsLine(g, 3) and not Rules.ownsLine(g, 2), "14. línea 3 sin la 2")
+		eq(Rules.lineCount(g), 2, "14. dos líneas")
+		local d1 = saveNew(g, ctx, "brisa", "Uno IS2")
+		local d2 = saveNew(g, ctx, "duna", "Dos IS2")
+		local d3 = saveNew(g, ctx, "brisa", "Tres IS2")
+		check(not Actions.createLot(g, ctx, { designId = d1, qty = 40, line = 2 }).ok, "14. la línea 2 no se puede usar")
+		check(Actions.createLot(g, ctx, { designId = d1, qty = 40, line = 3 }).ok, "14. la 3 sí")
+		check(Actions.createLot(g, ctx, { designId = d2, qty = 40 }).ok, "14. y la 1")
+		local r3 = Actions.createLot(g, ctx, { designId = d3, qty = 40 })
+		check(not r3.ok, "14. sin línea libre (la 2 no existe): " .. tostring(r3.msg))
+		check(Rules.lineLot(g, 1) ~= nil and Rules.lineLot(g, 3) ~= nil and Rules.lineLot(g, 2) == nil, "14. fabrican la 1 y la 3")
+		undo()
+		check(not Rules.ownsLine(g, 3), "deshacer la línea 3 de prueba")
+		-- 13. Línea 3 autorizada solo por un recibo del servidor.
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local prompts = {}
+		local mgr = makeServer(store, "IS2", clock, { prompt = function(_, pid)
+			table.insert(prompts, pid)
+		end })
+		local p = { UserId = 8201 }
+		mgr:add(p)
+		local gs = playThrough(mgr, p).game
+		local saved = Catalog.PRODUCTS.line3.id
+		Catalog.PRODUCTS.line3.id = 7777
+		check(mgr:request(p, "buyProduct", { product = "line3" }).ok and prompts[1] == 7777, "13. pedirla solo abre la compra")
+		check(not Rules.ownsLine(gs, 3), "13. el pedido del cliente no la concede")
+		check(not mgr:request(p, "grantLine3", {}).ok, "13. no hay acción para concederla")
+		check(mgr:processReceipt({ PlayerId = 8201, ProductId = 7777, PurchaseId = "is2-1" }) == true, "13. el recibo de Roblox la acredita")
+		check(Rules.ownsLine(gs, 3) and not Rules.ownsLine(gs, 2), "13. línea 3 activa, la 2 sigue sin comprar")
+		check(mgr:processReceipt({ PlayerId = 8201, ProductId = 7777, PurchaseId = "is2-1" }) == true and Rules.lineCount(gs) == 2, "13. el mismo recibo no la duplica")
+		Catalog.PRODUCTS.line3.id = saved
+		-- 12. Línea 2 por progreso (obra con dinero del juego).
+		local g2 = newCompany("Progreso IS2")
+		g2.money = 1e7
+		check(upgrade(g2, ctx, "line2").ok, "12. obra de la línea 2")
+		check(not Rules.ownsLine(g2, 2), "12. todavía no (obra en curso)")
+		finishBuild(g2, ctx, "line2")
+		check(Rules.ownsLine(g2, 2) and Rules.lineCount(g2) == 2, "12. línea 2 al terminar")
+		-- 15–17. Producción durante una ampliación de la fábrica.
+		meetOffices(g2, 2)
+		check(upgrade(g2, ctx, "offices").ok, "oficinas 2")
+		finishBuild(g2, ctx, "offices")
+		local dd = saveNew(g2, ctx, "brisa", "Ampliacion IS2")
+		check(Actions.createLot(g2, ctx, { designId = dd, qty = 400 }).ok, "15. lote grande en curso")
+		local lot = g2.lots[#g2.lots]
+		local unit, qty, spent = lot.unitCost, lot.qty, lot.costSpent
+		local moneyLot = g2.money
+		local rate1 = Rules.lineRate(g2)
+		local cap1 = Rules.caps(g2).capacity
+		local nxf = Rules.nextFacility(g2, "factory")
+		check(upgrade(g2, ctx, "factory").ok, "15. ampliación de la fábrica con el lote en curso")
+		eq(moneyLot - g2.money, nxf.cost, "15. solo se cobra la obra")
+		Simulation.simulate(g2, ctx, 200)
+		check(close(Rules.lineRate(g2), rate1), "15. durante la obra rige el nivel actual (" .. Util.num(Rules.lineRate(g2), 1) .. "/min)")
+		finishBuild(g2, ctx, "factory")
+		eq(g2.facilities.factory, 2, "16. fábrica nivel 2")
+		check(close(Rules.lineRate(g2), rate1 * F.factory.levels[2].perLine / F.factory.levels[1].perLine), "16. autos por minuto por línea: " .. Util.num(rate1, 1) .. " → " .. Util.num(Rules.lineRate(g2), 1))
+		check(close(Rules.caps(g2).capacity, cap1 * 25 / 15), "16. capacidad total: " .. Util.num(cap1, 1) .. " → " .. Util.num(Rules.caps(g2).capacity, 1))
+		check(lot.unitCost == unit and lot.qty == qty, "15. el lote conserva su costo por unidad y su cantidad")
+		for _ = 1, 5000 do
+			if lot.produced >= lot.qty then
+				break
+			end
+			Simulation.simulate(g2, ctx, 10)
+		end
+		Simulation.simulate(g2, ctx, 600)
+		eq(lot.produced, qty, "17. se fabrican exactamente las unidades pedidas")
+		eq(g2.counters.unitsProduced, qty, "17. sin unidades duplicadas en los contadores")
+		eq(lot.costSpent, spent, "15. sin cobros extra por la ampliación (el lote se pagó al crearlo)")
+		local count = 0
+		for _, l in g2.lots do
+			if l.designId == dd then
+				count += 1
+			end
+		end
+		eq(count, 1, "17. un solo lote, sin duplicados")
+		check(facilitiesImpossible(g2) == nil, "sin estados imposibles")
+	end)
+
+	test("[IS3] Investigación 18–20: PI de cada nivel del centro, obra pendiente sin beneficio, bonos una sola vez", function()
+		local ctx = makeCtx(83)
+		-- 18. PI por nivel (con una línea fabricando suma 2 por línea, igual en todos los niveles).
+		local want = { 3, 8, 20, 45, 90 }
+		for lvl = 1, 5 do
+			local g = newCompany("Centro " .. lvl .. " IS3")
+			g.facilities.research = lvl
+			eq(Rules.piPerMinute(g), want[lvl], "18. centro nivel " .. lvl .. ": " .. want[lvl] .. " PI/min")
+			g.rp = 0
+			Simulation.simulate(g, ctx, Catalog.RULES.minutesPerRealSecond * 60)
+			check(close(g.rp, want[lvl]), "18. un minuto real a 1× = " .. Util.num(g.rp, 2) .. " PI")
+		end
+		-- 20. Progresión al mejorar: la obra pendiente no adelanta el beneficio; al terminar, el nivel nuevo.
+		local g = newCompany("Progresion IS3")
+		g.money = 1e10
+		local rows = {}
+		for lvl = 2, 5 do
+			meetOffices(g, lvl)
+			check(upgrade(g, ctx, "offices").ok, "oficinas " .. lvl)
+			finishBuild(g, ctx, "offices")
+			local before = Rules.piPerMinute(g)
+			local nx = Rules.nextFacility(g, "research")
+			check(upgrade(g, ctx, "research").ok, "20. obra del centro " .. lvl)
+			Simulation.simulate(g, ctx, 300)
+			eq(Rules.piPerMinute(g), before, "20. durante la obra sigue en " .. before .. " PI/min")
+			finishBuild(g, ctx, "research")
+			eq(Rules.piPerMinute(g), want[lvl], "20. al terminar: " .. want[lvl] .. " PI/min")
+			table.insert(rows, string.format("nivel %d → %d: %d → %d PI/min (%d → %d PI por hora a 1×), %s, %d días", lvl - 1, lvl, before, want[lvl], before * 60, want[lvl] * 60, Util.money(nx.cost), nx.days))
+		end
+		for _, l in rows do
+			print("      " .. l)
+		end
+		-- 19. Personal y mobiliario: un solo camino (Rules.staff) para obras, mantenimiento y costos.
+		local h = newCompany("Bonos IS3")
+		placeN(h, "escritorio_metal_1970", 1) -- organización
+		placeN(h, "maquina_escribir_1970", 1) -- finanzas
+		placeN(h, "mesa_reuniones_1970", 1) -- gestión
+		local org, fin, gest = Rules.staff(h, "organizacion"), Rules.staff(h, "finanzas"), Rules.staff(h, "gestion")
+		check(org > 0 and fin > 0 and gest > 0, "19. los tres bonos activos")
+		check(close(Rules.buildSpeed(h), 1 + org), "19. obras: 1 + organización (una vez)")
+		h.facilities.invested = 1000000
+		eq(Rules.maintenance(h), Util.round(1000000 * F.maintenanceRate * (1 - fin)), "19. mantenimiento con finanzas (una vez)")
+		h.money = 1e7
+		local nx = Rules.nextFacility(h, "line2")
+		eq(nx.cost, Util.round(F.line2.cost * (1 - gest) / 100) * 100, "19. costo con gestión (una vez)")
+		local m0 = h.money
+		check(upgrade(h, ctx, "line2").ok, "obra")
+		eq(m0 - h.money, nx.cost, "19. se cobra el costo con el descuento")
+		-- El costo y la duración se fijan al empezar: más bonos después no cambian la obra.
+		local b = build(h, "line2")
+		local cost0, days0 = b.cost, b.days
+		placeN(h, "mesa_reuniones_1970", 2)
+		placeN(h, "escritorio_metal_1970", 2)
+		check(b.cost == cost0 and b.days == days0, "19. la obra iniciada no se recalcula")
+		check(Rules.buildSpeed(h) > 1 + org, "19. la organización solo acelera el avance diario desde ahora")
+		check(Rules.staff(h, "conocimiento") == 0 and Rules.piPerMinute(h) == 3, "19. las obras no tocan los PI por minuto")
+	end)
+
+	test("[IS4] Oficinas 21–28: planos 1→5, muebles, inventario, acabados, bonos, navegación y amigos", function()
+		local ctx = makeCtx(85)
+		ctx.friends = FI.roster({ status = "ok", complete = true, list = friendsList(40) })
+		local g = newCompany("Oficinas IS4")
+		g.money = 1e10
+		local o = g.office
+		-- Muebles colocados con el servidor (del inventario y comprados) y algo guardado.
+		check(OfficeService8.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 5, y = 2.5, rot = 0 }).ok, "escritorio inicial")
+		check(OfficeService8.place(g, { item = "silla_oficina_1970", room = "oficina_principal", x = 5.5, y = 3.5, rot = 0 }).ok, "silla inicial")
+		check(OfficeService8.place(g, { item = "escritorio_metal_1970", room = "oficina_principal", x = 8, y = 2.5, rot = 0 }).ok, "escritorio comprado")
+		-- Un mueble en un lugar válido en el plano 1 que queda en el paso de la puerta del plano 2.
+		local evictItem, evictSpot = nil, nil
+		for _, it in OfficeCatalog8.FURNITURE do
+			if not evictItem and Office8.available(it, Rules.year(g)) then
+				for x = 0, 9, 0.5 do
+					for y = 0, 7, 0.5 do
+						if not evictItem then
+							local spot = { room = "oficina_principal", x = x, y = y, rot = 0 }
+							local ok1 = Office8.validatePlacement(o, it, spot)
+							local ok2 = Office8.validatePlacement({ level = 2, placed = o.placed }, it, spot)
+							if ok1 and not ok2 then
+								evictItem, evictSpot = it, spot
+							end
+						end
+					end
+				end
+			end
+		end
+		check(evictItem ~= nil, "hay un lugar válido en el plano 1 que el plano 2 usa de paso")
+		local moneyBeforeEvict = g.money
+		local rev = OfficeService8.place(g, { item = evictItem.id, room = evictSpot.room, x = evictSpot.x, y = evictSpot.y, rot = 0 })
+		check(rev.ok, "mueble que va a quedar en el paso: " .. tostring(rev.msg))
+		local moneyAfterBuy = g.money
+		Office8.addToInventory(o, "silla_oficina_1970", 2)
+		o.finishes.oficina_principal = { floor = OfficeCatalog8.DEFAULT_FINISH.floor, wall = OfficeCatalog8.DEFAULT_FINISH.wall, covering = OfficeCatalog8.DEFAULT_FINISH.covering, lighting = OfficeCatalog8.DEFAULT_FINISH.lighting, custom = true }
+		local function totals(): { [string]: number }
+			local t = {}
+			for _, pl in o.placed do
+				t[pl.item] = (t[pl.item] or 0) + 1
+			end
+			for item, n in o.inventory do
+				t[item] = (t[item] or 0) + n
+			end
+			return t
+		end
+		local own0 = totals()
+		local placedIds = {}
+		for _, pl in o.placed do
+			placedIds[pl.id] = true
+		end
+		-- Personal con amigos antes de ampliar.
+		for _ = 1, 3 do
+			check(hire(g, ctx).ok, "contrata (límite 3)")
+		end
+		check(not hire(g, ctx).ok, "28. el límite de las oficinas 1 es 3")
+		local friendsBefore = {}
+		for _, e in g.employees do
+			friendsBefore[e.id] = e.friend and e.friend.userId
+		end
+		local roomsWant = { 1, 2, 3, 4, 5 }
+		for lvl = 2, 5 do
+			meetOffices(g, lvl)
+			local rev0 = o.rev
+			local org0 = Rules.staff(g, "organizacion")
+			check(upgrade(g, ctx, "offices").ok, "2" .. lvl - 1 .. ". obra de oficinas " .. lvl)
+			eq(o.level, lvl - 1, "el plano no cambia antes de terminar")
+			finishBuild(g, ctx, "offices")
+			g.office = g.office -- (misma tabla)
+			eq(g.sede, lvl, "22. oficinas nivel " .. lvl)
+			eq(o.level, lvl, "21/22. el plano pasa al nivel " .. lvl)
+			eq(#OfficeCatalog8.plan(lvl).rooms, roomsWant[lvl], "21. habitaciones del plano " .. lvl)
+			check(o.rev > rev0, "el plano nuevo cambia la revisión (descarta borradores viejos)")
+			-- 23–24. Nada se pierde ni se duplica: colocado + guardado = lo que había.
+			local own = totals()
+			for item, n in own0 do
+				eq(own[item] or 0, n, "23/24. " .. item .. " conservado en el nivel " .. lvl)
+			end
+			local ids = {}
+			for _, pl in o.placed do
+				check(not ids[pl.id], "23. sin muebles duplicados")
+				ids[pl.id] = true
+				check(OfficeCatalog8.room(lvl, pl.room) ~= nil, "23. cada mueble en una habitación del plano")
+			end
+			-- 25. Acabados compatibles conservados; habitaciones nuevas con el de serie.
+			check(o.finishes.oficina_principal and o.finishes.oficina_principal.custom == true, "25. la oficina principal conserva su acabado")
+			for _, rm in OfficeCatalog8.plan(lvl).rooms do
+				check(o.finishes[rm.id] ~= nil, "25. acabado para " .. rm.id)
+			end
+			-- 26. Bonos recalculados desde lo colocado (lo guardado no suma).
+			check(close(Office8.furnitureRaw(o, "organizacion"), Office8.furnitureRaw({ level = o.level, placed = o.placed }, "organizacion")), "26. bono desde lo colocado")
+			check(Rules.staff(g, "organizacion") <= org0 + 1e-9, "26. ampliar no inventa bonos")
+			-- 27. Navegación: grilla para cada habitación del plano nuevo, con el tamaño nuevo.
+			for _, rm in OfficeCatalog8.plan(lvl).rooms do
+				local grid = Nav8.grid(o, rm.id)
+				check(grid ~= nil and grid.room.w == rm.w and grid.room.d == rm.d, "27. grilla de " .. rm.id .. " (" .. rm.w .. "×" .. rm.d .. ")")
+			end
+			local newRoom = OfficeCatalog8.plan(lvl).rooms[#OfficeCatalog8.plan(lvl).rooms]
+			local grid = Nav8.grid(o, newRoom.id)
+			local path = Nav8.findPath(grid, 1.5, 1.5, newRoom.w - 1.5, newRoom.d - 1.5)
+			check(path ~= nil and #path >= 1, "27. se puede caminar por " .. newRoom.id)
+			-- 28. Amigos: siguen asignados; el límite nuevo deja contratar más, con amigo.
+			for _, e in g.employees do
+				if friendsBefore[e.id] then
+					eq(e.friend and e.friend.userId, friendsBefore[e.id], "28. el empleado conserva su amigo")
+				end
+			end
+			eq(Rules.caps(g).staff, Catalog.SEDES[lvl].staff, "límite global de empleados del nivel " .. lvl)
+			local hr = hire(g, ctx)
+			check(hr.ok and g.employees[#g.employees].friend ~= nil, "28. con más lugar se contrata otro amigo")
+			friendsBefore[g.employees[#g.employees].id] = g.employees[#g.employees].friend.userId
+			local ids2 = {}
+			for _, e in g.employees do
+				table.insert(ids2, e.id)
+			end
+			local okReq = FI.avatarRequest(g, { ids2[1], ids2[#ids2] })
+			check(okReq ~= nil and #okReq >= 1, "28. los avatares de los amigos se siguen pidiendo")
+			check(facilitiesImpossible(g) == nil, "sin estados imposibles en el nivel " .. lvl)
+		end
+		-- Política segura: el mueble que quedó en el paso volvió al inventario, sin reembolso.
+		local stillPlaced = false
+		for _, pl in o.placed do
+			stillPlaced = stillPlaced or pl.id == rev.instance
+		end
+		check(not stillPlaced, "el mueble del paso volvió al inventario")
+		check(moneyBeforeEvict > moneyAfterBuy or rev.fromInventory, "lo había pagado o era del inventario")
+		eq(Office8.count(o, evictItem.id) >= 1, true, "está en el inventario")
+		-- Los colocados que seguían siendo válidos conservan su id.
+		local kept = 0
+		for _, pl in o.placed do
+			if placedIds[pl.id] then
+				kept += 1
+			end
+		end
+		check(kept >= 3, "21. los muebles válidos siguen en su lugar (" .. kept .. ")")
+	end)
+
+	test("[IS5] Integración 29–36: pausa, velocidades, empresas, guardado en obra, cobros, estados imposibles y partidas viejas", function()
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "IS5", clock)
+		local p = { UserId = 8501 }
+		mgr:add(p)
+		local g = playThrough(mgr, p).game
+		g.money = 1e7
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "upgradeFacility", { kind = "line2", requestId = rid() }).ok, "obra")
+		local b = build(g, "line2")
+		-- 30. Velocidades: un día de obra cada 2 s a 1×, el doble a 2× y el triple a 3×, sin saltos.
+		for _, sp in { 1, 2, 3, 1 } do
+			clock.c += Sessions.RATE_WINDOW
+			check(mgr:request(p, "setSpeed", { speed = sp, requestId = rid() }).ok, sp .. "×")
+			local p0 = b.progress
+			ticks(mgr, clock, 4)
+			check(close(b.progress - p0, 2 * sp), "30. a " .. sp .. "× en 4 s: +" .. Util.num(b.progress - p0, 2) .. " días")
+		end
+		-- 29. Pausa por menú y al salir se reanuda.
+		check(mgr:request(p, "setUiPause", { paused = true }).ok, "menú")
+		local pp = b.progress
+		ticks(mgr, clock, 30)
+		eq(b.progress, pp, "29. con un menú abierto la obra no avanza")
+		check(mgr:request(p, "setUiPause", { paused = false }).ok, "cierra el menú")
+		ticks(mgr, clock, 2)
+		check(close(b.progress - pp, 1), "29. al salir sigue al mismo ritmo")
+		-- 31. Otra empresa: sus obras son suyas y la primera no avanza mientras no está abierta.
+		check(mgr:request(p, "leaveCompany", {}).ok, "menú de empresas")
+		local frozen = b.progress
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "createCompany", { slot = "2", name = "Otra IS5", color = Catalog.BRAND_COLORS[3][1], logo = "pico" }).ok, "segunda empresa")
+		local g2 = mgr.list[p].game
+		check(#g2.facilities.builds == 0 and not Rules.ownsLine(g2, 2), "31. la segunda empresa no tiene la obra")
+		ticks(mgr, clock, 30)
+		g2.money = 1e7
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "upgradeFacility", { kind = "line2", requestId = rid() }).ok, "31. obra propia en la segunda")
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar")
+		check(mgr:request(p, "selectSlot", { slot = "1" }).ok, "volver a la primera")
+		local g1 = mgr.list[p].game
+		local b1 = build(g1, "line2")
+		check(b1 ~= nil and close(b1.progress, frozen), "31/32. la obra de la primera no avanzó ni cambió (" .. Util.num(b1.progress, 2) .. ")")
+		-- 33. Economía sin cobros duplicados: los cobros de obras = lo invertido.
+		local n, sum = sedeCharges(g1)
+		check(n == 1 and sum == g1.facilities.invested, "33. un cobro por obra, igual a lo invertido")
+		-- 35. Estados imposibles: pedidos al azar (válidos y no) durante 300 segundos.
+		local rnd = seeded(808)
+		local kinds = { "offices", "factory", "research", "line2", "line3", "bogus" }
+		g1.money = 1e12
+		g1.counters.unitsSold, g1.reputation = 200000, 5
+		local bad = nil
+		for step = 1, 300 do
+			if rnd() < 0.3 then
+				clock.c += Sessions.RATE_WINDOW
+				local k = kinds[1 + math.floor(rnd() * #kinds)]
+				local m0 = g1.money
+				local r = mgr:request(p, "upgradeFacility", { kind = k, requestId = rid() })
+				if not r.ok and g1.money ~= m0 then
+					bad = bad or ("cobró una obra rechazada (" .. k .. ")")
+				end
+			end
+			ticks(mgr, clock, 1)
+			bad = bad or facilitiesImpossible(g1)
+			if bad then
+				bad = "paso " .. step .. ": " .. bad
+				break
+			end
+		end
+		check(bad == nil, "35. sin estados imposibles (" .. tostring(bad) .. ")")
+		local n2, sum2 = sedeCharges(g1)
+		check(sum2 == g1.facilities.invested, "33. lo cobrado por obras = lo invertido (" .. n2 .. " obras)")
+		-- 36. Partida vieja: obras sin `from` ni `startDay` siguen siendo válidas y se muestran.
+		local old = newCompany("Vieja IS5")
+		old.sede = 2
+		table.insert(old.facilities.builds, { id = "b-old", kind = "factory", level = 2, progress = 10, days = 45, cost = 200000 })
+		local back = jsonCopy(old)
+		check(GameState.validate(back), "36. obra sin origen: válida")
+		local bi = Rules.buildInfo(back, back.facilities.builds[1])
+		check(bi.from == 1 and bi.to == 2 and bi.paid == 200000 and close(bi.pct, 10 / 45) and bi.state == "en obra", "36. origen deducido, pagado y avance")
+		local broken = jsonCopy(old)
+		broken.facilities.builds[1].from = 3
+		check(not GameState.validate(broken), "36. un origen incoherente se rechaza")
+	end)
+
+	test("[IS6] Crecimiento visual provisional: niveles, líneas, obras, sin superponerse y reemplazable por modelos", function()
+		local base = { factory = 1, research = 1, offices = 1, lines = { true, false, false }, building = {} }
+		local function find(groups: { any }, id: string): any
+			for _, gr in groups do
+				if gr.id == id then
+					return gr
+				end
+			end
+			return nil
+		end
+		local l1 = Visuals.layout(base)
+		eq(#find(l1, "fabrica").parts, 0, "garaje nivel 1: sin agregados")
+		check(find(l1, "linea2").owned == false and find(l1, "linea3").owned == false, "líneas 2 y 3: solo el lugar marcado")
+		check(find(l1, "linea2").asset == nil, "sin modelo para una línea que no es tuya")
+		local prevH, prevO, prevF = 0, 0, -1
+		for lvl = 1, 5 do
+			local st = { factory = lvl, research = lvl, offices = lvl, lines = { true, true, true }, building = {} }
+			local gr = Visuals.layout(st)
+			local lab, off, fab = find(gr, "investigacion"), find(gr, "oficinas"), find(gr, "fabrica")
+			check(lab.height > prevH and off.height > prevO and #fab.parts > prevF, "nivel " .. lvl .. ": más pisos, torre más alta y nave más grande")
+			prevH, prevO, prevF = lab.height, off.height, #fab.parts
+			eq(lab.asset, "CentroInvestigacion" .. lvl, "modelo reemplazable del centro " .. lvl)
+			eq(off.asset, "Oficinas" .. lvl, "modelo reemplazable de las oficinas " .. lvl)
+			eq(fab.asset, "NaveFabrica" .. lvl, "modelo reemplazable de la nave " .. lvl)
+			-- Dentro de la parcela (o detrás de la pared del fondo) y sin pisar lo que ya hay al nivel del piso.
+			for _, g0 in gr do
+				for _, pt in g0.parts do
+					local x0, x1 = pt.pos[1] - pt.size[1] / 2, pt.pos[1] + pt.size[1] / 2
+					local z0, z1 = pt.pos[3] - pt.size[3] / 2, pt.pos[3] + pt.size[3] / 2
+					check(x0 >= -45.5 and x1 <= 45.5 and z1 <= 35.5 and z0 >= -60, g0.id .. "/" .. pt.name .. " dentro del terreno")
+					if pt.pos[2] - pt.size[2] / 2 < 6 and z0 > -35 then
+						for _, rz in Visuals.RESERVED do
+							local overlap = x0 < rz.x1 - 0.01 and x1 > rz.x0 + 0.01 and z0 < rz.z1 - 0.01 and z1 > rz.z0 + 0.01
+							check(not overlap, g0.id .. "/" .. pt.name .. " no pisa «" .. rz.name .. "»")
+						end
+					end
+				end
+			end
+		end
+		-- Línea 3 sin la 2: cinta en la 3, marca en la 2.
+		local only3 = Visuals.layout({ factory = 1, research = 1, offices = 1, lines = { true, false, true }, building = {} })
+		check(find(only3, "linea3").owned and not find(only3, "linea2").owned, "línea 3 sin la 2: se dibuja la 3 y el lugar de la 2")
+		-- Obra en curso: andamio; la clave cambia con cada nivel, línea u obra.
+		local b2 = Visuals.layout({ factory = 2, research = 1, offices = 2, lines = { true, false, false }, building = { factory = true, line2 = true } })
+		check(find(b2, "obra_fabrica") ~= nil and find(b2, "obra_linea2") ~= nil and find(b2, "obra_oficinas") == nil, "andamios en las obras en curso, solo ahí")
+		local k1 = Visuals.key(base)
+		check(Visuals.key({ factory = 2, research = 1, offices = 1, lines = { true, false, false }, building = {} }) ~= k1, "la clave cambia con el nivel")
+		check(Visuals.key({ factory = 1, research = 1, offices = 1, lines = { true, true, false }, building = {} }) ~= k1, "la clave cambia con una línea")
+		check(Visuals.key({ factory = 1, research = 1, offices = 1, lines = { true, false, false }, building = { research = true } }) ~= k1, "la clave cambia con una obra")
+		eq(serde.encode("json", Visuals.layout(base)), serde.encode("json", l1), "determinista")
+		-- Desde una partida real.
+		local g = newCompany("Visual IS6")
+		local st = Visuals.state(g, Rules)
+		check(st.factory == 1 and st.offices == 1 and st.lines[1] and not st.lines[2], "estado visual de una empresa nueva")
+	end)
+
+	test("[IS7] Recorrido de crecimiento con la economía real (bot 1970 → 2030): de garaje a nivel máximo", function()
+		local log = longGame()
+		local g = log.g
+		eq(g.sede, 5, "oficinas al máximo")
+		eq(g.facilities.factory, 5, "fábrica al máximo")
+		eq(g.facilities.research, 5, "centro al máximo")
+		check(Rules.ownsLine(g, 2), "línea 2 comprada")
+		local paid = 0
+		local last = { offices = 1, factory = 1, research = 1 }
+		print("      Obras del bot (año de inicio → fin · costo · minutos reales a 1×):")
+		for _, b in log.builds do
+			eq(b.moneyBefore - b.moneyAfter, b.cost, "cobro exacto de " .. b.kind .. " " .. b.level)
+			paid += b.cost
+			check(b.finishMin ~= nil and b.finishMin >= b.startMin, b.kind .. " " .. b.level .. " terminó")
+			if b.kind ~= "line2" then
+				eq(b.level, last[b.kind] + 1, b.kind .. ": niveles en orden")
+				last[b.kind] = b.level
+				if b.kind ~= "offices" then
+					local off = 1
+					for _, x in log.builds do
+						if x.kind == "offices" and x.finishMin and x.finishMin <= b.startMin then
+							off = math.max(off, x.level)
+						end
+					end
+					check(off >= b.level, b.kind .. " " .. b.level .. " empezó con oficinas de nivel " .. off)
+				end
+			end
+			print(string.format("        %-8s %d  %d → %s  %14s  %6.1f → %6.1f min", b.kind, b.level, b.startYear, tostring(b.finishYear), Util.money(b.cost), b.startMin, b.finishMin or -1))
+		end
+		eq(g.facilities.invested, paid, "lo invertido = lo cobrado por todas las obras")
+		eq(#log.builds, 4 + 4 + 4 + 1, "13 obras: 4 de oficinas, 4 de fábrica, 4 del centro y la línea 2")
+		check(facilitiesImpossible(g) == nil, "sin estados imposibles al final")
+	end)
+end
+
 T.finish()
 Build.clean()
 process.exit(T.failed == 0 and 0 or 1)

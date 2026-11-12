@@ -18,6 +18,7 @@ local Util = require(Shared.Util)
 local CarModel = require(Shared.CarModel)
 local Rules = require(Shared.Rules)
 local OwnerAvatar = require(script.Parent.OwnerAvatar)
+local FacilityVisuals = require(Shared.FacilityVisuals)
 
 local Garage = {}
 Garage.__index = Garage
@@ -251,6 +252,7 @@ function Garage:buildPlot(i: number, company: any)
 	plot.sig = nil
 	plot.sedeLevel, plot.sedeModel = nil, nil
 	plot.officeLevel = nil
+	plot.growthKey, plot.growth, plot.lineLabels = nil, nil, {}
 	local brand = Color3.fromHex(company.color)
 
 	self:plotPart(i, "Piso", Vector3.new(PLOT_W, 0.4, PLOT_D), CFrame.new(0, 0.2, 0), C.floor, { Material = Enum.Material.Concrete })
@@ -462,6 +464,87 @@ function Garage:removeAvatar(i: number)
 	end
 end
 
+-- Modelo definitivo de un grupo de instalaciones, si ya existe (ServerStorage.CarEmpireAssets.Instalaciones).
+local function growthAsset(name: string?): Model?
+	if not name then
+		return nil
+	end
+	local ok, asset = pcall(function()
+		local folder = game:GetService("ServerStorage"):FindFirstChild("CarEmpireAssets")
+		local inst = folder and folder:FindFirstChild("Instalaciones")
+		return inst and inst:FindFirstChild(name)
+	end)
+	return (ok and asset and asset:IsA("Model")) and asset :: Model or nil
+end
+
+--[[ Crecimiento visible de las instalaciones (shared/FacilityVisuals): líneas 2 y 3, nave de la fábrica, centro
+	de investigación, torre de oficinas y andamios de las obras en curso. Se reconstruye solo cuando cambia
+	algún nivel, línea u obra. Con un edificio de fábrica definitivo (Sedes.<asset>) la nave provisional no se
+	dibuja: ese modelo ya la representa. ]]
+function Garage:applyGrowth(i: number, g: any)
+	local plot = self.plots[i]
+	if not plot.model then
+		return
+	end
+	local st = FacilityVisuals.state(g, Rules)
+	local key = FacilityVisuals.key(st) .. (plot.sedeModel and "|S" or "")
+	if plot.growthKey == key then
+		return
+	end
+	plot.growthKey = key
+	if plot.growth then
+		plot.growth:Destroy()
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "Crecimiento"
+	folder.Parent = plot.model
+	plot.growth = folder
+	plot.lineLabels = {}
+	local names = { research = Rules.researchCenter(g).name, offices = Rules.sede(g).office }
+	for _, grp in FacilityVisuals.layout(st, names) do
+		if not (grp.id == "fabrica" and plot.sedeModel) then
+			local holder = Instance.new("Model")
+			holder.Name = grp.id
+			holder:SetAttribute("nivel", grp.level)
+			holder.Parent = folder
+			local asset = growthAsset(grp.asset)
+			if asset then
+				local m = asset:Clone()
+				m:PivotTo(plot.cf * CFrame.new(grp.anchor[1], grp.anchor[2], grp.anchor[3]))
+				m.Parent = holder
+			else
+				for _, p in grp.parts do
+					local props: { [string]: any } = { CanCollide = false, CanQuery = false, CanTouch = false, Transparency = p.transparency or 0 }
+					if p.neon then
+						props.Material = Enum.Material.Neon
+					end
+					if p.shape == "Ball" then
+						props.Shape = Enum.PartType.Ball
+					end
+					block(holder, p.name, Vector3.new(p.size[1], p.size[2], p.size[3]), plot.cf * CFrame.new(p.pos[1], p.pos[2], p.pos[3]), Color3.fromHex(p.color), props)
+				end
+			end
+			if grp.label then
+				local anchor = block(holder, "Cartel_" .. grp.id, Vector3.new(0.2, 0.2, 0.2), plot.cf * CFrame.new(grp.label.pos[1], grp.label.pos[2], grp.label.pos[3]), C.dark, { Transparency = 1, CanCollide = false, CanQuery = false, CanTouch = false })
+				local t = label(anchor, grp.label.text, UDim2.fromOffset(300, 36), Vector3.new(0, 1, 0), Color3.fromHex(grp.label.color))
+				if grp.line and grp.owned then
+					plot.lineLabels[grp.line] = t
+				end
+			end
+		end
+	end
+end
+
+-- Texto del cartel de una línea: el lote que fabrica o «libre».
+local function lineText(g: any, n: number): string
+	local lot = Rules.lineLot(g, n)
+	if not lot then
+		return n == 1 and "🏭  Línea 1 · libre · lanzá un lote" or ("🏭  Línea " .. n .. " · libre")
+	end
+	return string.format("🏭  Línea %d · %s · %s de %s%s", n, lot.design.name, Util.num(lot.produced), Util.num(lot.qty), lot.prodState == "sin fondos" and " · sin fondos" or (" · " .. Util.num(Rules.lineRate(g), 1) .. "/min"))
+end
+Garage._lineText = lineText
+
 function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	local i = self.byPlayer[player]
 	if not i then
@@ -483,14 +566,14 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 	if not plot.dynamic then
 		return
 	end
-	local producing = Rules.producingLots(g)
-	local current = producing[1]
-	-- Texto de la línea (se actualiza cada segundo).
+	self:applyGrowth(i, g)
+	-- Texto de cada línea (se actualiza cada segundo): la 1 del garaje base, la 2 y la 3 del crecimiento.
 	if plot.lineLabel then
-		if current then
-			plot.lineLabel.Text = string.format("🏭  %s · %s de %s%s", current.design.name, Util.num(current.produced), Util.num(current.qty), current.prodState == "sin fondos" and " · sin fondos" or (" · " .. Util.num(Rules.lineRate(g), 1) .. "/min"))
-		else
-			plot.lineLabel.Text = "🏭  Fábrica libre · lanzá un lote"
+		plot.lineLabel.Text = lineText(g, 1)
+	end
+	for n, t in plot.lineLabels or {} do
+		if t.Parent then
+			t.Text = lineText(g, n)
 		end
 	end
 
@@ -510,8 +593,13 @@ function Garage:update(player: Player, g: any, refreshSign: boolean?)
 		return car
 	end
 
-	if current then
-		place(current.design.spec, CFrame.new(2, 1.6, -20) * CFrame.Angles(0, math.pi / 2, 0), true)
+	-- Un auto en fabricación sobre cada línea ocupada (la 1 en el garaje base; la 2 y la 3 en su cinta).
+	for n = 1, Catalog.FACILITIES.maxLines do
+		local lot = Rules.lineLot(g, n)
+		if lot and Rules.ownsLine(g, n) then
+			local z = n == 1 and -20 or FacilityVisuals.LINE_Z[n]
+			place(lot.design.spec, CFrame.new(n == 1 and 2 or 0, 1.6, z) * CFrame.Angles(0, math.pi / 2, 0), true)
+		end
 	end
 	-- Stock: un auto representativo por modelo con unidades terminadas (máximo 6).
 	local slot = 0

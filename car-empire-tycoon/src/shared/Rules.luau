@@ -203,6 +203,31 @@ function Rules.lineCount(g: any): number
 	return n
 end
 
+-- Clave del estado de las instalaciones (niveles, líneas y obras en curso): cambia cuando termina una obra.
+function Rules.facilitiesKey(g: any): string
+	local f = type(g.facilities) == "table" and g.facilities or {}
+	return table.concat({ tostring(g.sede or 1), tostring(f.factory or 1), tostring(f.research or 1), tostring(Rules.ownsLine(g, 2)), tostring(Rules.ownsLine(g, 3)), tostring(#(f.builds or {})) }, "|")
+end
+
+--[[ Una obra en curso, para mostrarla: instalación, nivel de origen y de destino, lo pagado, días totales,
+	avance, días que faltan con la velocidad actual y estado. Las obras guardadas antes de esta versión no
+	tienen `from`: se deduce (el destino menos uno). ]]
+function Rules.buildInfo(g: any, b: any): any
+	local from = tonumber(b.from) or math.max(1, (tonumber(b.level) or 2) - 1)
+	local left = math.max(0, b.days - b.progress) / Rules.buildSpeed(g)
+	return {
+		kind = b.kind,
+		from = from,
+		to = b.level,
+		paid = tonumber(b.cost) or 0,
+		days = b.days,
+		progress = b.progress,
+		pct = b.days > 0 and math.clamp(b.progress / b.days, 0, 1) or 1,
+		daysLeft = left,
+		state = b.progress >= b.days - 1e-9 and "terminada" or "en obra",
+	}
+end
+
 -- Obra en curso de una instalación (o nil).
 function Rules.build(g: any, kind: string): any
 	for _, b in (type(g.facilities) == "table" and g.facilities.builds) or {} do

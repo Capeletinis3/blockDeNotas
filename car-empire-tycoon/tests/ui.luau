@@ -1828,7 +1828,7 @@ test("Instalaciones: relaciones reales (oficinas, capacitaciones, fábrica, cent
 	local Staff = require("./.build-ui/shared/Staff")
 	local g = App.g
 	local oi = FV.info(g, "offices")
-	eq(oi.current[1][2], tostring(g.derived.caps.staff), "oficinas: límite de empleados = el de la simulación")
+	eq(oi.current[1][2], #g.employees .. " de " .. tostring(g.derived.caps.staff), "oficinas: ocupación y límite de empleados = los de la simulación")
 	if oi.next then
 		local nx = Catalog.SEDES[Rules.officeLevel(g) + 1]
 		eq(oi.compare[1][3], tostring(nx.staff), "oficinas: el próximo nivel sube el límite global")
@@ -3182,6 +3182,104 @@ test("Investigación (etapa 7): tarjeta completa, tipo de efecto, estados, franj
 	App.go("juego")
 	M.task.wait()
 	noErrors("Investigación etapa 7")
+end)
+
+test("Instalaciones (etapa 8): comparación antes/después con valores reales, obra en curso y motivos sin mejora", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local Office = require("./.build-ui/shared/Office")
+	local OfficeCatalog = require("./.build-ui/shared/OfficeCatalog")
+	local Util8 = require("./.build-ui/shared/Util")
+	local FV = require("./.build-ui/client/FacilitiesView")
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	local sg = sess.game
+	sg.money = 1e9
+	sg.sede = 2
+	Office.remap(sg.office, 2)
+	sg.facilities.factory, sg.facilities.research = 1, 1
+	sg.facilities.lines["2"] = nil
+	sg.facilities.builds = {}
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 1e9 and App.g.sede == 2
+	end)
+	App.go("compania")
+	local function open(kind: string): string
+		App.ui.facSel = kind
+		App.forceRender()
+		M.task.wait()
+		local c = named("DetalleInstalacion")
+		return c and table.concat(M.texts(c), " | ") or ""
+	end
+	local function has(t: string, parts: { string }, what: string)
+		for _, p in parts do
+			if not string.find(t, p, 1, true) then
+				check(false, what .. ": falta «" .. p .. "» en " .. t)
+				return
+			end
+		end
+		check(true, what)
+	end
+	-- Centro: 3 → 8 PI/min (centro) y el total con las líneas.
+	local t = open("research")
+	local ri = FV.info(App.g, "research")
+	eq(ri.compare[1][2] .. "→" .. ri.compare[1][3], "3→8", "centro: 3 → 8 PI/min del catálogo")
+	local total = Rules.piPerMinute(App.g)
+	eq(ri.compare[2][3], Util8.num(total - 3 + 8, 1), "centro: total después = total − centro actual + centro nuevo")
+	has(t, { "PI por minuto (centro)", "PI por minuto en total", "PI por hora de juego a 1×", "Mantenimiento mensual (máximo)", "Costo", "Duración", "REQUISITOS" }, "centro: comparación, costo, duración y requisitos")
+	local nx = Rules.nextFacility(App.g, "research")
+	eq(ri.compare[#ri.compare][3], Util8.money(FV.maintenanceAfter(App.g, nx.cost)), "mantenimiento después = (invertido + costo) × tasa")
+	-- Fábrica: autos por minuto por línea y capacidad total.
+	t = open("factory")
+	local fi = FV.info(App.g, "factory")
+	has(t, { "Autos por minuto por línea", "Capacidad total", "Calidad de fábrica", "Costo por unidad" }, "fábrica: comparación")
+	local caps = App.g.derived.caps
+	eq(fi.compare[2][3], Util8.num(caps.perLine * 25 / 15 * caps.lines, 1) .. "/min", "fábrica: capacidad después con las líneas actuales")
+	-- Oficinas: habitaciones y superficie del plano siguiente.
+	t = open("offices")
+	local oi = FV.info(App.g, "offices")
+	local rooms3 = #OfficeCatalog.plan(3).rooms
+	local found = false
+	for _, r in oi.compare do
+		if r[1] == "Habitaciones de la oficina" then
+			found = r[2] == "2" and r[3] == tostring(rooms3)
+		end
+	end
+	check(found, "oficinas: 2 → " .. rooms3 .. " habitaciones")
+	has(t, { "Fábrica y centro hasta nivel", "Superficie de la oficina", "Límite global de empleados" }, "oficinas: comparación")
+	-- Obra en curso: niveles, lo pagado y el avance; sin botón.
+	check(App.request("upgradeFacility", { kind = "research" }).ok, "obra del centro")
+	waitFor(function()
+		return #App.g.facilities.builds == 1
+	end)
+	t = open("research")
+	has(t, { "OBRA EN CURSO", "Nivel 1 → 2 · pagado " .. Util8.money(nx.cost), "Ya hay una obra en curso" }, "obra en curso con origen, destino y lo pagado")
+	local during = FV.info(App.g, "research")
+	eq(during.compare[#during.compare][3], during.compare[#during.compare][2], "durante la obra el mantenimiento no cuenta dos veces lo ya pagado")
+	check(named("Mejorar_research") == nil, "sin botón durante la obra")
+	eq(FV.info(App.g, "research").compare[1][2], "3", "durante la obra rige el nivel actual")
+	-- Nivel máximo: explica por qué no hay mejora.
+	sg.facilities.builds = {}
+	sg.facilities.factory = 5
+	sg.sede = 5
+	Office.remap(sg.office, 5)
+	inst:push(sess)
+	waitFor(function()
+		return App.g.facilities.factory == 5
+	end)
+	t = open("factory")
+	has(t, { "Nivel máximo: no hay más mejoras" }, "fábrica al máximo: lo explica")
+	check(named("Mejorar_factory") == nil and named("ComparacionMejora") == nil, "sin botón ni comparación ficticia")
+	App.go("juego")
+	M.task.wait()
+	noErrors("Instalaciones etapa 8")
 end)
 
 test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()

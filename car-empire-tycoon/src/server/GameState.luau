@@ -560,7 +560,8 @@ function GameState.validate(g: any): (boolean, string?)
 	local building = {}
 	for _, b in f.builds do
 		if type(b) ~= "table" or building[b.kind] or (b.kind ~= "offices" and b.kind ~= "factory" and b.kind ~= "research" and b.kind ~= "line2") or not isInt(b.level, 2, 5)
-			or not isFinite(b.days) or b.days < 0 or not isFinite(b.progress) or b.progress < 0 or b.progress > b.days then
+			or not isFinite(b.days) or b.days < 0 or not isFinite(b.progress) or b.progress < 0 or b.progress > b.days
+			or (b.from ~= nil and (not isInt(b.from, 1, 4) or b.from >= b.level)) or (b.cost ~= nil and not nonNeg(b.cost)) then
 			return fail("Hay una obra dañada.")
 		end
 		building[b.kind] = true

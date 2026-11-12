@@ -116,7 +116,10 @@ function Actions.upgradeFacility(g: any, ctx: any, payload: any): any
 	if not Simulation.spend(g, nx.cost, "sede", "Obra: " .. nx.name) then
 		return fail("Fondos insuficientes.")
 	end
-	table.insert(g.facilities.builds, { id = GameState.uid(g, "b"), kind = kind, level = nx.level, progress = 0, days = nx.days, cost = nx.cost })
+	-- La obra guarda lo que se fijó al empezar: nivel de origen y de destino, lo pagado y su duración (la
+	-- organización del personal acelera el avance diario, Rules.buildSpeed, sin cambiar estos valores).
+	local from = kind == "line2" and 1 or Rules.facilityLevel(g, kind)
+	table.insert(g.facilities.builds, { id = GameState.uid(g, "b"), kind = kind, from = from, level = nx.level, progress = 0, days = nx.days, cost = nx.cost, startDay = Rules.absDay(g) })
 	g.facilities.invested = (g.facilities.invested or 0) + nx.cost
 	Simulation.addXp(g, ctx, 100)
 	return { ok = true, msg = "Obra iniciada: " .. nx.name .. " (" .. money(nx.cost) .. ", " .. nx.days .. " días)." }

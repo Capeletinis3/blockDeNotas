@@ -9,6 +9,7 @@ local Shared = ReplicatedStorage:WaitForChild("CarEmpireShared")
 local Catalog = require(Shared.Catalog)
 local Util = require(Shared.Util)
 local Rules = require(Shared.Rules)
+local OfficeCatalog = require(Shared.OfficeCatalog)
 
 local Ui = require(script.Parent.Ui)
 local App = require(script.Parent.App)
@@ -42,6 +43,26 @@ local function pct(v: number): string
 	return (v > 0 and "+" or "") .. Util.num(v, 0) .. " %"
 end
 
+-- Habitaciones y superficie del plano de oficinas de nivel n (OfficeCatalog.PLANS).
+local function officePlan(n: number): (number, number)
+	local rooms, area = 0, 0
+	for _, r in OfficeCatalog.plan(n).rooms do
+		rooms += 1
+		area += r.w * r.d
+	end
+	return rooms, area
+end
+View.officePlan = officePlan
+
+--[[ Mantenimiento mensual después de pagar `cost` más (el mismo cálculo de Rules.maintenance: lo invertido ×
+	tasa × (1 − finanzas)). El cobro real tiene además un tope por las ventas del mes anterior. ]]
+local function maintenanceAfter(g: any, cost: number): number
+	local f = g.facilities
+	local invested = ((type(f) == "table" and tonumber(f.invested)) or 0) + cost
+	return Util.round(invested * Catalog.FACILITIES.maintenanceRate * (1 - Rules.staff(g, "finanzas")))
+end
+View.maintenanceAfter = maintenanceAfter
+
 --[[ Estado y datos de una instalación: { level, levelText, state, stateKind, current = { {k, v} },
 	compare = { {k, antes, después} }, next = Rules.nextFacility, build, checks, owned }.
 	Todos los valores salen de las mismas funciones que usa la simulación. ]]
@@ -55,18 +76,25 @@ function View.info(g: any, kind: string): any
 		local s = Rules.sede(g)
 		out.level = n
 		out.levelText = "Nivel " .. n .. " · " .. s.office
+		local rooms, area = officePlan(n)
 		out.current = {
-			{ "Límite global de empleados", tostring(s.staff) },
+			{ "Límite global de empleados", #g.employees .. " de " .. s.staff },
 			{ "Alcance comercial", "×" .. Util.num(s.reach, 1) },
 			{ "Capacitaciones hasta", trainingFor(n) },
+			{ "Fábrica y centro hasta nivel", tostring(n) },
+			{ "Oficina", rooms .. (rooms == 1 and " habitación · " or " habitaciones · ") .. area .. " m²" },
 			{ "Etapa de la empresa", s.name },
 		}
 		local nx = out.next and out.next.def
 		if nx then
+			local rooms2, area2 = officePlan(nx.level)
 			out.compare = {
 				{ "Límite global de empleados", tostring(s.staff), tostring(nx.staff) },
 				{ "Alcance comercial", "×" .. Util.num(s.reach, 1), "×" .. Util.num(nx.reach, 1) },
 				{ "Capacitaciones hasta", trainingFor(n), trainingFor(nx.level) },
+				{ "Fábrica y centro hasta nivel", tostring(n), tostring(nx.level) },
+				{ "Habitaciones de la oficina", tostring(rooms), tostring(rooms2) },
+				{ "Superficie de la oficina", area .. " m²", area2 .. " m²" },
 				{ "Etapa de la empresa", s.name, nx.name },
 			}
 		end
@@ -89,6 +117,7 @@ function View.info(g: any, kind: string): any
 			local after = caps.perLine * nx.perLine / math.max(1, f.perLine)
 			out.compare = {
 				{ "Autos por minuto por línea", Util.num(caps.perLine, 1), Util.num(after, 1) },
+				{ "Capacidad total (" .. caps.lines .. (caps.lines == 1 and " línea" or " líneas") .. ")", Util.num(caps.capacity, 1) .. "/min", Util.num(after * caps.lines, 1) .. "/min" },
 				{ "Calidad de fábrica", "+" .. (fx.quality or 0), "+" .. (nfx.quality or 0) },
 				{ "Costo por unidad", pct(fx.unitCostPct or 0), pct(nfx.unitCostPct or 0) },
 				{ "Estaciones hasta nivel", tostring(Rules.maxStationLevel(g)), tostring(math.min(10, nx.level * 2)) },
@@ -104,8 +133,14 @@ function View.info(g: any, kind: string): any
 			{ "PI extra por línea fabricando", "+" .. Catalog.RESEARCH_RULES.linePi },
 		}
 		local nx = out.next and out.next.def
+		local total = Rules.piPerMinute(g)
+		table.insert(out.current, { "PI por minuto en total", Util.num(total, 1) .. " (centro " .. r.pi .. " + líneas " .. Util.num(Rules.piLines(g), 0) .. ")" })
 		if nx then
-			out.compare = { { "PI por minuto (centro)", tostring(r.pi), tostring(nx.pi) } }
+			out.compare = {
+				{ "PI por minuto (centro)", tostring(r.pi), tostring(nx.pi) },
+				{ "PI por minuto en total", Util.num(total, 1), Util.num(total - r.pi + nx.pi, 1) },
+				{ "PI por hora de juego a 1×", Util.num(total * 60, 0), Util.num((total - r.pi + nx.pi) * 60, 0) },
+			}
 		end
 	else
 		local idx = kind == "line2" and 2 or 3
@@ -124,8 +159,23 @@ function View.info(g: any, kind: string): any
 			}
 		end
 	end
+	-- Toda obra suma lo invertido al mantenimiento mensual (Rules.maintenance).
+	-- Durante la obra lo pagado ya está en lo invertido: no se suma dos veces.
+	if out.next and #out.compare > 0 then
+		table.insert(out.compare, { "Mantenimiento mensual (máximo)", Util.money(Rules.maintenance(g)), Util.money(maintenanceAfter(g, out.build and 0 or out.next.cost)) })
+	end
 	if kind ~= "line3" then
 		out.checks = Rules.facilityChecks(g, kind)
+	end
+	-- Por qué no hay mejora disponible (o nil si la hay).
+	if out.build then
+		out.why = "Ya hay una obra en curso en esta instalación: la próxima se puede empezar cuando termine."
+	elseif kind == "line3" then
+		out.why = out.owned and "Tu cuenta ya tiene la línea 3." or nil
+	elseif kind == "line2" and out.owned then
+		out.why = "La línea 2 ya es tuya."
+	elseif not out.next then
+		out.why = "Nivel máximo: no hay más mejoras para esta instalación."
 	end
 	-- Estado
 	if out.build then
@@ -242,13 +292,14 @@ local function detail(g: any, kind: string): Frame
 		}, 10, { wrap = true }))
 	end
 	if inf.build then
-		local b = inf.build
-		local speed = Rules.buildSpeed(g)
-		local left = math.max(0, math.ceil((b.days - b.progress) / speed))
+		local bi = Rules.buildInfo(g, inf.build)
+		local left = math.max(0, math.ceil(bi.daysLeft))
+		local fromTo = (kind == "line2") and "Línea 2" or ("Nivel " .. bi.from .. " → " .. bi.to)
 		table.insert(rows, Ui.card({
 			Ui.row({ Ui.grow(Ui.lbl("Obra en curso", T.ye)), Ui.chip("≈ " .. left .. (left == 1 and " día" or " días"), "cy") }, 8),
-			(Ui.bar(b.progress / math.max(1, b.days) * 100, T.ye, 8)),
-			Ui.text(math.floor(b.progress) .. " de " .. b.days .. " días de obra. El beneficio llega al terminarla.", { size = Ui.S.xs, color = T.mut }),
+			Ui.text(fromTo .. " · pagado " .. Util.money(bi.paid) .. " al empezar", { size = Ui.S.sm, weight = W.semi, name = "ObraNiveles" }),
+			(Ui.bar(bi.pct * 100, T.ye, 8)),
+			Ui.text(math.floor(bi.progress) .. " de " .. bi.days .. " días de obra (" .. Util.round(bi.pct * 100) .. " %). Los beneficios de abajo llegan al terminarla, una sola vez; hasta entonces rige el nivel actual.", { size = Ui.S.xs, color = T.mut, name = "ObraAvance" }),
 		}, { gap = 8, name = "ObraEnCurso" }))
 	end
 	if #inf.compare > 0 then
@@ -260,8 +311,9 @@ local function detail(g: any, kind: string): Frame
 			table.insert(cmp, compareRow(r[1], r[2], r[3]))
 		end
 		table.insert(rows, Ui.card(cmp, { gap = 8, bg = T.p1, stroke = T.line, name = "ComparacionMejora" }))
-	elseif kind ~= "line2" and kind ~= "line3" and not inf.next then
-		table.insert(rows, Ui.note("g", "Nivel máximo: no hay más mejoras para esta instalación."))
+	end
+	if inf.why then
+		table.insert(rows, Ui.note((inf.next and not inf.build) and "y" or (inf.build and "b" or "g"), inf.why))
 	end
 	-- Costo, duración, requisitos y botón.
 	if kind == "line3" then
