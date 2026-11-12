@@ -881,46 +881,158 @@ function Rules.fairPrice(type: string, yearFrac: number, appealOverBaseline: num
 	return (Catalog.RIVAL_PRICE[type] or 4000) * (1 + appealOverBaseline * 0.03) * (1 + (yearFrac - 1970) * 0.006)
 end
 
---[[ Modelos rivales que se venden este año en ese tipo: { rival, name, gen, since, appeal, price, fair,
-	segment, reach, weight, launched }. Con `g` los rivales reaccionan a la cuota que tu empresa tuvo el
-	último tiempo en ese tipo (g.marketShare) bajando precios según su estrategia. El peso en el reparto se
-	calcula con las mismas reglas que tus lotes: atractivo, precio frente a su precio justo y alcance. ]]
+--[[ Líneas de modelos de una marca: { id, name, type, since, cycle?, offset?, seed }. Las marcas actuales las traen
+	en `lines`; las de la versión anterior (Catalog.RIVALS_V1, solo calibración) se arman con types/models. `seed`
+	da la variación determinista entre modelos (para las antiguas, el índice de la marca: el cálculo de antes). ]]
+local linesCache = setmetatable({}, { __mode = "k" })
+function Rules.rivalLines(r: any, index: number): { any }
+	local c = linesCache[r]
+	if c then
+		return c
+	end
+	-- La variación depende de la posición de la marca en su catálogo (no de quién pregunta primero).
+	local current: { any }, legacy: { any } = Catalog.RIVALS, Catalog.RIVALS_V1 or {}
+	index = table.find(current, r) or table.find(legacy, r) or index
+	local out = {}
+	if r.lines then
+		for li, l in r.lines do
+			table.insert(out, { id = l.id, name = l.name, type = l.type, since = l.since, cycle = l.cycle, offset = l.offset, seed = index + li * 3.1 })
+		end
+	else
+		for _, t in Catalog.TYPE_ORDER do
+			local since = r.types and r.types[t]
+			if since then
+				table.insert(out, { id = t, name = r.models[t], type = t, since = since, seed = index })
+			end
+		end
+	end
+	linesCache[r] = out
+	return out
+end
+
+-- Atractivo base (sin el ciclo de generación ni reacciones) de una línea: lo que define su marca.
+function Rules.rivalBaseOffset(r: any, line: any, yearFrac: number): number
+	if not r.lines then
+		return Catalog.interp(r.offset, yearFrac) -- formato antiguo
+	end
+	local focus: any = (Catalog.RIVAL_RULES.focus :: any)
+	local f = focus[line.type] or { perf = 0.5, qual = 0.5 }
+	return Catalog.interp(r.tech, yearFrac) + f.perf * (r.performance or 0) + f.qual * (r.quality or 0) + (line.offset or 0)
+end
+
+-- Alcance comercial de la marca en el año (la reputación de las marcas actuales lo modula).
+function Rules.rivalReach(r: any, yearFrac: number): number
+	local reach = Catalog.interp(r.reach or { { 1970, 1 } }, yearFrac)
+	if r.lines and r.reputation then
+		reach *= 1 + Catalog.RIVAL_RULES.repWeight * (r.reputation - 3)
+	end
+	return reach
+end
+
+-- Peso comercial ESTRUCTURAL de un conjunto de marcas en un tipo: sin ciclo de generación, variación ni reacción.
+local function structural(list: { any }, type: string, yearFrac: number): number
+	local e = ECON.typeElasticity[type] or ECON.priceElasticity
+	local sum = 0
+	for i, r: any in list do
+		for _, line in Rules.rivalLines(r, i) do
+			if line.type == type and yearFrac >= line.since then
+				local base = Rules.rivalBaseOffset(r, line, yearFrac)
+				sum += math.exp(base / ECON.appealScale) * math.pow(1 / (r.price or 1), e) * Rules.rivalReach(r, yearFrac)
+			end
+		end
+	end
+	return sum
+end
+
+--[[ Normalización de la presión competitiva: con doce marcas, el peso de los rivales de cada tipo se escala para
+	que su peso ESTRUCTURAL total sea el de las seis marcas de la versión anterior en ese tipo y ese mes
+	(Catalog.RIVALS_V1). Así, pasar de 6 a 12 no duplica la competencia: las doce se reparten la misma presión
+	según sus datos (atractivo, precio, alcance), y sus generaciones y reacciones la mueven alrededor de ese
+	nivel. Con el catálogo antiguo (o si un tipo no tenía rivales antes) el factor es 1. En caché por mes. ]]
+local scaleCache: { [string]: number } = {}
+function Rules.rivalScale(type: string, yearFrac: number): number
+	local list: { any } = Catalog.RIVALS
+	if not list[1] or not list[1].lines or not Catalog.RIVALS_V1 then
+		return 1
+	end
+	local month = math.floor(yearFrac * 12)
+	local key = type .. "|" .. month .. "|" .. tostring(list)
+	local k = scaleCache[key]
+	if k then
+		return k
+	end
+	local yf = (month + 0.5) / 12
+	local legacy: { any } = Catalog.RIVALS_V1
+	local old, now = structural(legacy, type, yf), structural(list, type, yf)
+	k = (old > 0 and now > 0) and old / now or 1
+	scaleCache[key] = k
+	return k
+end
+
+--[[ Modelos rivales que se venden este año en ese tipo: { rival, line, name, gen, since, appeal, price, fair,
+	segment, reach, weight, launched, cut, answer }. Determinista: depende solo del año, del catálogo y (con `g`)
+	de la cuota que tu empresa tuvo el último tiempo en ese tipo (g.marketShare), con la que reaccionan:
+	  - todas pueden bajar precios (aggression × cuota sobre su sensibilidad, hasta RIVAL_RULES.maxCut);
+	  - las de respuesta «calidad» además mejoran el atractivo (hasta RIVAL_RULES.qualityCap).
+	Generación nueva cada `cycle` años: sale mejor que el promedio y envejece hasta la próxima. El peso en el
+	reparto se calcula con las mismas reglas que tus lotes: atractivo, precio frente a su precio justo y alcance,
+	por el factor de normalización del tipo (Rules.rivalScale). ]]
 function Rules.rivalOffers(type: string, yearFrac: number, g: any?): { any }
 	local out = {}
+	local RR = Catalog.RIVAL_RULES
 	local baseline = Rules.eraBaseline(yearFrac)
 	local share = g and g.marketShare and g.marketShare[type] or 0
-	for i, r in Catalog.RIVALS do
-		local since = r.types[type]
-		if since and yearFrac >= since then
-			-- Generación nueva cada `cycle` años: sale mejor que el promedio y envejece hasta la próxima.
-			local cycle = r.cycle or 6
-			local age = yearFrac - since
-			local gen = math.floor(age / cycle) + 1
-			local phase = (age % cycle) / cycle
-			local offset = Catalog.interp(r.offset, yearFrac) + 2 - phase * 4 + math.sin(i * 1.7 + gen) * 1.2
-			local appeal = baseline + offset
-			local fair = Rules.fairPrice(type, yearFrac, offset)
-			local cut = math.min(0.25, (r.react or 0) * math.max(0, share - 0.15))
-			local price = math.floor(fair * (r.price or 1) * (1 - cut) / 10 + 0.5) * 10
-			local reach = Catalog.interp(r.reach or { { 1970, 1 } }, yearFrac)
-			local seg = (r.price or 1) >= 1.1 and "Premium" or ((r.price or 1) <= 0.9 and "Económico" or "Masivo")
-			table.insert(out, {
-				rival = r,
-				name = r.models[type] .. (gen > 1 and (" '" .. string.sub(tostring(math.floor(since + (gen - 1) * cycle)), 3)) or ""),
-				since = since,
-				gen = gen,
-				launched = math.floor(since + (gen - 1) * cycle),
-				segment = seg,
-				price = price,
-				fair = fair,
-				cut = cut,
-				appeal = appeal,
-				reach = reach,
-				weight = math.exp((appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, fair, type) * reach,
-			})
+	local scale = Rules.rivalScale(type, yearFrac)
+	local rivals: { any } = Catalog.RIVALS
+	for i, r: any in rivals do
+		for _, line in Rules.rivalLines(r, i) do
+			local since = line.since
+			if line.type == type and yearFrac >= since then
+				local cycle = line.cycle or r.cycle or 6
+				local age = yearFrac - since
+				local gen = math.floor(age / cycle) + 1
+				local phase = (age % cycle) / cycle
+				local excess = math.max(0, share - (r.sensitivity or RR.sensitivity))
+				local answerBoost = (r.answer == "calidad") and math.min(RR.qualityCap, (r.qualityAnswer or 0) * excess) or 0
+				local offset = Rules.rivalBaseOffset(r, line, yearFrac) + RR.phaseAmp - phase * 2 * RR.phaseAmp + math.sin(line.seed * 1.7 + gen) * RR.noise + answerBoost
+				local appeal = baseline + offset
+				local fair = Rules.fairPrice(type, yearFrac, offset)
+				local cut = math.min(RR.maxCut, (r.aggression or r.react or 0) * excess)
+				local price = math.floor(fair * (r.price or 1) * (1 - cut) / 10 + 0.5) * 10
+				local reach = Rules.rivalReach(r, yearFrac)
+				local seg = (r.segments and r.segments.primary) or ((r.price or 1) >= 1.1 and "Premium" or ((r.price or 1) <= 0.9 and "Económico" or "Masivo"))
+				local launched = math.floor(since + (gen - 1) * cycle)
+				table.insert(out, {
+					rival = r,
+					line = line,
+					name = line.name .. (gen > 1 and (" '" .. string.sub(tostring(launched), 3)) or ""),
+					since = since,
+					gen = gen,
+					launched = launched,
+					segment = seg,
+					price = price,
+					fair = fair,
+					cut = cut,
+					answer = answerBoost,
+					appeal = appeal,
+					reach = reach,
+					weight = math.exp((appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, fair, type) * reach * scale,
+				})
+			end
 		end
 	end
 	return out
+end
+
+-- Rival con más peso en un tipo ese año (o nil): el «líder» entre las marcas rivales.
+function Rules.rivalLeader(type: string, yearFrac: number, g: any?): any
+	local best = nil
+	for _, o in Rules.rivalOffers(type, yearFrac, g) do
+		if not best or o.weight > best.weight then
+			best = o
+		end
+	end
+	return best
 end
 
 -- Marketing --------------------------------------------------------------------------------
@@ -1043,9 +1155,105 @@ end
 
 -- Peso de un lote del jugador en el reparto de la demanda de su tipo.
 function Rules.lotWeight(g: any, lot: any, yearFrac: number): number
+	return Rules.lotWeightAt(g, lot, yearFrac, lot.price, Rules.campaignMult(g, lot))
+end
+
+-- El mismo peso con otro precio y otro multiplicador de campaña (vistas previas: no modifica el lote).
+function Rules.lotWeightAt(g: any, lot: any, yearFrac: number, price: number, campaignMult: number): number
 	local baseline = Rules.eraBaseline(yearFrac)
 	local seg = Catalog.SEGMENTS[lot.design.spec.segment] or Catalog.SEGMENTS.Masivo
-	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(lot.price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop * Rules.reviewFactor(lot) * Rules.campaignMult(g, lot)
+	return math.exp((lot.appeal - baseline) / ECON.appealScale) * Rules.priceFactor(price, lot.refPrice, lot.design.type) * Rules.playerMult(g) * seg.pop * Rules.reviewFactor(lot) * campaignMult
+end
+
+--[[ Ventas estimadas por minuto real a 1× de un lote con un precio propuesto (sin guardarlo): el mismo reparto
+	de Rules.market con el peso del lote recalculado. Si el lote todavía no está en el reparto (sin stock o por
+	lanzar), se agrega como si estuviera a la venta. Es una estimación: no garantiza ventas. ]]
+function Rules.lotRateAt(g: any, lot: any, price: number): number
+	local m = Rules.market(g, lot.design.type)
+	if m.demand <= 0 then
+		return 0
+	end
+	local w = Rules.lotWeightAt(g, lot, Rules.yearFrac(g), price, Rules.campaignMult(g, lot))
+	local total = m.total - (m.lots[lot.id] or 0) + w
+	return m.demand * w / total
+end
+
+--[[ Comparación de una campaña antes de contratarla (sin tocar el estado): ventas por minuto real de tus lotes
+	a la venta sin campaña y con la campaña propuesta (su efecto con la creatividad actual), por el mismo reparto
+	de Rules.market. Devuelve { without, with, diff, boost, lots = { { lot, without, with } }, units, stockCap }
+	o nil si no hay lotes a la venta afectados. `units` = autos extra estimados durante la campaña (a 1×, sin
+	pausas), con tope en el stock disponible: depende del stock, los precios y los rivales de esos días. ]]
+function Rules.campaignPreview(g: any, plan: any): any
+	if not plan then
+		return nil
+	end
+	local boost = plan.boost * (1 + Rules.staff(g, "mk_creatividad"))
+	local yf = Rules.yearFrac(g)
+	local out = { without = 0, with = 0, diff = 0, boost = boost, lots = {}, units = 0, stockCap = false }
+	local byType = {}
+	for _, lot in g.lots do
+		if lot.saleState == "en venta" and Rules.lotAvailable(lot) > 0 then
+			byType[lot.design.type] = byType[lot.design.type] or {}
+			table.insert(byType[lot.design.type], lot)
+		end
+	end
+	local affected = 0
+	local realMin = plan.days * Catalog.CALENDAR.realSecondsPerDay / 60
+	for t, lots in byType do
+		local m = Rules.market(g, t)
+		local extra = 0
+		local weights = {}
+		for _, lot in lots do
+			local w0 = m.lots[lot.id] or Rules.lotWeight(g, lot, yf)
+			local hit = plan.kind == "corporativa" or lot.designId == plan.designId
+			local w1 = Rules.lotWeightAt(g, lot, yf, lot.price, hit and (1 + boost) or 1)
+			weights[lot] = { w0, w1, hit }
+			extra += w1 - w0
+			if hit then
+				affected += 1
+			end
+		end
+		for _, lot in lots do
+			local w = weights[lot]
+			local r0 = m.demand * w[1] / m.total
+			local r1 = m.demand * w[2] / (m.total + extra)
+			out.without += r0
+			out.with += r1
+			local add = (r1 - r0) * realMin
+			local cap = math.max(0, Rules.lotAvailable(lot) - r0 * realMin)
+			if add > cap then
+				add = cap
+				out.stockCap = true
+			end
+			out.units += math.max(0, add)
+			table.insert(out.lots, { lot = lot, without = r0, with = r1, hit = w[3] })
+		end
+	end
+	if affected == 0 then
+		return nil
+	end
+	out.diff = out.with - out.without
+	return out
+end
+
+-- Cuotas estimadas AHORA en un tipo (con las ofertas vigentes) y la histórica (promedio mensual guardado).
+function Rules.shareSummary(g: any, type: string): any
+	local m = Rules.market(g, type)
+	local mine, rivals = 0, 0
+	for _, w in m.lots do
+		mine += w
+	end
+	for _, r in m.rivals do
+		rivals += r.weight
+	end
+	local t = m.total > 0 and m.total or 1
+	return {
+		demand = m.demand,
+		player = m.demand > 0 and mine / t or 0,
+		rivals = m.demand > 0 and rivals / t or 0,
+		outside = m.demand > 0 and m.outside / t or 0,
+		historical = (g.marketShare and g.marketShare[type]) or 0,
+	}
 end
 
 --[[ Reparto de la demanda de un tipo entre: el resto del mercado (peso fijo), los modelos rivales y los

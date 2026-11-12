@@ -3669,6 +3669,100 @@ test("Ajustes de la etapa 9: Alemania y Polonia seleccionables, celebración ún
 	noErrors("Ajustes de la etapa 9")
 end)
 
+test("Etapa 10 en la interfaz: doce marcas, cuota actual e histórica, precio comparado y campaña con y sin", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	sess.game.money = 5e7
+	sess.game.campaign = nil
+	sess.game.marketShare.sedan = 0.31
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 5e7
+	end)
+	-- 33. Doce marcas con país, especialidades y sus modelos del año.
+	App.ui.tabs.mercado = "rivales"
+	App.go("mercado")
+	M.task.wait()
+	for _, r in Catalog.RIVALS do
+		local card = named("Rival_" .. r.id)
+		check(card ~= nil, "33. ficha de " .. r.name)
+		if card then
+			local t = table.concat(M.texts(card), " | ")
+			check(string.find(t, r.name, 1, true) ~= nil and string.find(t, r.country, 1, true) ~= nil and string.find(t, "Especialidades", 1, true) ~= nil, "33. " .. r.name .. ": nombre, país y especialidades")
+			check(string.find(t, "% estimado", 1, true) ~= nil, "33. " .. r.name .. ": participación estimada")
+		end
+	end
+	local all = table.concat(M.texts(App.content), " ")
+	for _, oldName in { "Kodiak", "Nordia", "Kairo", "Velox", "Imperial" } do
+		check(not string.find(all, oldName, 1, true), "9. sin «" .. oldName .. "» en la pantalla de rivales")
+	end
+	-- 34. Modelos del año con su generación.
+	local yf = Rules.yearFrac(App.g)
+	local offer = Rules.rivalOffers("sedan", yf, App.g)[1]
+	check(offer ~= nil and find(offer.name) ~= nil, "34. se ve el " .. tostring(offer and offer.name) .. " del año")
+	-- 36. Cuota actual estimada frente a la histórica.
+	App.ui.tabs.mercado = "tipos"
+	App.forceRender()
+	M.task.wait()
+	local sedan = named("Tipo_sedan")
+	check(sedan ~= nil and sedan:FindFirstChild("CuotaActual", true) ~= nil and sedan:FindFirstChild("CuotaHistorica", true) ~= nil, "36. cuota actual estimada e histórica separadas")
+	check(string.find(table.concat(M.texts(sedan), " "), "Histórica 31,0 %", 1, true) ~= nil, "36. la histórica es la guardada (31 %)")
+	-- 35. Precio: estimación de ventas, comparación con rivales y efecto del marketing.
+	local lot = nil
+	for _, l in App.g.lots do
+		if (l.saleState == "en venta" or l.saleState == "por lanzar") and Rules.lotAvailable(l) > 0 then
+			lot = l
+		end
+	end
+	print("    etapa 10 · lote para el editor de precio: " .. (lot and (lot.design.name .. " (" .. lot.saleState .. ")") or "ninguno"))
+	if lot then
+		App.go("ventas")
+		App.ui.salesSel = lot.id
+		App.forceRender()
+		M.task.wait()
+		check(named("VentasEstimadas") ~= nil and string.find(named("VentasEstimadas").Text, "autos/min real", 1, true) ~= nil, "35. ventas estimadas por minuto real")
+		check(named("ComparacionRivales") ~= nil and named("EfectoCampana") ~= nil and named("PreciosReferencia") ~= nil, "35. rivales del tipo, marketing y precios de referencia")
+		local p0 = App.g.lots[1] and lot.price
+		local box = named("Precio")
+		box.Text = tostring(math.floor(lot.refPrice * 0.8))
+		M.task.wait()
+		eq(lot.price, p0, "35. escribir un precio no lo guarda")
+		local cheap = Rules.lotRateAt(App.g, lot, math.floor(lot.refPrice * 0.8))
+		local dear = Rules.lotRateAt(App.g, lot, math.floor(lot.refPrice * 1.5))
+		check(cheap > dear, "35. más barato, más ventas estimadas")
+	else
+		check(true, "35. sin lotes a la venta en esta partida de prueba")
+	end
+	-- 31. Campaña: comparación con y sin, sin cobrar al abrir.
+	App.go("ventas")
+	M.task.wait()
+	local m0 = App.g.money
+	App.openDialog("campaign", {})
+	M.task.wait()
+	clickN("Tipo_corporativa")
+	M.task.wait()
+	check(named("DetalleCampana") ~= nil and named("CostoCampana") ~= nil and named("DineroDespues") ~= nil and named("BonosMarketing") ~= nil, "12. modalidad, costo real, dinero restante y bonos del personal")
+	if lot and lot.saleState == "en venta" then
+		check(named("ComparacionCampana") ~= nil and named("SinCampana") ~= nil and named("ConCampana") ~= nil and named("DiferenciaCampana") ~= nil, "31. comparación sin y con campaña")
+	end
+	M.task.wait()
+	eq(App.g.money, m0, "31. abrir la comparación no cobra")
+	App.closeAllDialogs()
+	App.ui.tabs.mercado = nil
+	App.go("juego")
+	M.task.wait()
+	noErrors("Etapa 10")
+end)
+
 test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()
 	App.closeAllDialogs()
 	local slots = {}

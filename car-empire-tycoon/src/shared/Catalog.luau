@@ -884,14 +884,11 @@ end
 -- Precio típico de cada tipo de vehículo (referencia para los modelos rivales, en dólares del juego).
 Catalog.RIVAL_PRICE = { compacto = 2900, sedan = 3500, clasico = 4500, pickup = 4300, deportivo = 5500, suv = 5200, superdeportivo = 10800, electrico = 8200 }
 
---[[ Marcas rivales (ficticias). Compiten con las mismas reglas que el jugador: atractivo frente a lo que
-	espera la época, precio frente a su precio justo y alcance comercial. Estrategia:
-	  offset  = atractivo por encima (o debajo) del esperado según el año (su ritmo tecnológico)
-	  price   = posicionamiento de precio respecto del precio justo (<1 barato, >1 caro)
-	  react   = cuánto bajan sus precios cuando tu empresa les quita mercado en ese tipo
-	  reach   = alcance comercial según el año (crecen o se achican)
-	Cada modelo tiene una generación nueva cada `cycle` años (mejora y después envejece). ]]
-Catalog.RIVALS = {
+--[[ Rivales de la versión anterior (seis marcas). NO se ofrecen ni se muestran: quedan solo como REFERENCIA DE
+	CALIBRACIÓN. Rules.rivalScale usa su peso comercial estructural por tipo y año para que las doce marcas
+	actuales repartan una presión competitiva agregada comparable a la de antes (pasar de 6 a 12 no duplica la
+	competencia). Formato antiguo: types = { tipo = año }, models = { tipo = nombre }. ]]
+Catalog.RIVALS_V1 = {
 	{ id = "kodiak", name = "Kodiak Motors", color = "#8D6E4F", strategy = "Volumen y robustez", cycle = 7,
 		types = { pickup = 1970, suv = 1984, sedan = 1970 }, offset = { { 1970, 2 }, { 2030, 1 } }, price = 0.95, react = 0.5,
 		reach = { { 1970, 1.2 }, { 2000, 2.2 }, { 2030, 2.5 } }, models = { pickup = "Grizzly", suv = "Yukon", sedan = "Marshal" } },
@@ -910,6 +907,194 @@ Catalog.RIVALS = {
 	{ id = "imperial", name = "Imperial", color = "#B3AAFF", strategy = "Lujo", cycle = 7,
 		types = { sedan = 1970, suv = 1995, superdeportivo = 1990 }, offset = { { 1970, 3 }, { 2030, 4 } }, price = 1.25, react = 0.1,
 		reach = { { 1970, 0.9 }, { 2030, 1.6 } }, models = { sedan = "Regente", suv = "Monarca", superdeportivo = "Corona" } },
+}
+
+--[[ Reglas de la competencia (valores centralizados; ninguna fórmula tiene casos especiales por marca):
+	maxCut       = baja de precio máxima de una reacción (25 %)
+	sensitivity  = cuota del jugador desde la que una marca reacciona, si la marca no define la suya
+	qualityCap   = mejora de atractivo máxima de una respuesta «calidad» (puntos)
+	phaseAmp     = cuánto mejor sale una generación nueva y cuánto envejece (± puntos)
+	noise        = variación determinista entre modelos (± puntos)
+	repWeight    = peso de la reputación de la marca en su alcance (por punto sobre 3)
+	focus[tipo]  = cuánto pesan las prestaciones (perf) y la calidad (qual) de la marca en el atractivo de ese tipo ]]
+Catalog.RIVAL_RULES = {
+	maxCut = 0.25,
+	sensitivity = 0.15,
+	qualityCap = 2,
+	phaseAmp = 2,
+	noise = 1.2,
+	repWeight = 0.05,
+	focus = {
+		compacto = { perf = 0.2, qual = 0.8 }, sedan = { perf = 0.4, qual = 0.6 }, clasico = { perf = 0.5, qual = 0.5 },
+		pickup = { perf = 0.3, qual = 0.7 }, deportivo = { perf = 0.8, qual = 0.2 }, suv = { perf = 0.3, qual = 0.7 },
+		superdeportivo = { perf = 1.0, qual = 0.0 }, electrico = { perf = 0.4, qual = 0.6 },
+	},
+}
+
+--[[ Doce fabricantes rivales FICTICIOS. Nombres, líneas de modelos y colores son originales y provisionales (no
+	hay logotipos ni insignias; la marca se muestra con su nombre y un color). El id es estable: el nombre visible,
+	el color o la descripción se pueden cambiar sin tocar la simulación. Todo lo que los diferencia es dato:
+	  price        posicionamiento de precio frente al precio justo (<1 barato, >1 caro)
+	  quality      calidad relativa (−3…+3) · performance = prestaciones (−3…+3): pesan según el tipo (focus)
+	  tech         nivel tecnológico por año { año, puntos de atractivo }: su ritmo de modernización
+	  reputation   1…5: suma al alcance (repWeight) · reach = alcance comercial por año
+	  aggression   cuánto bajan el precio cuando les quitás mercado (react) · sensitivity = desde qué cuota
+	  answer       cómo responden: "precio" (bajan precios), "calidad" (mejoran el atractivo, hasta qualityCap,
+	               con qualityAnswer puntos por cada 100 % de cuota tuya sobre su sensibilidad) o "prestaciones"
+	               (mantienen precios: compiten con sus prestaciones)
+	  cycle        años entre generaciones (cada línea puede tener el suyo)
+	  lines        { id, name, type, since, cycle?, offset? }: líneas de modelos y año de aparición. Respetan las
+	               fechas del juego: SUV desde 1984, superdeportivos desde 1974, eléctricos desde 2011 (después de
+	               «Baterías de iones de litio», 2010). ]]
+Catalog.RIVALS = {
+	{ id = "baviron", name = "Baviron Motors", country = "Alemania", color = "#2F6FDE",
+		desc = "Sedanes deportivos prémium con motores potentes y comportamiento dinámico.",
+		specialties = { "Sedanes deportivos", "Prémium", "Motores potentes", "Conducción dinámica" },
+		segments = { primary = "Premium", secondary = "Deportivo" }, strategy = "Calidad y rendimiento, precio alto",
+		price = 1.18, quality = 2, performance = 2.5, tech = { { 1970, 2 }, { 2000, 3 }, { 2030, 3.5 } }, reputation = 4.2,
+		reach = { { 1970, 0.35 }, { 2000, 0.7 }, { 2030, 0.9 } }, aggression = 0.08, answer = "calidad", qualityAnswer = 4, cycle = 7,
+		lines = {
+			{ id = "vektor", name = "Vektor", type = "sedan", since = 1970 },
+			{ id = "kardan", name = "Kardan", type = "deportivo", since = 1972 },
+			{ id = "terraxa", name = "Terraxa", type = "suv", since = 1999 },
+			{ id = "vektor_e", name = "Vektor-e", type = "electrico", since = 2014 },
+		} },
+	{ id = "mercenza", name = "Mercenza", country = "Alemania", color = "#A9B4C2",
+		desc = "Lujo, seguridad, confort y equipamiento avanzado con mucho prestigio.",
+		specialties = { "Sedanes de lujo", "Seguridad", "Comodidad", "Equipamiento avanzado" },
+		segments = { primary = "Premium", secondary = "Lujo" }, strategy = "Prestigio y precio muy alto",
+		price = 1.3, quality = 3, performance = 1, tech = { { 1970, 2.5 }, { 2000, 3 }, { 2030, 3.5 } }, reputation = 4.6,
+		reach = { { 1970, 0.4 }, { 2000, 0.8 }, { 2030, 1.0 } }, aggression = 0.05, answer = "calidad", qualityAnswer = 4, cycle = 8,
+		lines = {
+			{ id = "aureo", name = "Aureo", type = "sedan", since = 1970 },
+			{ id = "solenne", name = "Solenne", type = "clasico", since = 1970 },
+			{ id = "fulgor", name = "Fulgor", type = "superdeportivo", since = 1990, offset = -1 },
+			{ id = "montesoro", name = "Montesoro", type = "suv", since = 1997 },
+			{ id = "aureo_volta", name = "Aureo Volta", type = "electrico", since = 2016 },
+		} },
+	{ id = "volkenwerk", name = "Volkenwerk", country = "Alemania", color = "#3FA7D6",
+		desc = "Autos accesibles y eficientes fabricados en gran volumen.",
+		specialties = { "Compactos", "Sedanes familiares", "Eficiencia", "Gran volumen" },
+		segments = { primary = "Masivo", secondary = "Económico" }, strategy = "Precio competitivo y mucha cobertura",
+		price = 0.92, quality = 1, performance = -1, tech = { { 1970, 0 }, { 1990, 1.5 }, { 2030, 2 } }, reputation = 3.6,
+		reach = { { 1970, 1.2 }, { 2000, 2.0 }, { 2030, 2.4 } }, aggression = 0.5, answer = "precio", cycle = 7,
+		lines = {
+			{ id = "kiebitz", name = "Kiebitz", type = "compacto", since = 1970 },
+			{ id = "vagant", name = "Vagant", type = "sedan", since = 1973 },
+			{ id = "taluda", name = "Taluda", type = "suv", since = 2004 },
+			{ id = "kiebitz_e", name = "Kiebitz-E", type = "electrico", since = 2019 },
+		} },
+	{ id = "stuttaro", name = "Stuttaro", country = "Alemania", color = "#C8102E",
+		desc = "Coupés deportivos de ingeniería precisa y gran calidad de construcción.",
+		specialties = { "Coupés deportivos", "Altas prestaciones", "Ingeniería de precisión" },
+		segments = { primary = "Deportivo", secondary = "Premium" }, strategy = "Poco volumen, precio alto y rendimiento",
+		price = 1.35, quality = 2.5, performance = 3, tech = { { 1970, 2.5 }, { 2000, 3 }, { 2030, 3.5 } }, reputation = 4.4,
+		reach = { { 1970, 0.2 }, { 2030, 0.4 } }, aggression = 0.03, answer = "prestaciones", cycle = 8,
+		lines = {
+			{ id = "kessel", name = "Kessel GT", type = "deportivo", since = 1970 },
+			{ id = "kessel_roadster", name = "Kessel Roadster", type = "clasico", since = 1974 },
+			{ id = "vulkan", name = "Vulkan", type = "superdeportivo", since = 1985 },
+			{ id = "sturmhoch", name = "Sturmhoch", type = "suv", since = 2003 },
+			{ id = "kessel_eturismo", name = "Kessel E-Turismo", type = "electrico", since = 2020 },
+		} },
+	{ id = "ferovento", name = "Ferovento", country = "Italia", color = "#E63B2E",
+		desc = "Superdeportivos exclusivos con ingeniería de competición.",
+		specialties = { "Superdeportivos", "Potencia", "Exclusividad", "Competición" },
+		segments = { primary = "Exclusivo", secondary = "Deportivo" }, strategy = "Precio muy alto y alcance reducido",
+		price = 1.55, quality = 2, performance = 4, tech = { { 1970, 3 }, { 2030, 4 } }, reputation = 4.8,
+		reach = { { 1970, 0.5 }, { 2030, 0.8 } }, aggression = 0.02, answer = "prestaciones", cycle = 6,
+		lines = {
+			{ id = "scintilla", name = "Scintilla", type = "deportivo", since = 1970 },
+			{ id = "fiamma", name = "Fiamma", type = "superdeportivo", since = 1974 },
+		} },
+	{ id = "torvello", name = "Torvello", country = "Italia", color = "#F2B705",
+		desc = "Superdeportivos extremos de diseño agresivo y prestaciones enormes.",
+		specialties = { "Superdeportivos extremos", "Diseño agresivo", "Exclusividad" },
+		segments = { primary = "Exclusivo", secondary = "Deportivo" }, strategy = "Compite con prestaciones, no con precio",
+		price = 1.6, quality = 1.5, performance = 4.5, tech = { { 1970, 2.5 }, { 2000, 3.5 }, { 2030, 4 } }, reputation = 4.5,
+		reach = { { 1970, 0.4 }, { 2030, 0.7 } }, aggression = 0.02, answer = "prestaciones", cycle = 7,
+		lines = {
+			{ id = "bravura", name = "Bravura", type = "superdeportivo", since = 1976 },
+			{ id = "corrida", name = "Corrida", type = "deportivo", since = 1983 },
+			{ id = "furente", name = "Furente", type = "superdeportivo", since = 1990, offset = 0.5 },
+			{ id = "pradera", name = "Pradera", type = "suv", since = 2018 },
+		} },
+	{ id = "forlan", name = "Forlan Motors", country = "Estados Unidos", color = "#1F4E9A",
+		desc = "Autos populares, pickups y deportivos accesibles a gran escala.",
+		specialties = { "Autos populares", "Pickups", "Deportivos accesibles", "Gran escala" },
+		segments = { primary = "Masivo", secondary = "Utilitario" }, strategy = "Mucha cobertura y precio competitivo",
+		price = 0.9, quality = 0, performance = 0.5, tech = { { 1970, 0 }, { 2000, 1 }, { 2030, 1.5 } }, reputation = 3.5,
+		reach = { { 1970, 1.6 }, { 2000, 2.0 }, { 2030, 2.2 } }, aggression = 0.55, answer = "precio", cycle = 6,
+		lines = {
+			{ id = "avenida", name = "Avenida", type = "sedan", since = 1970 },
+			{ id = "bisonte", name = "Bisonte", type = "pickup", since = 1970 },
+			{ id = "potro", name = "Potro", type = "deportivo", since = 1970 },
+			{ id = "travesia", name = "Travesía", type = "suv", since = 1986 },
+			{ id = "potro_e", name = "Potro-E", type = "electrico", since = 2021 },
+		} },
+	{ id = "chevona", name = "Chevona", country = "Estados Unidos", color = "#D4A017",
+		desc = "Sedanes populares, pickups y deportivos de gran cilindrada al mejor precio por caballo.",
+		specialties = { "Sedanes populares", "Pickups", "Gran cilindrada", "Potencia por precio" },
+		segments = { primary = "Masivo", secondary = "Utilitario" }, strategy = "Potencia barata, compite con Forlan",
+		price = 0.88, quality = -0.5, performance = 1, tech = { { 1970, 0 }, { 2000, 1 }, { 2030, 1.5 } }, reputation = 3.3,
+		reach = { { 1970, 1.6 }, { 2000, 1.9 }, { 2030, 2.0 } }, aggression = 0.6, answer = "precio", cycle = 6,
+		lines = {
+			{ id = "comarca", name = "Comarca", type = "sedan", since = 1970 },
+			{ id = "labrador", name = "Labrador", type = "pickup", since = 1970 },
+			{ id = "tronador", name = "Tronador", type = "deportivo", since = 1970 },
+			{ id = "bulevar", name = "Bulevar", type = "clasico", since = 1970 },
+			{ id = "altiplano", name = "Altiplano", type = "suv", since = 1985 },
+			{ id = "corriente", name = "Corriente", type = "electrico", since = 2012 },
+		} },
+	{ id = "tayora", name = "Tayora", country = "Japón", color = "#C4161C",
+		desc = "Fiabilidad, bajo consumo y durabilidad con un gran equilibrio entre calidad y precio.",
+		specialties = { "Fiabilidad", "Eficiencia", "Bajo consumo", "Compactos y sedanes" },
+		segments = { primary = "Masivo", secondary = "Económico" }, strategy = "Equilibrio entre calidad, precio y consumo",
+		price = 0.95, quality = 2, performance = -0.5, tech = { { 1970, 0 }, { 1985, 2 }, { 2030, 3 } }, reputation = 4.0,
+		reach = { { 1970, 0.6 }, { 1990, 1.8 }, { 2030, 2.6 } }, aggression = 0.4, answer = "precio", cycle = 6,
+		lines = {
+			{ id = "kumo", name = "Kumo", type = "compacto", since = 1970 },
+			{ id = "kazeno", name = "Kazeno", type = "sedan", since = 1972 },
+			{ id = "iwa", name = "Iwa", type = "pickup", since = 1978 },
+			{ id = "takai", name = "Takai", type = "suv", since = 1994 },
+			{ id = "kumo_den", name = "Kumo Den", type = "electrico", since = 2015 },
+		} },
+	{ id = "honari", name = "Honari", country = "Japón", color = "#E5484D",
+		desc = "Compactos de motores eficientes e ingeniosos y deportivos accesibles.",
+		specialties = { "Compactos", "Motores eficientes", "Ingeniería", "Deportivos accesibles" },
+		segments = { primary = "Masivo", secondary = "Deportivo" }, strategy = "Eficiencia, mecánica y buena relación calidad-precio",
+		price = 0.97, quality = 1.5, performance = 1, tech = { { 1970, -0.5 }, { 1985, 2 }, { 2030, 2.5 } }, reputation = 3.9,
+		reach = { { 1970, 0.4 }, { 1990, 1.3 }, { 2030, 1.8 } }, aggression = 0.35, answer = "precio", cycle = 5,
+		lines = {
+			{ id = "hikari", name = "Hikari", type = "compacto", since = 1972 },
+			{ id = "kibo", name = "Kibo", type = "sedan", since = 1976 },
+			{ id = "raiden", name = "Raiden", type = "deportivo", since = 1984 },
+			{ id = "hikari_ion", name = "Hikari Ion", type = "electrico", since = 2019 },
+		} },
+	{ id = "nizora", name = "Nizora", country = "Japón", color = "#8E9AAF",
+		desc = "Sedanes y deportivos con motores potentes, tecnología y eléctricos tempranos.",
+		specialties = { "Sedanes", "Deportivos", "Tecnología", "Eléctricos" },
+		segments = { primary = "Masivo", secondary = "Deportivo" }, strategy = "Precio competitivo con tecnología y prestaciones",
+		price = 0.93, quality = 0.5, performance = 1.5, tech = { { 1970, -0.5 }, { 1990, 1.5 }, { 2030, 2.5 } }, reputation = 3.6,
+		reach = { { 1970, 0.5 }, { 1990, 1.4 }, { 2030, 1.8 } }, aggression = 0.45, answer = "precio", cycle = 6,
+		lines = {
+			{ id = "senkai", name = "Senkai", type = "sedan", since = 1970 },
+			{ id = "kaminari", name = "Kaminari", type = "deportivo", since = 1970 },
+			{ id = "daichi", name = "Daichi", type = "pickup", since = 1980 },
+			{ id = "hoshi", name = "Hoshi", type = "electrico", since = 2011 },
+		} },
+	{ id = "nordviken", name = "Nordviken", country = "Suecia", color = "#4A7FA7",
+		desc = "Autos familiares seguros, confortables y bien construidos.",
+		specialties = { "Seguridad", "Familiares", "Confort", "Asistencia a la conducción" },
+		segments = { primary = "Premium", secondary = "Familiar" }, strategy = "Reputación de seguridad y precio medio-alto",
+		price = 1.08, quality = 2, performance = 0, tech = { { 1970, 1 }, { 2000, 2.5 }, { 2030, 3 } }, reputation = 4.1,
+		reach = { { 1970, 0.4 }, { 2000, 0.8 }, { 2030, 1.0 } }, aggression = 0.2, answer = "calidad", qualityAnswer = 3, cycle = 8,
+		lines = {
+			{ id = "fjallvik", name = "Fjällvik", type = "sedan", since = 1970 },
+			{ id = "lilla", name = "Lilla", type = "compacto", since = 1976 },
+			{ id = "skogsra", name = "Skogsrå", type = "suv", since = 1984 },
+			{ id = "fjallvik_strom", name = "Fjällvik Ström", type = "electrico", since = 2019 },
+		} },
 }
 
 -- Misiones. go = pantalla a la que lleva el botón «Ir». kind = tutorial | historia | anual (se reinicia cada año).

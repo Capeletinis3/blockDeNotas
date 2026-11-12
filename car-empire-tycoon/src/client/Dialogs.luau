@@ -963,9 +963,33 @@ Dialogs.campaign = function(box: Frame, _params: any)
 	Ui.col({ Ui.lbl("Duración"), Ui.grid(days, App.isPhone() and 2 or 3, nil, 6) }, 6).Parent = b
 	local plan, why = Rules.campaignPlan(g, { kind = st.kind, designId = st.designId, budget = st.budget, days = st.days })
 	if plan then
-		local eff = plan.boost * (1 + Rules.staff(g, "mk_creatividad"))
-		priceCard({ "Efecto|+" .. Util.round(eff * 100) .. " % de demanda", "Duración|" .. plan.days .. " días de juego" }, Util.money(plan.cost)).Parent = b
-		Ui.text("Más presupuesto suma efecto, cada vez menos (rendimientos decrecientes). Se paga al empezar; cancelar no devuelve dinero.", { size = Ui.S.xs, color = T.mut }).Parent = b
+		local crea, anal, comu = Rules.staff(g, "mk_creatividad"), Rules.staff(g, "analisis"), Rules.staff(g, "comunicacion")
+		local eff = plan.boost * (1 + crea)
+		local realDays = math.ceil(plan.days * (1 + comu))
+		priceCard({ "Efecto|+" .. Util.round(eff * 100) .. " % de peso comercial", "Duración|" .. plan.days .. " días de juego" .. (comu > 0 and (" (≈ " .. realDays .. " con comunicación)") or "") }, Util.money(plan.cost)).Parent = b
+		Ui.col({
+			Ui.between("Modalidad", MK.kinds[st.kind].name, { size = Ui.S.xs }),
+			st.kind == "modelo" and Ui.between("Modelo promocionado", plan.name, { size = Ui.S.xs }) or Ui.between("Alcance", "Todos tus modelos a la venta · costo ×" .. Util.num(Rules.marketFactor(g), 2) .. " por la expansión internacional", { size = Ui.S.xs }),
+			Ui.between("Presupuesto mensual", Util.money(plan.budget), { size = Ui.S.xs }),
+			Ui.between("Costo real (se paga una vez al empezar)", Util.money(plan.cost), { size = Ui.S.xs, name = "CostoCampana" }),
+			Ui.between("Dinero después", Util.money(g.money - plan.cost), { size = Ui.S.xs, color = g.money >= plan.cost and T.tx or T.re2, name = "DineroDespues" }),
+			Ui.between("Personal de Marketing", "creatividad +" .. Util.round(crea * 100) .. " % de efecto · análisis −" .. Util.round(anal * 100) .. " % de costo · comunicación +" .. Util.round(comu * 100) .. " % de duración", { size = Ui.S.xs, name = "BonosMarketing" }),
+		}, 4, { Name = "DetalleCampana" }).Parent = b
+		-- Comparación sin campaña / con la campaña propuesta (sin tocar el estado; mismo reparto del servidor).
+		local pv = Rules.campaign(g) == nil and Rules.campaignPreview(g, plan) or nil
+		if pv then
+			Ui.col({
+				Ui.lbl("Comparación estimada"),
+				Ui.between("Sin campaña", Util.num(pv.without, 2) .. " autos/min", { size = Ui.S.xs, name = "SinCampana" }),
+				Ui.between("Con la campaña", Util.num(pv.with, 2) .. " autos/min", { size = Ui.S.xs, name = "ConCampana" }),
+				Ui.between("Diferencia", "+" .. Util.num(pv.diff, 2) .. " autos/min ≈ " .. Util.num(math.floor(pv.units)) .. " autos en la campaña" .. (pv.stockCap and " (limitado por el stock)" or ""), { size = Ui.S.xs, color = T.gr, name = "DiferenciaCampana" }),
+				Ui.between("Inversión", Util.money(plan.cost), { size = Ui.S.xs }),
+				Ui.text("Estimación con los precios, el stock y los rivales de hoy a 1×: cambia si cambian los precios, se agota el stock o llega una generación rival nueva. No es una venta garantizada.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
+			}, 4, { Name = "ComparacionCampana" }).Parent = b
+		else
+			Ui.note("b", Rules.campaign(g) and "Ya hay una campaña activa: la comparación se ve cuando termine." or "No tenés modelos a la venta con stock afectados por esta campaña: la estimación se ve cuando estén a la venta.").Parent = b
+		end
+		Ui.text("Al contratar quedan fijos el costo, el efecto base y la duración. La creatividad del personal cambia el efecto en vivo y la comunicación hace durar más la campaña. Más presupuesto suma efecto, cada vez menos (rendimientos decrecientes). Cancelar no devuelve dinero. Una campaña a la vez; no genera ventas ni ingresos por sí misma.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }).Parent = b
 	else
 		Ui.note("y", why or "Campaña inválida.").Parent = b
 	end

@@ -68,19 +68,28 @@ local function shareBar(parts: { any }): Frame
 	return f
 end
 
-local function typeCard(typeId: string, b: any): Frame
+local function typeCard(g: any, typeId: string, b: any): Frame
 	local myPct = Util.num((b.myShare or 0) * 100, 1)
 	local parts = { { b.myShare or 0, T.vi } }
+	local rivalShare = 0
 	for _, rv in b.rivals do
 		table.insert(parts, { rv.share, hex(rv.r.rival.color) })
+		rivalShare += rv.share
 	end
+	-- Cuota ACTUAL estimada (ofertas vigentes) frente a la HISTÓRICA (promedio mensual guardado en la partida).
+	local sum = Rules.shareSummary(g, typeId)
+	local yf = Rules.yearFrac(g)
+	local before = Rules.baseDemand(typeId, yf - 1) * Rules.typeMarketFactor(g, typeId, yf - 1)
+	local change = before > 0 and (b.demand / before - 1) * 100 or nil
 	local rows: { Instance? } = {
 		Ui.row({
 			Ui.grow(Ui.text(Catalog.TYPES[typeId], { size = 16, weight = W.bold })),
 			Ui.chip(Util.num(b.demand, 1) .. " autos/min", "cn"),
-			Ui.chip("Tu cuota " .. myPct .. " %", (b.myShare or 0) > 0 and "cv" or "cn"),
+			Ui.chip("Cuota actual estimada " .. myPct .. " %", (b.myShare or 0) > 0 and "cv" or "cn", { name = "CuotaActual" }),
+			Ui.chip("Histórica " .. Util.num(sum.historical * 100, 1) .. " %", "cn", { name = "CuotaHistorica" }),
 		}, 8, { wrap = true }),
 		shareBar(parts),
+		Ui.text("Rivales " .. Util.num(rivalShare * 100, 1) .. " % · resto del mercado " .. Util.num((b.outsideRate / math.max(1e-9, b.demand)) * 100, 1) .. " %" .. (change and (" · demanda " .. (change >= 0 and "+" or "−") .. Util.num(math.abs(change), 1) .. " % frente a hace un año") or "") .. ". La cuota actual es una estimación con las ofertas de hoy; la histórica es el promedio mensual de lo que tuviste.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3, name = "ResumenCuotas" }),
 	}
 	for _, x in b.mine do
 		table.insert(rows, Ui.between("● " .. x.lot.design.name .. " · " .. Util.money(x.lot.price) .. " · atractivo " .. Util.round(x.lot.appeal), Util.num(x.rate, 1) .. "/min · " .. Util.num(x.share * 100, 1) .. " %", { size = Ui.S.xs, color = T.vi2, leftColor = T.vi2 }))
@@ -245,7 +254,7 @@ function Screen.build(main: Frame, side: Frame)
 		for _, typeId in Catalog.TYPE_ORDER do
 			local b = Screen.breakdown(g, typeId)
 			if b.demand > 0 then
-				typeCard(typeId, b).Parent = main
+				typeCard(g, typeId, b).Parent = main
 				shown += 1
 			end
 		end
@@ -280,7 +289,7 @@ function Screen.build(main: Frame, side: Frame)
 		table.sort(rows, function(a: any, b: any): boolean
 			return a.rate > b.rate
 		end)
-		local ranking: { Instance? } = { Ui.lbl("Clasificación de " .. Rules.year(g) .. " (ventas por minuto)") }
+		local ranking: { Instance? } = { Ui.lbl("Clasificación estimada de " .. Rules.year(g) .. " (ventas por minuto con las ofertas de hoy)") }
 		for i, row in rows do
 			local share = totalDemand > 0 and row.rate / totalDemand * 100 or 0
 			local bar = Ui.bar(math.min(100, share * 2), row.color)
@@ -293,7 +302,9 @@ function Screen.build(main: Frame, side: Frame)
 		end
 		Ui.card(ranking, { gap = 8, name = "Clasificacion" }).Parent = main
 		if g.rivalNews and #g.rivalNews.items > 0 then
-			Ui.note("b", "<b>Novedades de " .. g.rivalNews.year .. ":</b> " .. table.concat(g.rivalNews.items, " · ") .. ".").Parent = main
+			-- Las noticias guardadas antes de las doce marcas (sin `cuts`) se muestran tal cual: son historia.
+			local legacy = g.rivalNews.cuts == nil
+			Ui.note("b", "<b>Novedades de " .. g.rivalNews.year .. (legacy and " (marcas de la versión anterior)" or "") .. ":</b> " .. table.concat(g.rivalNews.items, " · ") .. ".").Parent = main
 		end
 		local yf = Rules.yearFrac(g)
 		for _, r in Catalog.RIVALS do
@@ -308,19 +319,22 @@ function Screen.build(main: Frame, side: Frame)
 				))
 			end
 			local coming = {}
-			for typeId, since in r.types do
-				if since > yf then
-					table.insert(coming, Catalog.TYPES[typeId] .. " (" .. since .. ")")
+			for _, line in r.lines or {} do
+				if line.since > yf then
+					table.insert(coming, line.name .. " · " .. Catalog.TYPES[line.type] .. " (" .. line.since .. ")")
 				end
 			end
+			local share = totalDemand > 0 and row.rate / totalDemand * 100 or 0
 			Ui.card({
 				Ui.row({
 					Ui.new("Frame", { Name = "Color", BackgroundColor3 = hex(r.color), BackgroundTransparency = 0, Size = UDim2.fromOffset(14, 14), Corner = 7 }),
 					Ui.grow(Ui.col({
-						Ui.text(r.name, { size = 16, weight = W.bold }),
-						Ui.text("Estrategia: " .. r.strategy .. " · alcance ×" .. Util.num(Catalog.interp(r.reach, yf), 1) .. " · nueva generación cada " .. r.cycle .. " años", { size = Ui.S.xs, color = T.mut }),
+						Ui.text(r.name .. (r.country and (" · " .. r.country) or ""), { size = 16, weight = W.bold, name = "NombreRival" }),
+						r.desc and Ui.text(r.desc, { size = Ui.S.xs, color = T.tx2 }) or nil,
+						Ui.text("Especialidades: " .. table.concat(r.specialties or {}, ", "), { size = Ui.S.xs, color = T.mut, name = "Especialidades" }),
+						Ui.text("Estrategia: " .. r.strategy .. " · alcance ×" .. Util.num(Rules.rivalReach(r, yf), 2) .. " · nueva generación cada " .. r.cycle .. " años", { size = Ui.S.xs, color = T.mut }),
 					}, 2)),
-					Ui.chip(Util.num(row.rate, 1) .. " ventas/min", row.rate > 0 and "cg" or "cn"),
+					Ui.chip(Util.num(row.rate, 1) .. " ventas/min · " .. Util.num(share, 1) .. " % estimado", row.rate > 0 and "cg" or "cn", { name = "CuotaRival" }),
 				}, 10, { wrap = App.isPhone() }),
 				#models > 0 and Ui.col(models, 4) or Ui.text("Sin modelos a la venta este año.", { size = Ui.S.xs, color = T.mut }),
 				#coming > 0 and Ui.text("Próximamente: " .. table.concat(coming, ", "), { size = Ui.S.xs, color = T.mut }) or nil,
@@ -331,7 +345,7 @@ function Screen.build(main: Frame, side: Frame)
 	-- Columna lateral
 	Ui.card({
 		Ui.lbl("Cómo se reparte la demanda"),
-		Ui.text("Cada tipo tiene una demanda total por minuto que cambia con los años. Se reparte entre tus modelos, las marcas rivales y el resto del mercado con las mismas reglas para todos: <b>atractivo</b> frente al que se espera en la época (cada 12 puntos más, casi el triple de peso), <b>precio</b> respecto del precio justo, <b>alcance</b> comercial y, en tu caso, <b>reputación</b> y campaña. Si les quitás mercado, los rivales más agresivos bajan sus precios.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
+		Ui.text("Cada tipo tiene una demanda total por minuto que cambia con los años. Se reparte entre tus modelos, las marcas rivales y el resto del mercado con las mismas reglas para todos: <b>atractivo</b> frente al que se espera en la época (cada 12 puntos más, casi el triple de peso), <b>precio</b> respecto del precio justo, <b>alcance</b> comercial y, en tu caso, <b>reputación</b> y campaña. Si les quitás mercado, las marcas agresivas bajan sus precios, las de respuesta «calidad» mejoran sus modelos y las deportivas compiten con prestaciones. Doce marcas se reparten la misma presión competitiva que había antes: más marcas no es más competencia total. Las cuotas que se ven son estimaciones con las ofertas de hoy, no ventas históricas de los rivales.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.45 }),
 	}, { gap = 4, name = "Reparto" }).Parent = side
 	Ui.card({
 		Ui.lbl("Tu empresa"),

@@ -119,6 +119,7 @@ function Screen.priceEditor(g: any, l: any, onDone: (() -> ())?): Frame
 	local typed = tostring(current)
 	local demand, setDemand = Screen.demandBars(Rules.demandInfo(g, l, current), "DemandaPrevista")
 	local margin = Ui.inline("", { size = Ui.S.sm, weight = W.bold, name = "Margen" })
+	local rateLbl = Ui.inline("", { size = Ui.S.sm, weight = W.bold, name = "VentasEstimadas" })
 	local msg = Ui.text("", { size = Ui.S.xs, color = T.re2, name = "PrecioInvalido" })
 	local apply: TextButton
 	local function preview(text: string)
@@ -126,6 +127,9 @@ function Screen.priceEditor(g: any, l: any, onDone: (() -> ())?): Frame
 		local p, why = Screen.parsePrice(text)
 		if p then
 			setDemand(Rules.demandInfo(g, l, p))
+			-- Estimación con el reparto real (Rules.lotRateAt): no es una venta garantizada y no guarda el precio.
+			local rate = Rules.lotRateAt(g, l, p)
+			rateLbl.Text = "≈ " .. Util.num(rate, 2) .. " autos/min real · " .. ((rate * (p - l.unitCost)) >= 0 and "+" or "−") .. Util.money(math.abs(rate * (p - l.unitCost))) .. "/min de margen"
 			local m = p - l.unitCost
 			margin.Text = (m >= 0 and "+" or "−") .. Util.money(math.abs(m)) .. " por unidad"
 			margin.TextColor3 = m >= 0 and T.gr or T.re2
@@ -134,6 +138,7 @@ function Screen.priceEditor(g: any, l: any, onDone: (() -> ())?): Frame
 		else
 			margin.Text = "—"
 			margin.TextColor3 = T.mut
+			rateLbl.Text = "—"
 			msg.Text = why or ""
 			msg.TextColor3 = T.re2
 		end
@@ -159,6 +164,18 @@ function Screen.priceEditor(g: any, l: any, onDone: (() -> ())?): Frame
 		preview(box.Text)
 	end, { small = true, name = "PrecioReferencia" })
 	preview(typed)
+	-- Comparación con los rivales del mismo tipo este año y efecto de la campaña activa (si la hay).
+	local offers = Rules.rivalOffers(l.design.type, Rules.yearFrac(g), g)
+	local sumP, sumA = 0, 0
+	for _, o in offers do
+		sumP += o.price
+		sumA += o.appeal
+	end
+	local rivalsText = #offers > 0
+			and (#offers .. " modelos rivales · precio medio " .. Util.money(Util.round(sumP / #offers)) .. " · atractivo medio " .. Util.round(sumA / #offers) .. " (el tuyo " .. Util.round(l.appeal) .. ")")
+		or "Sin modelos rivales en este tipo este año."
+	local cm = Rules.campaignMult(g, l)
+	local campText = cm > 1 and ("Campaña activa: +" .. Util.round((cm - 1) * 100) .. " % de peso comercial para este modelo (incluido en la estimación).") or "Sin campaña activa para este modelo."
 	return Ui.col({
 		Ui.fl(launch and "Precio de lanzamiento" or "Precio de venta"),
 		Ui.row({ box, rec, apply }, 8, { wrap = true }),
@@ -166,6 +183,10 @@ function Screen.priceEditor(g: any, l: any, onDone: (() -> ())?): Frame
 			Ui.col({ Ui.text("Demanda prevista", { size = Ui.S.xs, color = T.mut }), demand }, 4),
 			Ui.col({ Ui.text("Margen bruto estimado", { size = Ui.S.xs, color = T.mut }), margin }, 4),
 		}, 2, nil, 10),
+		Ui.col({ Ui.text("Ventas estimadas con este precio (estimación, no garantizada)", { size = Ui.S.xs, color = T.mut }), rateLbl }, 4),
+		Ui.between("Actual " .. Util.money(l.price) .. " · recomendado " .. Util.money(l.refPrice) .. " · costo " .. Util.money(l.unitCost), "", { size = Ui.S.xs, name = "PreciosReferencia" }),
+		Ui.text(rivalsText, { size = Ui.S.xs, color = T.mut, name = "ComparacionRivales" }),
+		Ui.text(campText, { size = Ui.S.xs, color = cm > 1 and T.gr or T.mut, name = "EfectoCampana" }),
 		msg,
 		Ui.text("El precio es libre (por encima o por debajo del costo). Afecta las ventas futuras; lo ya vendido no cambia.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
 	}, 8, { Name = "EditorPrecio" })

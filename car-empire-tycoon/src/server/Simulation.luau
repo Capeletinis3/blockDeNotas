@@ -646,6 +646,48 @@ end
 
 -- Cierre de mes -------------------------------------------------------------------------
 
+--[[ Novedades de la competencia del año `y` (todas salen de Rules.rivalOffers, el mismo cálculo del reparto):
+	  - modelos nuevos (primera generación lanzada este año) y generaciones nuevas;
+	  - bajas de precio de al menos 5 puntos MÁS que las ya informadas (no se repite la misma baja cada año);
+	  - cambios de líder entre las marcas rivales de un tipo (enero de este año frente a enero del anterior).
+	Devuelve (textos, bajas vigentes por modelo). Como mucho RIVAL_NEWS_MAX textos (los demás no se guardan). ]]
+Simulation.RIVAL_NEWS_MAX = 12
+Simulation.RIVAL_NEWS_SHOWN = 4
+function Simulation.rivalNewsFor(g: any, y: number): ({ string }, { [string]: number })
+	local items, cuts = {}, {}
+	local typeNames: any = (Catalog.TYPES :: any)
+	local prev = type(g.rivalNews) == "table" and type(g.rivalNews.cuts) == "table" and g.rivalNews.cuts or {}
+	local function add(text: string)
+		if #items < Simulation.RIVAL_NEWS_MAX then
+			table.insert(items, text)
+		end
+	end
+	for _, typeId in Catalog.TYPE_ORDER do
+		if Rules.baseDemand(typeId, y) > 0 then
+			for _, o in Rules.rivalOffers(typeId, y, g) do
+				local key = o.rival.id .. ":" .. o.line.id
+				if o.launched == y and o.gen == 1 then
+					add(o.rival.name .. " presentó el " .. o.name .. " (" .. string.lower(typeNames[typeId]) .. ")")
+				elseif o.launched == y then
+					add(o.rival.name .. " lanzó la " .. o.gen .. ".ª generación del " .. o.name)
+				end
+				local c = Util.round(o.cut * 100)
+				if c > 0 then
+					cuts[key] = c
+				end
+				if c >= 5 and c - (prev[key] or 0) >= 5 then
+					add(o.rival.name .. " bajó " .. c .. " % el precio del " .. o.name)
+				end
+			end
+			local now, before = Rules.rivalLeader(typeId, y, g), Rules.rivalLeader(typeId, y - 1, g)
+			if now and before and now.rival.id ~= before.rival.id then
+				add(now.rival.name .. " pasa a liderar a las marcas rivales en " .. string.lower(typeNames[typeId]) .. " (antes " .. before.rival.name .. ")")
+			end
+		end
+	end
+	return items, cuts
+end
+
 function Simulation.monthRollover(g: any, ctx: any)
 	-- Los movimientos de este bloque pertenecen al mes que empieza.
 	Simulation.payroll(g, ctx)
@@ -704,20 +746,12 @@ function Simulation.monthRollover(g: any, ctx: any)
 			end
 		end
 		Simulation.notify(g, ctx, "info", "Comienza " .. y .. "." .. (#news > 0 and (" Nuevas tecnologías para investigar: " .. table.concat(news, ", ") .. ".") or ""), #news > 0 and "investigacion" or nil)
-		-- Competencia: generaciones nuevas de los rivales y bajas de precio para competir con vos.
-		local rivalNews = {}
-		for _, typeId in Catalog.TYPE_ORDER do
-			for _, o in Rules.rivalOffers(typeId, y, g) do
-				if o.launched == y and o.gen > 1 then
-					table.insert(rivalNews, o.rival.name .. " lanzó el " .. o.name)
-				elseif o.cut >= 0.05 then
-					table.insert(rivalNews, o.rival.name .. " bajó " .. round(o.cut * 100) .. " % el precio del " .. o.name)
-				end
-			end
-		end
-		if #rivalNews > 0 then
-			g.rivalNews = { year = y, items = rivalNews }
-			Simulation.notify(g, ctx, "info", "Competencia en " .. y .. ": " .. table.concat(rivalNews, " · ") .. ".", "mercado")
+		-- Competencia: novedades reales de las ofertas rivales de este año (Simulation.rivalNewsFor).
+		local items, cuts = Simulation.rivalNewsFor(g, y)
+		g.rivalNews = { year = y, items = items, cuts = cuts }
+		if #items > 0 then
+			local shown = table.move(items, 1, math.min(#items, Simulation.RIVAL_NEWS_SHOWN), 1, {})
+			Simulation.notify(g, ctx, "info", "Competencia en " .. y .. ": " .. table.concat(shown, " · ") .. (#items > #shown and (" · y " .. (#items - #shown) .. " novedades más en Mercado") or "") .. ".", "mercado")
 		end
 		-- Los lanzamientos de diseños que ya no existen no necesitan recordarse.
 		local alive = {}

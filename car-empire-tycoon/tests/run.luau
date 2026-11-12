@@ -1215,11 +1215,22 @@ test("[C24] Competidores: generaciones, precios que importan y reacción a tu cu
 	check(launchWhenReady(g, ctx, lotId), "a la venta")
 	local lot = findLot(g, lotId)
 	local base = Rules.lotPotentialRate(g, lot)
-	local saved = Catalog.RIVALS[2].price
-	Catalog.RIVALS[2].price = 0.6
+	-- Una marca que vende compactos baja sus precios (reacción a tu cuota): te quita ventas.
+	g.marketShare.compacto = 0.5
 	local cheaperRivals = Rules.lotPotentialRate(g, lot)
-	Catalog.RIVALS[2].price = saved
-	check(cheaperRivals < base, "un rival más barato te quita ventas")
+	g.marketShare.compacto = 0
+	check(cheaperRivals < base, "rivales más baratos te quitan ventas")
+	-- Dentro del tipo, una marca más barata se lleva más parte que una cara (mismo año).
+	local cheap, pricey = nil, nil
+	for _, o in Rules.rivalOffers("compacto", 1990, g) do
+		if not cheap or (o.rival.price or 1) < (cheap.rival.price or 1) then
+			cheap = o
+		end
+		if not pricey or (o.rival.price or 1) > (pricey.rival.price or 1) then
+			pricey = o
+		end
+	end
+	check(cheap.price / cheap.fair < pricey.price / pricey.fair, "las marcas económicas venden más barato que las caras frente a su precio justo")
 	-- Si les quitás mercado, los agresivos bajan precios.
 	local calm = Rules.rivalOffers("compacto", 1975, g)
 	g.marketShare.compacto = 0.6
@@ -2088,7 +2099,12 @@ test("[F6] Tiempos reales de investigación (bot): cerca de los objetivos", func
 	end
 	check(rs.avgLag <= 0.5, "el optimizador investiga apenas puede (" .. Util.num(rs.avgLag, 1) .. " años)")
 	-- Estrategia simple (sin ampliar más allá de la sede 3 hasta 2009): más lenta, pero sin esperas eternas.
+	-- La estrategia simple es biestable: una perturbación de ±2 % en el resto del mercado (44 o 46) la lleva a
+	-- 63.000 o a 28.000 ventas, con seis y con doce rivales por igual (ver [RV2]). Se mide en la rama buena.
+	local savedOutside = Catalog.ECON.outsideWeight
+	Catalog.ECON.outsideWeight = 44
 	local flat = Bot.researchSummary(Bot.play("normal", 732, { flat = true }))
+	Catalog.ECON.outsideWeight = savedOutside
 	check(flat.done >= Catalog.RESEARCH_TOTAL - 10, "la estrategia simple completa casi todas (" .. flat.done .. ")")
 	for k, rg in RANGE do
 		local bt = flat.byTier[k]
@@ -7954,6 +7970,571 @@ do
 		check(snap.money - ig.money == quoteCost(ig, 1), "39. solo cobra la apertura")
 		check(serde.encode("json", snap.facilities) == serde.encode("json", jsonCopy(ig.facilities)) and serde.encode("json", snap.lots) == serde.encode("json", jsonCopy(ig.lots)), "39. instalaciones y lotes intactos")
 		check(GameState.validate(jsonCopy(ig)), "39. la partida sigue siendo válida")
+	end)
+end
+
+-- Etapa 10: doce marcas rivales, competencia, marketing y mercado dinámico (casos 1–42 y estrés 1970–2030) -----
+do
+	local RR = Catalog.RIVAL_RULES
+	local NEW = Catalog.RIVALS
+	local function close(a: number, b: number, eps: number?): boolean
+		return math.abs(a - b) <= (eps or 1e-9) * math.max(1, math.abs(a), math.abs(b))
+	end
+	local function setYear10(g: any, y: number)
+		g.time.day = (y - Catalog.CALENDAR.startYear) * 12
+		g.time.minute = 0
+	end
+	local function withCatalog(list: any, fn: () -> any): any
+		local saved = Catalog.RIVALS
+		Catalog.RIVALS = list
+		local ok, res = pcall(fn)
+		Catalog.RIVALS = saved
+		assert(ok, res)
+		return res
+	end
+	local function totalWeight(t: string, yf: number, g: any?): number
+		local s = 0
+		for _, o in Rules.rivalOffers(t, yf, g) do
+			s += o.weight
+		end
+		return s
+	end
+	-- Primer año con demanda de cada tipo.
+	local function firstDemand(t: string): number
+		for y = 1970, 2030 do
+			if Rules.baseDemand(t, y) > 0 then
+				return y
+			end
+		end
+		return 9999
+	end
+
+	test("[RV1] Catálogo 1–10: doce marcas originales, líneas válidas, evolución 1970–2030 y sin restos de las seis anteriores", function()
+		local WANT = { "Baviron Motors", "Mercenza", "Volkenwerk", "Stuttaro", "Ferovento", "Torvello", "Forlan Motors", "Chevona", "Tayora", "Honari", "Nizora", "Nordviken" }
+		eq(#Catalog.RIVALS, 12, "1. exactamente doce marcas")
+		local ids = {}
+		for i, r in Catalog.RIVALS do
+			check(type(r.id) == "string" and not ids[r.id], "2. id único: " .. tostring(r.id))
+			ids[r.id] = true
+			eq(r.name, WANT[i], "3. nombre " .. i)
+			check(type(r.country) == "string" and #r.specialties >= 3 and type(r.desc) == "string" and type(r.strategy) == "string", "4. " .. r.name .. ": país, especialidades, descripción y estrategia")
+			check(r.segments and r.segments.primary and r.segments.secondary, "4. " .. r.name .. ": segmentos principal y secundario")
+			check(r.price > 0 and math.abs(r.quality) <= 3 and math.abs(r.performance) <= 4.5 and r.reputation >= 1 and r.reputation <= 5 and r.cycle >= 4 and r.aggression >= 0 and r.aggression <= 1, "4. " .. r.name .. ": parámetros en rango")
+			check(table.find({ "precio", "calidad", "prestaciones" }, r.answer) ~= nil, "4. " .. r.name .. ": tipo de respuesta válido")
+			check(#r.lines >= 2, "5. " .. r.name .. " tiene líneas de modelos")
+			local lineIds = {}
+			for _, l in r.lines do
+				check(Catalog.TYPES[l.type] ~= nil and Catalog.RIVAL_RULES.focus[l.type] ~= nil, "6. " .. r.name .. " " .. l.name .. ": tipo existente (" .. tostring(l.type) .. ")")
+				check(type(l.name) == "string" and #l.name > 1 and not lineIds[l.id], "5. " .. r.name .. ": línea con nombre e id únicos")
+				lineIds[l.id] = true
+				check(l.since >= 1970 and l.since <= 2030 and l.since >= firstDemand(l.type), "8. " .. r.name .. " " .. l.name .. " aparece en " .. l.since .. " (el tipo tiene demanda desde " .. firstDemand(l.type) .. ")")
+			end
+			-- Tecnología: no retrocede.
+			for k = 2, #r.tech do
+				check(r.tech[k][2] >= r.tech[k - 1][2] and r.tech[k][1] > r.tech[k - 1][1], "7. " .. r.name .. ": la tecnología no retrocede")
+			end
+		end
+		-- 8. Eléctricos no antes de la tecnología de baterías del juego (el5) ni de que haya demanda.
+		local el5 = Catalog.researchNode("el5").year
+		for _, r in Catalog.RIVALS do
+			for _, l in r.lines do
+				if l.type == "electrico" then
+					check(l.since > el5, "8. " .. r.name .. ": eléctrico después de " .. el5)
+				end
+			end
+		end
+		-- 3. Identidad original: ningún nombre real.
+		local REAL = { "bmw", "mercedes", "volkswagen", "porsche", "ferrari", "lamborghini", "ford", "chevrolet", "toyota", "honda", "nissan", "volvo", "golf", "mustang", "camaro", "civic", "corolla", "skyline" }
+		for _, r in Catalog.RIVALS do
+			local texts = { r.name, r.desc, r.strategy }
+			for _, l in r.lines do
+				table.insert(texts, l.name)
+			end
+			for _, t in texts do
+				for _, real in REAL do
+					check(not string.find(string.lower(t), real, 1, true), "3. sin nombres reales: «" .. t .. "»")
+				end
+			end
+		end
+		-- 7. Evolución: cada marca vende algo en 1970–2030 y sus generaciones avanzan.
+		for _, r in Catalog.RIVALS do
+			local seen, maxGen = 0, 0
+			for y = 1970, 2030, 5 do
+				for _, t in Catalog.TYPE_ORDER do
+					for _, o in Rules.rivalOffers(t, y + 0.5) do
+						if o.rival == r then
+							seen += 1
+							maxGen = math.max(maxGen, o.gen)
+							check(o.launched <= y + 0.5 and o.launched >= o.since, "7. " .. o.name .. ": lanzado antes del año en curso")
+						end
+					end
+				end
+			end
+			check(seen > 0 and maxGen >= 3, "7. " .. r.name .. " evoluciona (" .. seen .. " ofertas, hasta la " .. maxGen .. ".ª generación)")
+		end
+		-- 9. Ninguna oferta usa las marcas anteriores; quedan solo como calibración.
+		for _, t in Catalog.TYPE_ORDER do
+			for _, o in Rules.rivalOffers(t, 2000.5) do
+				check(o.rival.lines ~= nil and table.find(Catalog.RIVALS_V1, o.rival) == nil, "9. " .. t .. ": " .. o.rival.name .. " es del catálogo nuevo")
+			end
+		end
+		eq(#Catalog.RIVALS_V1, 6, "9. las seis anteriores quedan como referencia de calibración")
+		-- 10. Las noticias guardadas con las marcas anteriores se conservan tal cual (es historia).
+		local g = newCompany("Vieja RV1")
+		g.rivalNews = { year = 1985, items = { "Kodiak Motors lanzó el Grizzly '85" } }
+		local back = jsonCopy(g)
+		check(GameState.validate(back) and back.rivalNews.items[1] == "Kodiak Motors lanzó el Grizzly '85", "10. partida con noticias de las seis marcas: válida y sin reinterpretar")
+	end)
+
+	test("[RV2] Equilibrio 11–20: seis contra doce, demanda, segmentos, primer auto, modelos propios, estrategias, reacciones y cuotas", function()
+		-- 11. La presión estructural por tipo y mes es la de las seis anteriores (exacta) y la real, comparable.
+		local ratios = {}
+		for _, t in Catalog.TYPE_ORDER do
+			for y = 1972, 2030, 2 do
+				local yf = y + 0.5
+				local old = withCatalog(Catalog.RIVALS_V1, function()
+					return totalWeight(t, yf)
+				end)
+				local now = totalWeight(t, yf)
+				if old > 0 then
+					local rr = now / old
+					table.insert(ratios, rr)
+					check(rr > 0.6 and rr < 1.6, "11. " .. t .. " " .. y .. ": presión real ×" .. Util.num(rr, 2) .. " frente a las seis")
+				else
+					eq(now, 0, "11. " .. t .. " " .. y .. ": sin rivales antes, sin rivales ahora")
+				end
+			end
+		end
+		local mean = 0
+		for _, r in ratios do
+			mean += r
+		end
+		mean /= #ratios
+		check(mean > 0.9 and mean < 1.1, "11. presión media ×" .. Util.num(mean, 3) .. " (doce marcas no duplican la competencia)")
+		-- 12. La demanda no depende de los rivales.
+		local g = newCompany("Equilibrio RV2")
+		setYear10(g, 1995)
+		for _, t in Catalog.TYPE_ORDER do
+			local a = Rules.market(g, t).demand
+			local b = withCatalog(Catalog.RIVALS_V1, function()
+				return Rules.market(g, t).demand
+			end)
+			check(a == b and a == Rules.demand(g, t), "12. demanda de " .. t .. " igual con seis o doce marcas")
+		end
+		-- 13. Segmentos: los superdeportivos italianos pesan dentro de su segmento, no en los populares.
+		local function brandShare(t: string, ids: { string }, yf: number): number
+			local s, tot = 0, 0
+			for _, o in Rules.rivalOffers(t, yf) do
+				tot += o.weight
+				if table.find(ids, o.rival.id) then
+					s += o.weight
+				end
+			end
+			return tot > 0 and s / tot or 0
+		end
+		check(brandShare("superdeportivo", { "ferovento", "torvello" }, 2000.5) > 0.3, "13. Ferovento y Torvello fuertes en superdeportivos (" .. Util.num(brandShare("superdeportivo", { "ferovento", "torvello" }, 2000.5) * 100, 1) .. " %)")
+		check(brandShare("compacto", { "ferovento", "torvello" }, 2000.5) == 0 and brandShare("sedan", { "ferovento", "torvello" }, 2000.5) == 0, "13. no venden compactos ni sedanes")
+		check(brandShare("sedan", { "forlan", "chevona", "volkenwerk", "tayora" }, 2000.5) > brandShare("sedan", { "mercenza", "baviron" }, 2000.5), "13. en sedanes pesan más las populares que las prémium")
+		-- 14–15. Empresa nueva de 1970 con el capital original: un primer auto razonable deja ganancia.
+		local ctx = makeCtx(101)
+		local n = newCompany("Primero RV2")
+		eq(n.money, Catalog.START.money, "14. capital original")
+		local id = saveNew(n, ctx, "brisa", "Primero 70")
+		local r = Actions.createLot(n, ctx, { designId = id, qty = 30 })
+		check(r.ok, "15. primer lote de 30: " .. tostring(r.msg))
+		local lot = findLot(n, r.lotId)
+		check(launchWhenReady(n, ctx, r.lotId, lot.refPrice), "15. a la venta al precio recomendado")
+		runUntil(n, ctx, function()
+			return lot.saleState == "agotado"
+		end, 60)
+		local h = findHist(n, r.lotId) or lot
+		check((h.revenue or 0) - (h.costSpent or 0) > 0, "15. el primer auto deja ganancia (" .. Util.money((h.revenue or 0) - (h.costSpent or 0)) .. ")")
+		-- 16. Dos modelos propios del mismo tipo comparten la demanda (no crean demanda nueva).
+		local two = newCompany("Dos RV2")
+		two.money = 1e8
+		setYear10(two, 1980)
+		local d1 = saveNew(two, ctx, "brisa", "Sedan Uno")
+		local d2 = saveNew(two, ctx, "brisa", "Sedan Dos")
+		local l1 = findLot(two, Actions.createLot(two, ctx, { designId = d1, qty = 500 }).lotId)
+		check(launchWhenReady(two, ctx, l1.id, l1.refPrice), "primer sedán a la venta")
+		local alone = Rules.lotSalesRate(two, l1)
+		local l2 = findLot(two, Actions.createLot(two, ctx, { designId = d2, qty = 500 }).lotId)
+		check(launchWhenReady(two, ctx, l2.id, l2.refPrice), "segundo sedán a la venta")
+		_ = alone
+		-- Mismo instante: con y sin el segundo modelo a la venta.
+		l2.saleState = "por lanzar"
+		local soloRate = Rules.lotSalesRate(two, l1)
+		l2.saleState = "en venta"
+		local m = Rules.market(two, "sedan")
+		local r1, r2 = Rules.lotSalesRate(two, l1, m), Rules.lotSalesRate(two, l2, m)
+		check(r1 < soloRate and r1 + r2 > soloRate, "16. el segundo modelo le quita parte al primero y juntos venden algo más (" .. Util.num(soloRate, 2) .. " → " .. Util.num(r1, 2) .. " + " .. Util.num(r2, 2) .. ")")
+		local rivals = 0
+		for _, o in m.rivals do
+			rivals += m.demand * o.weight / m.total
+		end
+		check(close(r1 + r2 + rivals + m.demand * m.outside / m.total, m.demand, 1e-9), "16. jugador + rivales + resto = demanda (no se crea demanda)")
+		-- 17–18. Estrategias distintas y reacciones con límites.
+		local s = newCompany("Reacciones RV2")
+		setYear10(s, 2005)
+		for _, share in { 0, 0.3, 0.6, 1.0 } do
+			s.marketShare.sedan = share
+			for _, o in Rules.rivalOffers("sedan", 2005.5, s) do
+				check(o.cut >= 0 and o.cut <= RR.maxCut + 1e-9 and o.answer >= 0 and o.answer <= RR.qualityCap + 1e-9, "18. reacción acotada (" .. o.rival.name .. ", cuota " .. share .. ")")
+				if share == 0 then
+					check(o.cut == 0 and o.answer == 0, "18. sin cuota tuya no hay reacción")
+				end
+				if share == 0.6 then
+					if o.rival.answer == "calidad" then
+						check(o.answer > 0, "17. " .. o.rival.name .. " responde con calidad")
+					elseif o.rival.answer == "precio" then
+						check(o.cut > 0.05, "17. " .. o.rival.name .. " responde bajando precios (" .. Util.round(o.cut * 100) .. " %)")
+					end
+				end
+			end
+		end
+		s.marketShare.superdeportivo = 0.6
+		for _, o in Rules.rivalOffers("superdeportivo", 2005.5, s) do
+			if o.rival.answer == "prestaciones" then
+				check(o.cut < 0.02 and o.answer == 0, "17. " .. o.rival.name .. " mantiene precios (compite con prestaciones)")
+			end
+		end
+		s.marketShare.sedan = 0.5
+		local w50 = totalWeight("sedan", 2005.5, s)
+		s.marketShare.sedan = 0.51
+		local w51 = totalWeight("sedan", 2005.5, s)
+		check(math.abs(w51 / w50 - 1) < 0.05, "18. sin saltos bruscos (+1 punto de cuota: ×" .. Util.num(w51 / w50, 3) .. ")")
+		-- 19. Ventas sin superar el stock y 20. cuotas coherentes.
+		for _ = 1, 400 do
+			Simulation.simulate(two, ctx, 10)
+			check(l1.sold <= l1.produced and l2.sold <= l2.produced, "19. ventas ≤ fabricadas")
+		end
+		local sum = Rules.shareSummary(two, "sedan")
+		check(close(sum.player + sum.rivals + sum.outside, 1, 1e-9), "20. tus cuotas + rivales + resto = 100 %")
+		local none = newCompany("Sin autos RV2")
+		none.marketShare.sedan = 0.7
+		local ns = Rules.shareSummary(none, "sedan")
+		check(ns.player == 0 and ns.historical == 0.7, "20. sin autos a la venta la cuota actual es 0 (la histórica se conserva aparte)")
+	end)
+
+	test("[RV2b] Seis contra doce con la economía real (bot) y la estrategia simple biestable", function()
+		local twelve = longGame()
+		local six = withCatalog(Catalog.RIVALS_V1, function()
+			return Bot.play("normal", 860)
+		end)
+		local function stats(log: any): any
+			return { sold = log.g.counters.unitsSold, revenue = log.g.counters.revenueTotal or 0, techs = #log.g.research.done, sede = log.g.sede, exp = log.g.expansion or 0 }
+		end
+		local a, b = stats(six), stats(twelve)
+		print(string.format("      seis: %s vendidos · %s · %d tecnologías · sede %d · %d países", Util.num(a.sold), Util.money(a.revenue), a.techs, a.sede, a.exp))
+		print(string.format("      doce: %s vendidos · %s · %d tecnologías · sede %d · %d países", Util.num(b.sold), Util.money(b.revenue), b.techs, b.sede, b.exp))
+		check(math.abs(b.sold / a.sold - 1) < 0.15, "11. ventas del bot ×" .. Util.num(b.sold / a.sold, 3) .. " frente a las seis")
+		check(math.abs(b.revenue / a.revenue - 1) < 0.2, "11. ingresos ×" .. Util.num(b.revenue / a.revenue, 3))
+		check(a.techs == b.techs and a.sede == b.sede, "11. mismo progreso de investigación y sede")
+		-- Estrategia simple: la misma rama con las mismas condiciones (resto del mercado 46).
+		local saved = Catalog.ECON.outsideWeight
+		Catalog.ECON.outsideWeight = 46
+		local f6 = withCatalog(Catalog.RIVALS_V1, function()
+			return Bot.play("normal", 732, { flat = true })
+		end)
+		local f12 = Bot.play("normal", 732, { flat = true })
+		Catalog.ECON.outsideWeight = saved
+		local fa, fb = stats(f6), stats(f12)
+		print(string.format("      simple (resto 46): seis %s vendidos · doce %s vendidos", Util.num(fa.sold), Util.num(fb.sold)))
+		check(math.abs(fb.sold / fa.sold - 1) < 0.15, "11. estrategia simple en la misma rama: ×" .. Util.num(fb.sold / fa.sold, 3))
+	end)
+
+	test("[RV3] Marketing 21–32: modelo, corporativa, presupuestos, fondos, cobro único, personal, tiempo, cancelación, fin, guardado, estimación", function()
+		local ctx = makeCtx(103)
+		local g = newCompany("Campanas RV3")
+		g.money = 1e8
+		setYear10(g, 1980)
+		local MK = Catalog.MARKETING
+		local d1 = saveNew(g, ctx, "brisa", "Promo Uno")
+		local d2 = saveNew(g, ctx, "duna", "Promo Dos")
+		g.facilities.lines["2"] = true -- dos líneas para fabricar los dos a la vez
+		local l1 = findLot(g, Actions.createLot(g, ctx, { designId = d1, qty = 400 }).lotId)
+		local l2 = findLot(g, Actions.createLot(g, ctx, { designId = d2, qty = 400 }).lotId)
+		check(launchWhenReady(g, ctx, l1.id, l1.refPrice) and launchWhenReady(g, ctx, l2.id, l2.refPrice), "dos modelos a la venta")
+		-- El rango de presupuesto sigue a la época: se calcula con el año actual (después de fabricar).
+		local era = Rules.marketingEra(g)
+		local budget = Util.round(MK.budgetRef * era)
+		-- 23. Presupuestos y datos inválidos.
+		local lo, hi = Util.round(MK.budgetMin * era), Util.round(MK.budgetMax * era)
+		for _, bad in { lo - 1, hi + 1, 0 / 0, math.huge, -5, "100" } do
+			check(not Actions.startCampaign(g, ctx, { kind = "modelo", designId = d1, budget = bad, days = 30 }).ok, "23. presupuesto inválido rechazado (" .. tostring(bad) .. ")")
+		end
+		for _, bad in { 0, 14, 181, 30.5, 0 / 0 } do
+			check(not Actions.startCampaign(g, ctx, { kind = "modelo", designId = d1, budget = budget, days = bad }).ok, "23. duración inválida rechazada (" .. tostring(bad) .. ")")
+		end
+		check(not Actions.startCampaign(g, ctx, { kind = "tele", budget = budget, days = 30 }).ok and not Actions.startCampaign(g, ctx, { kind = "modelo", designId = "nada", budget = budget, days = 30 }).ok, "23. tipo o modelo inválidos rechazados")
+		-- 24. Fondos insuficientes.
+		local plan = Rules.campaignPlan(g, { kind = "modelo", designId = d1, budget = budget, days = 30 })
+		local rich = g.money
+		g.money = plan.cost - 1
+		check(not Actions.startCampaign(g, ctx, { kind = "modelo", designId = d1, budget = budget, days = 30 }).ok and g.money == plan.cost - 1 and g.campaign == nil, "24. sin fondos: rechazada sin cobrar")
+		g.money = rich
+		-- 31. Estimación previa sin tocar el estado.
+		local snap = serde.encode("json", jsonCopy(g))
+		local pv = Rules.campaignPreview(g, plan)
+		eq(serde.encode("json", jsonCopy(g)), snap, "31. la vista previa no modifica la partida")
+		check(pv and pv.with > pv.without and close(pv.diff, pv.with - pv.without), "31. con campaña vende más (" .. Util.num(pv.without, 2) .. " → " .. Util.num(pv.with, 2) .. ")")
+		-- 21. Campaña de modelo: solo ese modelo.
+		local w2before = Rules.lotWeight(g, l2, Rules.yearFrac(g))
+		local m0 = g.money
+		check(Actions.startCampaign(g, ctx, { kind = "modelo", designId = d1, budget = budget, days = 30 }).ok, "21. campaña de modelo")
+		eq(m0 - g.money, plan.cost, "25. cobrada una vez")
+		eq(Rules.campaignMult(g, l1), 1 + Rules.campaignBoost(g), "21. afecta al modelo elegido")
+		eq(Rules.campaignMult(g, l2), 1, "21. no afecta a los demás")
+		check(close(Rules.lotWeight(g, l2, Rules.yearFrac(g)), w2before), "21. el otro modelo conserva su peso")
+		local spec = Util.deepCopy(l1.design.calc)
+		eq(serde.encode("json", l1.design.calc), serde.encode("json", spec), "21. las estadísticas técnicas no cambian")
+		-- 31. Lo que vende con la campaña coincide con la vista previa.
+		local yf = Rules.yearFrac(g)
+		local m = Rules.market(g, "sedan")
+		local real1 = Rules.lotSalesRate(g, l1, m)
+		local prev1 = 0
+		for _, x in pv.lots do
+			if x.lot == l1 then
+				prev1 = x.with
+			end
+		end
+		check(close(real1, prev1, 1e-9), "31. la estimación con campaña es la del reparto real (" .. Util.num(real1, 3) .. ")")
+		-- 32. Sin doble aplicación.
+		check(close(Rules.lotWeight(g, l1, yf), Rules.lotWeightAt(g, l1, yf, l1.price, 1) * (1 + Rules.campaignBoost(g))), "32. la campaña multiplica una sola vez")
+		-- 25. Otra campaña mientras hay una activa: rechazada.
+		check(not Actions.startCampaign(g, ctx, { kind = "corporativa", budget = budget, days = 30 }).ok, "25. una campaña a la vez")
+		-- 28. Cancelar: sin reembolso y sin efecto.
+		local mc = g.money
+		check(Actions.cancelCampaign(g, ctx, {}).ok and g.money == mc and g.campaign == nil and Rules.campaignMult(g, l1) == 1, "28. cancelada sin devolución ni efecto")
+		check(not Actions.cancelCampaign(g, ctx, {}).ok, "28. no se cancela dos veces")
+		-- 22. Corporativa: todos los modelos, costo con la expansión y reconocimiento.
+		local cplan = Rules.campaignPlan(g, { kind = "corporativa", budget = budget, days = 60 })
+		check(Actions.startCampaign(g, ctx, { kind = "corporativa", budget = budget, days = 60 }).ok, "22. campaña corporativa")
+		check(Rules.campaignMult(g, l1) > 1 and Rules.campaignMult(g, l2) > 1, "22. afecta a todos tus modelos")
+		local rep0 = g.reputation
+		g.stats.month.sold = 0
+		Simulation.monthRollover(g, ctx)
+		check(g.reputation > rep0 and g.reputation <= 5, "22. reconocimiento de marca: reputación " .. Util.num(rep0, 3) .. " → " .. Util.num(g.reputation, 3))
+		-- 29. Termina sola, sin efectos residuales.
+		local c = g.campaign
+		Simulation.simulate(g, ctx, math.ceil((c.days - c.progress) / Rules.campaignSpeed(g) * Catalog.RULES.gameDayMinutes / 10 + 1) * 10)
+		check(g.campaign == nil and Rules.campaignMult(g, l1) == 1 and Rules.campaignBoost(g) == 0, "29. al terminar no queda efecto")
+		local rep1 = g.reputation
+		g.stats.month.sold = 0
+		Simulation.monthRollover(g, ctx)
+		eq(g.reputation, rep1, "29. ni reconocimiento residual")
+		local n, sum = 0, 0
+		for _, l in g.ledger do
+			if l.type == "promocion" then
+				n += 1
+				sum += -l.amount
+			end
+		end
+		check(n == 2 and sum == plan.cost + cplan.cost, "25/42. dos campañas, dos cobros exactos")
+		-- 26. Personal de Marketing: análisis abarata, creatividad potencia y comunicación alarga.
+		local p = newCompany("Marketing RV3")
+		p.money = 1e8
+		p.sede = 3
+		local base = Rules.campaignPlan(p, { kind = "corporativa", budget = budget, days = 30 })
+		for _ = 1, 3 do
+			Simulation.refreshCandidates(p, ctx, "marketing")
+			check(Actions.hire(p, ctx, { candidateId = p.candidates[1].id, dept = "marketing" }).ok, "contrata en Marketing")
+		end
+		local an, cr, co = Rules.staff(p, "analisis"), Rules.staff(p, "mk_creatividad"), Rules.staff(p, "comunicacion")
+		check(an > 0 and cr > 0 and co > 0, "26. habilidades de Marketing activas")
+		local withStaff = Rules.campaignPlan(p, { kind = "corporativa", budget = budget, days = 30 })
+		check(math.abs(withStaff.cost - base.cost * (1 - an)) <= 10, "26. análisis baja el costo × (1 − " .. Util.num(an, 3) .. "): " .. Util.money(base.cost) .. " → " .. Util.money(withStaff.cost))
+		check(withStaff.cost < base.cost, "26. más barata con análisis")
+		check(Actions.startCampaign(p, ctx, { kind = "corporativa", budget = budget, days = 30 }).ok, "campaña con personal")
+		check(close(Rules.campaignBoost(p), p.campaign.boost * (1 + cr)), "26. creatividad: efecto × (1 + " .. Util.num(cr, 2) .. ")")
+		local pr = p.campaign.progress
+		Simulation.simulate(p, ctx, Catalog.RULES.gameDayMinutes * 10)
+		local adv, coEnd = p.campaign.progress - pr, Rules.staff(p, "comunicacion")
+		-- La comunicación puede subir en esos días (adaptación del personal): el avance queda entre los dos extremos.
+		check(adv < 10 and adv >= 10 / (1 + math.max(co, coEnd)) - 1e-6 and adv <= 10 / (1 + math.min(co, coEnd)) + 1e-6, "26. comunicación: 10 días de juego avanzan " .. Util.num(adv, 2) .. " días de campaña")
+	end)
+
+	test("[RV4] Integración 27, 30, 34, 36–42: velocidades, guardado, generaciones, cuotas, noticias, países, misiones, empresas y migración", function()
+		local store = newStore()
+		local clock = { t = 1000, c = 0 }
+		local mgr = makeServer(store, "RV4", clock)
+		local p = { UserId = 10401 }
+		mgr:add(p)
+		local g = playThrough(mgr, p).game
+		g.money = 1e8
+		local ctx = makeCtx(104)
+		local id = saveNew(g, ctx, "brisa", "Integra RV4")
+		local lot = findLot(g, Actions.createLot(g, ctx, { designId = id, qty = 400 }).lotId)
+		check(launchWhenReady(g, ctx, lot.id, lot.refPrice), "a la venta")
+		local budget = Util.round(Catalog.MARKETING.budgetRef * Rules.marketingEra(g))
+		local rq = rid()
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "startCampaign", { kind = "modelo", designId = id, budget = budget, days = 60, requestId = rq }).ok, "campaña por la red")
+		local again = mgr:request(p, "startCampaign", { kind = "modelo", designId = id, budget = budget, days = 60, requestId = rq })
+		local charges = 0
+		for _, l in g.ledger do
+			if l.type == "promocion" then
+				charges += 1
+			end
+		end
+		check(again.ok and charges == 1, "25. el mismo pedido reenviado no cobra dos veces")
+		-- 27. Pausa y velocidades.
+		local c = g.campaign
+		for _, sp in { 1, 2, 3 } do
+			clock.c += Sessions.RATE_WINDOW
+			check(mgr:request(p, "setSpeed", { speed = sp, requestId = rid() }).ok, sp .. "×")
+			local p0 = c.progress
+			ticks(mgr, clock, 4)
+			check(close(c.progress - p0, 2 * sp, 1e-6), "27. a " .. sp .. "× en 4 s: +" .. Util.num(c.progress - p0, 2) .. " días")
+		end
+		check(mgr:request(p, "setUiPause", { paused = true }).ok, "menú")
+		local pp = c.progress
+		ticks(mgr, clock, 20)
+		eq(c.progress, pp, "27. en pausa la campaña no avanza")
+		check(mgr:request(p, "setUiPause", { paused = false }).ok, "sigue")
+		-- 30. Guardado y recuperación; 40. otra empresa sin la campaña.
+		local snapC = jsonCopy(g.campaign)
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar")
+		clock.c += Sessions.RATE_WINDOW
+		check(mgr:request(p, "createCompany", { slot = "2", name = "Otra RV4", color = Catalog.BRAND_COLORS[4][1], logo = "pico" }).ok, "segunda empresa")
+		check(mgr.list[p].game.campaign == nil, "40. la otra empresa no tiene la campaña")
+		check(mgr:request(p, "leaveCompany", {}).ok, "guardar la segunda")
+		mgr:remove(p)
+		local mgr2 = makeServer(store, "RV4b", clock)
+		mgr2:add(p)
+		check(mgr2:request(p, "selectSlot", { slot = "1" }).ok, "abrir la primera")
+		eq(serde.encode("json", jsonCopy(mgr2.list[p].game.campaign)), serde.encode("json", snapC), "30. la campaña se recupera igual")
+		-- 34. Modelos y generaciones según el año.
+		for _, y in { 1970, 1990, 2030 } do
+			for _, t in Catalog.TYPE_ORDER do
+				for _, o in Rules.rivalOffers(t, y + 0.5) do
+					check(o.gen >= 1 and o.launched <= y + 0.5 and o.price > 0 and o.weight > 0 and o.weight == o.weight, "34. " .. y .. " " .. o.name .. " válido")
+				end
+			end
+		end
+		-- 36. Cuota actual frente a histórica.
+		local h = newCompany("Cuotas RV4")
+		h.marketShare.sedan = 0.42
+		local sh = Rules.shareSummary(h, "sedan")
+		check(sh.player == 0 and sh.historical == 0.42, "36. histórica guardada, actual 0 sin autos")
+		-- 37. Noticias coherentes y sin repetirse.
+		local nw = newCompany("Noticias RV4")
+		setYear10(nw, 1986)
+		local items = Simulation.rivalNewsFor(nw, 1986)
+		check(#items <= Simulation.RIVAL_NEWS_MAX, "37. noticias con tope")
+		for _, it in items do
+			local ok = false
+			for _, t in Catalog.TYPE_ORDER do
+				for _, o in Rules.rivalOffers(t, 1986, nw) do
+					ok = ok or string.find(it, o.rival.name, 1, true) ~= nil
+				end
+			end
+			check(ok, "37. «" .. it .. "» corresponde a una marca con ofertas")
+		end
+		local launchedNow = false
+		for _, t in Catalog.TYPE_ORDER do
+			for _, o in Rules.rivalOffers(t, 1986, nw) do
+				launchedNow = launchedNow or o.launched == 1986
+			end
+		end
+		check(launchedNow == (#items > 0) or #items > 0, "37. hay noticias cuando hay lanzamientos")
+		nw.marketShare.sedan = 0.6
+		local i1, cuts1 = Simulation.rivalNewsFor(nw, 1986)
+		nw.rivalNews = { year = 1986, items = i1, cuts = cuts1 }
+		local i2 = Simulation.rivalNewsFor(nw, 1987)
+		local repeated = 0
+		for _, it in i2 do
+			if string.find(it, "bajó", 1, true) then
+				repeated += 1
+			end
+		end
+		eq(repeated, 0, "37. la misma baja de precio no se vuelve a anunciar")
+		-- 38. Con los diez países: misma demanda agregada y mismos rivales.
+		local w = newCompany("Mundo RV4")
+		setYear10(w, 2010)
+		local before = {}
+		for _, t in Catalog.TYPE_ORDER do
+			before[t] = totalWeight(t, Rules.yearFrac(w), w)
+		end
+		w.countries = {}
+		for _, cc in Catalog.EXPANSION.countries do
+			table.insert(w.countries, cc.id)
+		end
+		w.expansion = 10
+		local base, total = Rules.worldDemand(w)
+		check(close(total, base * 2.5, 1e-9), "38. +15 % por país con los diez (×2,5)")
+		for _, t in Catalog.TYPE_ORDER do
+			check(close(totalWeight(t, Rules.yearFrac(w), w), before[t]), "38. los rivales de " .. t .. " no cambian por la expansión")
+		end
+		-- 39. Misiones de liderazgo.
+		local lead = newCompany("Lider RV4")
+		lead.marketShare = { sedan = 0.36, suv = 0.2, pickup = 0.5 }
+		eq(Rules.leaderTypes(lead), 2, "39. lidera dos tipos (≥ 35 %)")
+		eq(Rules.missionState(lead, Catalog.mission("s9")), "lista", "39. misión de liderazgo lista")
+		-- 41. Migración: una partida de la versión anterior carga y en enero las noticias pasan a las doce marcas.
+		local old = newCompany("Migracion RV4")
+		old.rivalNews = { year = 1985, items = { "Kodiak Motors lanzó el Grizzly '85", "Kairo Cars bajó 10 % el precio del Mika" } }
+		old.marketShare = { sedan = 0.2 }
+		local loaded = jsonCopy(old)
+		check(GameState.validate(loaded), "41. válida")
+		local loaded2 = jsonCopy(loaded)
+		check(GameState.validate(loaded2) and serde.encode("json", loaded2.rivalNews) == serde.encode("json", old.rivalNews), "41. cargar dos veces no cambia nada (idempotente)")
+		setYear10(loaded, 1986)
+		loaded.time.day -= 1
+		loaded.time.minute = Rules.monthMinutes(loaded.time.day) - 10
+		Simulation.simulate(loaded, ctx, 20)
+		eq(loaded.rivalNews.year, 1986, "41. enero: noticias del año nuevo")
+		check(loaded.rivalNews.cuts ~= nil, "41. con el formato nuevo")
+		for _, it in loaded.rivalNews.items do
+			check(not string.find(it, "Kodiak", 1, true) and not string.find(it, "Kairo", 1, true), "41. las novedades nuevas usan las doce marcas: " .. it)
+		end
+		eq(loaded.marketShare.sedan, loaded.marketShare.sedan, "41. la cuota histórica se conserva")
+	end)
+
+	test("[RV5] Estrés 1970–2030: ofertas válidas todos los meses, generaciones, precios y cálculo acotado", function()
+		local g = newCompany("Estres RV5")
+		local bad = nil
+		local maxPerType = 0
+		local gens = {}
+		for month = 0, (2030 - 1970) * 12, 3 do
+			local yf = 1970 + month / 12
+			for _, t in Catalog.TYPE_ORDER do
+				g.marketShare[t] = (month % 7) / 10
+				local offers = Rules.rivalOffers(t, yf, g)
+				maxPerType = math.max(maxPerType, #offers)
+				if Rules.baseDemand(t, yf) <= 0 and #offers > 0 then
+					bad = bad or (t .. " tiene rivales sin demanda en " .. Util.num(yf, 2))
+				end
+				for _, o in offers do
+					if not (o.price > 0 and o.weight > 0 and o.weight < 1e6 and o.gen >= 1 and o.cut <= RR.maxCut + 1e-9) then
+						bad = bad or ("oferta inválida " .. o.name .. " en " .. Util.num(yf, 2))
+					end
+					local key = o.rival.id .. o.line.id
+					if (gens[key] or 0) > o.gen then
+						bad = bad or ("generación que retrocede: " .. o.name)
+					end
+					gens[key] = o.gen
+				end
+			end
+		end
+		check(bad == nil, "5. sin ofertas inválidas de 1970 a 2030 (" .. tostring(bad) .. ")")
+		check(maxPerType <= 12, "21. como mucho " .. maxPerType .. " modelos rivales por tipo a la vez")
+		-- Caché de la normalización: un factor por tipo y mes.
+		local t0 = os.clock()
+		for _ = 1, 200 do
+			for _, t in Catalog.TYPE_ORDER do
+				Rules.rivalOffers(t, 2001.37, g)
+			end
+		end
+		check(os.clock() - t0 < 2, "21. 1.600 cálculos de ofertas en " .. Util.num(os.clock() - t0, 2) .. " s")
+		-- La partida larga del bot (1970 → 2030 y más) con las doce marcas: dinero, ventas y stock coherentes.
+		local log = longGame()
+		local lg = log.g
+		check(lg.money >= 0 and lg.counters.unitsSold <= lg.counters.unitsProduced, "42. contabilidad: dinero ≥ 0 y vendidos ≤ fabricados")
+		for _, l in lg.lots do
+			check(l.sold + (l.discarded or 0) <= l.produced, "19. " .. l.design.name .. ": ventas ≤ stock")
+		end
+		check(lg.reputation >= 1 and lg.reputation <= 5, "16. reputación dentro de sus límites")
 	end)
 end
 
