@@ -30,6 +30,10 @@ WorldMap.TEXTURE = nil :: string? -- id de una textura definitiva del mapa (mism
 WorldMap.LAT_TOP, WorldMap.LAT_BOTTOM = 82, -58
 WorldMap.MIN_ZOOM, WorldMap.MAX_ZOOM = 1, 4
 WorldMap.ZOOM_STEP = 1.35
+-- Separación visual mínima entre marcadores (píxeles en pantalla) y tamaño supuesto del mapa si todavía no
+-- tiene medida (antes del primer cuadro).
+WorldMap.MIN_SEP = 30
+WorldMap.FALLBACK_SIZE = { 900, 380 }
 
 WorldMap.COLORS = {
 	ocean = Color3.fromHex("#081A33"),
@@ -71,6 +75,52 @@ function WorldMap.project(lat: number, lon: number): (number, number)
 	local x = (lon + 180) / 360
 	local y = (WorldMap.LAT_TOP - lat) / (WorldMap.LAT_TOP - WorldMap.LAT_BOTTOM)
 	return math.clamp(x, 0, 1), math.clamp(y, 0, 1)
+end
+
+--[[ Separación visual de marcadores cercanos (por ejemplo Alemania y Polonia con zoom 1× o en pantallas chicas).
+	points = { { id, x, y } } en fracción del lienzo (coordenadas geográficas proyectadas, que NO cambian);
+	w, h = tamaño del mapa en píxeles; zoom = zoom actual. Devuelve { [id] = { dx, dy } } en píxeles: lo que se
+	corre cada marcador para que ninguno quede a menos de minSep de otro. Simétrico y determinista (orden por id);
+	cuando el zoom ya los separa, el desplazamiento es 0. ]]
+function WorldMap.separate(points: { any }, w: number, h: number, zoom: number, minSep: number?): { [string]: { number } }
+	local sep = minSep or WorldMap.MIN_SEP
+	local list = table.clone(points)
+	table.sort(list, function(a: any, b: any): boolean
+		return a.id < b.id
+	end)
+	local pos, off = {}, {}
+	for _, p in list do
+		pos[p.id] = { p.x * w * zoom, p.y * h * zoom }
+		off[p.id] = { 0, 0 }
+	end
+	for _ = 1, 6 do
+		local moved = false
+		for i = 1, #list do
+			for j = i + 1, #list do
+				local a, b = list[i].id, list[j].id
+				local ax, ay = pos[a][1] + off[a][1], pos[a][2] + off[a][2]
+				local bx, by = pos[b][1] + off[b][1], pos[b][2] + off[b][2]
+				local dx, dy = bx - ax, by - ay
+				local d = math.sqrt(dx * dx + dy * dy)
+				if d < sep - 1e-6 then
+					local ux, uy = 1, 0
+					if d > 1e-6 then
+						ux, uy = dx / d, dy / d
+					end
+					local push = (sep - d) / 2
+					off[a][1] -= ux * push
+					off[a][2] -= uy * push
+					off[b][1] += ux * push
+					off[b][2] += uy * push
+					moved = true
+				end
+			end
+		end
+		if not moved then
+			break
+		end
+	end
+	return off
 end
 
 -- Vista por defecto (todo el mapa) y vista acotada a los límites.
@@ -196,7 +246,10 @@ function WorldMap.build(parent: Instance, opts: any): any
 		m.ring.Thickness = sel and 3 or 1.5
 		m.ring.Transparency = sel and 0 or 0.25
 		m.scale.Scale = sel and 1.3 or 1
-		m.label.Visible = sel or view.zoom >= 1.8
+		-- Marcadores corridos (agrupados) con poco zoom: etiqueta con el código del país para distinguirlos.
+		local shifted = math.abs(m.dx) + math.abs(m.dy) > 0.5
+		m.label.Text = (shifted and view.zoom < 1.8 and not sel) and id or m.name
+		m.label.Visible = sel or shifted or view.zoom >= 1.8
 		m.label.TextColor3 = sel and C.selected or (st == "bloqueado" and T.mut or T.tx)
 		m.button:SetAttribute("estado", st)
 		m.button:SetAttribute("seleccionado", sel)
@@ -223,7 +276,12 @@ function WorldMap.build(parent: Instance, opts: any): any
 				Name = "Nombre", Text = c.name, TextSize = Ui.S.xs, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 1, 2),
 				Size = UDim2.new(), AutomaticSize = Enum.AutomaticSize.XY, TextXAlignment = Enum.TextXAlignment.Center, Weight = W.semi, ZIndex = 7, Parent = b,
 			})
-			local m = { button = b, dot = dot, glow = glow, ring = ring, scale = scale, label = label, x = x, y = y, name = c.name }
+			-- Punto fijo en la ubicación geográfica real (se ve cuando el marcador está corrido para no superponerse).
+			local anchorDot = Ui.new("Frame", {
+				Name = "Ubicacion_" .. c.id, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(x, y), Size = UDim2.fromOffset(5, 5),
+				BackgroundColor3 = C.selected, BackgroundTransparency = 0.35, Corner = 999, Visible = false, ZIndex = 4, Parent = canvas,
+			})
+			local m = { button = b, dot = dot, glow = glow, ring = ring, scale = scale, label = label, x = x, y = y, name = c.name, id = c.id, anchor = anchorDot, dx = 0, dy = 0 }
 			ctl.markers[c.id] = m
 			table.insert(conns, b.MouseButton1Click:Connect(function()
 				ctl.setSelected(c.id)
@@ -235,7 +293,8 @@ function WorldMap.build(parent: Instance, opts: any): any
 				tip.Text = "<b>" .. c.name .. "</b> · " .. (STATE_TEXT[ctl.states[c.id] or "bloqueado"] or "")
 				tip.Visible = true
 				local vx, vy = WorldMap.toView(view, x, y)
-				tip.Position = UDim2.new(vx, 18, vy, -12)
+				local mm = ctl.markers[c.id]
+				tip.Position = UDim2.new(vx, 18 + (mm and mm.dx or 0), vy, -12 + (mm and mm.dy or 0))
 			end))
 			table.insert(conns, b.MouseLeave:Connect(function()
 				tip.Visible = false
@@ -249,11 +308,33 @@ function WorldMap.build(parent: Instance, opts: any): any
 		end
 	end
 
+	-- Tamaño real del mapa en píxeles (o el supuesto antes del primer cuadro).
+	local function mapSize(): (number, number)
+		local abs = frame.AbsoluteSize
+		if abs.X > 0 and abs.Y > 0 then
+			return abs.X, abs.Y
+		end
+		return WorldMap.FALLBACK_SIZE[1], WorldMap.FALLBACK_SIZE[2]
+	end
+	ctl.mapSize = mapSize
 	local function apply()
 		WorldMap.clampView(view)
 		canvas.Size = UDim2.fromScale(view.zoom, view.zoom)
 		canvas.Position = UDim2.fromScale(0.5 - view.cx * view.zoom, 0.5 - view.cy * view.zoom)
-		for id in ctl.markers do
+		-- Separación visual de los marcadores cercanos (las coordenadas x, y no cambian).
+		local pts = {}
+		for id, m in ctl.markers do
+			table.insert(pts, { id = id, x = m.x, y = m.y })
+		end
+		local w, h = mapSize()
+		local off = WorldMap.separate(pts, w, h, view.zoom)
+		for id, m in ctl.markers do
+			local o = off[id] or { 0, 0 }
+			m.dx, m.dy = o[1], o[2]
+			m.button.Position = UDim2.new(m.x, o[1], m.y, o[2])
+			m.button:SetAttribute("dx", o[1])
+			m.button:SetAttribute("dy", o[2])
+			m.anchor.Visible = math.abs(o[1]) + math.abs(o[2]) > 0.5
 			paint(id)
 		end
 		frame:SetAttribute("zoom", view.zoom)
@@ -291,7 +372,11 @@ function WorldMap.build(parent: Instance, opts: any): any
 	-- Destello breve del marcador (por ejemplo, al abrir un país).
 	function ctl.flash(id: string)
 		local m = ctl.markers[id]
-		if not m or Ui.reduceMotion then
+		if not m then
+			return
+		end
+		frame:SetAttribute("destellos", (frame:GetAttribute("destellos") or 0) + 1)
+		if Ui.reduceMotion then
 			return
 		end
 		m.glow.Size = UDim2.fromScale(3, 3)
@@ -299,6 +384,10 @@ function WorldMap.build(parent: Instance, opts: any): any
 		TweenService:Create(m.glow, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 0.55 }):Play()
 	end
 
+	-- Si cambia el tamaño del mapa (ventana o celular girado), se recalcula la separación.
+	table.insert(conns, frame:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		apply()
+	end))
 	-- Rueda del mouse: zoom hacia el cursor.
 	local function focus(px: number, py: number): (number, number)
 		local abs, pos = frame.AbsoluteSize, frame.AbsolutePosition

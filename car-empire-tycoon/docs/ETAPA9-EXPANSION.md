@@ -191,3 +191,68 @@ Además se actualizó `[F8]`: el +15 % ahora se verifica en el total mundial y e
 3. Tocar el país en el mapa y revisar el panel: costo, requisitos, demanda que suma y preferencias.
 4. "Expandirme a …" → confirmar. El costo lo calcula el servidor y se cobra una sola vez.
 5. Mercado › "Mercado internacional" para ver la presencia mundial, las preferencias y la evolución.
+
+## 11. Ajustes posteriores
+
+### Marcadores cercanos (Alemania y Polonia)
+
+- `WorldMap.separate(puntos, ancho, alto, zoom)`: función pura y determinista.
+  - Corre visualmente, en píxeles y de forma simétrica, los marcadores que quedan a menos de `MIN_SEP` = 30 px.
+  - Se calcula con el tamaño real del mapa y el zoom actual. Se recalcula al hacer zoom y al cambiar el tamaño del mapa.
+  - Las coordenadas geográficas (atributos `x`, `y`) no cambian.
+- Cuando un marcador está corrido:
+  - queda un punto en su ubicación real;
+  - con poco zoom, la etiqueta muestra el código del país (DE / PL) para distinguirlos.
+- Con zoom suficiente (por ejemplo 4× en PC), el corrimiento vuelve a 0.
+- **Ejemplo:** en un celular a 1× Alemania y Polonia quedaban a unos 10 px; ahora quedan a 30 px.
+
+### Confirmación visual de la expansión
+
+- **Problema:** el aviso podía perderse. En el entorno simulado, el estado nuevo del servidor llega (`App.onState`, que reconstruye la pantalla) antes de que vuelva `App.request`. El aviso pendiente se dejaba recién después, cuando la pantalla ya estaba armada. La prueba anterior solo lo veía porque volvía a abrir la pantalla.
+- **Ahora el aviso es de un solo uso:**
+  - un pedido aceptado deja el aviso pendiente y llama a `Screen.celebrate()`;
+  - la pantalla también lo llama al armarse;
+  - se muestra solo cuando la partida ya tiene el país abierto y en ese momento se consume. No importa en qué orden lleguen la respuesta y el estado, y nunca aparece dos veces;
+  - un pedido rechazado no deja aviso;
+  - un aviso pendiente vence a los 20 s y se descarta al cambiar de empresa.
+- No fuerza reconstrucciones: el mapa actual actualiza los estados y destella una vez.
+
+### Demanda real y potencial
+
+- **Mercado internacional › Preferencias por mercado:**
+  - un país abierto muestra la "demanda incorporada" (en verde y azul);
+  - uno cerrado muestra la "demanda potencial … si lo abrís (no está en el mercado todavía)" (en amarillo).
+- **Panel del país:**
+  - cerrado: "Demanda potencial este año";
+  - abierto: "Demanda incorporada este año".
+- **Resumen mundial:** sigue contando solo las expansiones adquiridas.
+- **Sin cambios:** las fórmulas y los perfiles.
+
+### Pruebas (entorno simulado)
+
+| Comprobación | Resultado |
+|---|---|
+| Servidor | 11.274 correctas, 0 fallidas |
+| Interfaz | 3.422 correctas, 0 fallidas |
+
+La prueba nueva "Ajustes de la etapa 9" cubre:
+1. selección de los diez países con clic, en 390×844 y 1600×900;
+2. Alemania y Polonia separadas al menos 30 px en cuatro tamaños de mapa, sin tocar sus coordenadas;
+3. zoom y desplazamiento con límites;
+4. apertura aceptada con un solo aviso;
+5. rechazo sin aviso;
+6. un solo destello, sin repetirse al reconstruir la pantalla;
+7. demanda potencial de un país cerrado;
+8. demanda incorporada de uno abierto;
+9. +15 % con un país;
+10. compatibilidad: las suites completas siguen en verde.
+
+Comprobé que la prueba depende de la corrección: sin la llamada desde la respuesta del pedido, fallan 5 comprobaciones.
+
+**Pendiente en Roblox Studio:**
+- cómo se ven los marcadores corridos y el punto de ubicación;
+- la legibilidad de los códigos DE / PL;
+- el arrastre y la rueda con un mouse real;
+- el aviso en el juego real, que depende del orden real de red entre la respuesta y el estado.
+
+El entorno simulado no calcula los tamaños reales: le da al mapa 100×30 px.

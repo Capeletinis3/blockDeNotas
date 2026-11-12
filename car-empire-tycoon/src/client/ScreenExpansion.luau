@@ -101,7 +101,7 @@ function Screen.panel(g: any, id: string): Frame
 		table.insert(rows, Ui.card({
 			Ui.lbl("Presencia comercial", T.gr),
 			Ui.between("Apertura", "país n.º " .. order .. " de " .. #E.countries),
-			Ui.between("Demanda que aporta este año", Util.num(total, 1) .. " autos/min", { name = "DemandaAportada" }),
+			Ui.between("Demanda incorporada este año", Util.num(total, 1) .. " autos/min", { name = "DemandaAportada" }),
 			Ui.between("Peso en la demanda mundial", Util.num(worldNow > 0 and total / worldNow * 100 or 0, 1) .. " %"),
 			Ui.between("Capacidad que suma a cada línea", "+" .. Util.round(E.line * 100) .. " %"),
 			Ui.text("Esa demanda se reparte con las mismas reglas entre tus modelos, los rivales y el resto del mercado; las ventas se cuentan por tipo a escala mundial (no hay ventas por país).", { size = Ui.S.xs, color = T.mut, lineHeight = 1.35 }),
@@ -127,14 +127,15 @@ function Screen.panel(g: any, id: string): Frame
 		table.insert(rows, Ui.card({
 			Ui.lbl("Al abrir", T.gr),
 			Ui.between("Demanda mundial", "×" .. Util.num(Rules.marketFactor(g), 2) .. " → ×" .. Util.num(1 + E.demand * (n + 1), 2), { name = "ImpactoDemanda" }),
-			Ui.between("Demanda que suma este año", "+" .. Util.num(total, 1) .. " autos/min"),
+			Ui.between("Demanda potencial este año", "+" .. Util.num(total, 1) .. " autos/min", { name = "DemandaPotencial" }),
 			Ui.between("Autos por minuto por línea", Util.num(perLine, 1) .. " → " .. Util.num(after, 1), { name = "ImpactoProduccion" }),
 			Ui.text("Se reparte entre los tipos según las preferencias de " .. c.name .. " (abajo) y compite con los rivales como cualquier demanda. Las campañas corporativas cuestan más con cada país.", { size = Ui.S.xs, color = T.mut, lineHeight = 1.35 }),
 		}, { gap = 6, bg = T.p1, name = "BeneficiosApertura" }))
 	end
 	-- Preferencias y demanda por tipo (con lo que la empresa ya puede fabricar).
 	local can = buildable(g)
-	local prefs: { Instance? } = { Ui.lbl("Preferencias del mercado"), Ui.text("Parámetros del juego (ficticios): reparten la demanda que aporta el país entre los tipos, sin sumar volumen.", { size = Ui.S.xs, color = T.mut }) }
+	local kindText = st == "abierto" and "Cifras por tipo: demanda incorporada este año." or "Cifras por tipo: demanda potencial este año (todavía no abriste este país)."
+	local prefs: { Instance? } = { Ui.lbl("Preferencias del mercado"), Ui.text("Parámetros del juego (ficticios): reparten la demanda que aporta el país entre los tipos, sin sumar volumen. " .. kindText, { size = Ui.S.xs, color = T.mut, name = "TipoDemandaPais" }) }
 	for _, r in Screen.preferenceRows(c, yf) do
 		local label = Catalog.TYPES[r.type] .. (can[r.type] and "" or " · todavía no lo fabricás")
 		table.insert(prefs, hbar(label, r.rel, "×" .. Util.num(r.pref, 1) .. " · " .. Util.num(r.demand, 1) .. "/min", r.demand > 0 and T.bl or T.mut, "Pref_" .. r.type))
@@ -168,10 +169,15 @@ function Screen.confirm(g: any, id: string)
 		body = "Cuesta " .. Util.money(q.cost) .. " (no se devuelve). La demanda mundial pasa a ×" .. Util.num(1 + E.demand * q.level, 2) .. " (+" .. Util.num(total, 1) .. " autos/min este año, repartidos según las preferencias de " .. c.name .. ") y cada línea fabrica " .. Util.round(E.line * 100) .. " % más. Las campañas corporativas cuestan más.",
 		okLabel = "Expandirme",
 		onOk = function()
+			App.ui.expCelebrate = nil
 			local r = App.request("expandGlobal", { country = id })
 			if r and r.ok then
+				-- Aviso de un solo uso: lo muestra el primero que pueda (esta respuesta, si el estado nuevo ya
+				-- llegó y la pantalla ya muestra el país abierto, o la reconstrucción cuando llegue).
 				App.ui.expCelebrate = { id = id, at = os.clock() }
+				Screen.celebrate()
 			end
+			-- Rechazada o sin respuesta: no hay aviso.
 		end,
 	})
 end
@@ -207,35 +213,55 @@ local function topStrip(g: any): Frame
 	return Ui.row(items, 18, { Name = "ResumenMundial", wrap = true })
 end
 
--- Aviso breve al abrir un país (no bloquea: se cierra solo).
-local function celebration(g: any, mapCtl: any, parent: Instance)
+--[[ Aviso breve al abrir un país (no bloquea: se cierra solo). Exactamente una vez por apertura:
+	- el pedido aceptado deja un aviso pendiente (App.ui.expCelebrate) y llama a Screen.celebrate();
+	- la pantalla, al armarse, también llama a Screen.celebrate();
+	- se muestra solo cuando la partida ya tiene el país abierto (el estado del servidor llegó) y la pantalla
+	  está a la vista, y en ese momento el aviso se consume. Si el estado llegó antes que la respuesta, lo
+	  muestra la respuesta sobre la pantalla actual; si llega después, la reconstrucción. Nunca los dos.
+	- un pedido rechazado no deja aviso. ]]
+Screen.CELEBRATE_TTL = 20 -- segundos que el aviso pendiente espera el estado nuevo
+Screen.celebrations = 0 -- avisos mostrados (para las pruebas)
+function Screen.celebrate(): boolean
 	local cel = App.ui.expCelebrate
-	if not cel or os.clock() - cel.at > 8 or not Rules.countryOpen(g, cel.id) then
-		return
+	local cur = Screen.current
+	if not cel then
+		return false
+	end
+	if os.clock() - cel.at > Screen.CELEBRATE_TTL then
+		App.ui.expCelebrate = nil
+		return false
+	end
+	local g = App.g
+	if not g or not Rules.countryOpen(g, cel.id) or not cur or not cur.box.Parent or not cur.map.frame.Parent then
+		return false
 	end
 	App.ui.expCelebrate = nil
+	Screen.celebrations += 1
 	local c = Rules.country(cel.id)
 	local _, total = Rules.countryDemand(c, Rules.yearFrac(g))
 	local banner = Ui.card({
 		Ui.text("¡Nueva expansión internacional!", { size = Ui.S.h2, weight = W.bold, color = T.gr }),
 		Ui.text("Tu compañía llegó a " .. c.name .. ".", { size = Ui.S.base, weight = W.semi }),
-		Ui.text("Nuevo mercado disponible · +" .. Util.num(total, 1) .. " autos/min de demanda este año · +" .. Util.round(E.line * 100) .. " % de producción por línea · " .. Rules.expansion(g) .. " de " .. #E.countries .. " países abiertos", { size = Ui.S.xs, color = T.tx2, lineHeight = 1.35 }),
+		Ui.text("Nuevo mercado disponible · +" .. Util.num(total, 1) .. " autos/min de demanda incorporada este año · +" .. Util.round(E.line * 100) .. " % de producción por línea · " .. Rules.expansion(g) .. " de " .. #E.countries .. " países abiertos", { size = Ui.S.xs, color = T.tx2, lineHeight = 1.35 }),
 	}, { gap = 4, pad = 14, name = "NuevaExpansion", bg = Color3.fromHex("#0B1220"), stroke = { T.gr, 2 } })
 	banner.AnchorPoint = Vector2.new(0.5, 0)
 	banner.Position = UDim2.new(0.5, 0, 0, 14)
 	banner.Size = UDim2.fromOffset(420, 0)
 	banner.AutomaticSize = Enum.AutomaticSize.Y
 	banner.ZIndex = 30
-	banner.Parent = parent
+	banner.Parent = cur.box
 	if not Ui.reduceMotion then
 		Ui.fadeIn(banner)
 	end
-	mapCtl.flash(cel.id)
+	cur.map.setStates(Screen.states(g))
+	cur.map.flash(cel.id)
 	task.delay(6, function()
 		if banner.Parent then
 			banner:Destroy()
 		end
 	end)
+	return true
 end
 
 function Screen.build(holder: Instance)
@@ -247,6 +273,7 @@ function Screen.build(holder: Instance)
 		App.ui.expCompany = App.profile and App.profile.active
 		App.ui.expSel = nil
 		App.ui.expMap = WorldMap.defaultView()
+		App.ui.expCelebrate = nil
 	end
 	if not Rules.country(App.ui.expSel) then
 		local first = nil
@@ -298,8 +325,9 @@ function Screen.build(holder: Instance)
 		end,
 	})
 	Screen.map = mapCtl
+	Screen.current = { map = mapCtl, box = mapBox }
 	showPanel(App.ui.expSel)
-	celebration(g, mapCtl, mapBox)
+	Screen.celebrate()
 	if not Ui.reduceMotion then
 		Ui.fadeIn(mapCtl.frame)
 	end

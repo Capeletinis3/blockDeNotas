@@ -3443,8 +3443,7 @@ test("Expansión internacional (etapa 9): mapa con diez países, estados, selecc
 		return App.g.expansion == 1
 	end), "31. confirma y abre Japón")
 	eq(App.g.money, m0 - q.cost, "31. cobrado una vez")
-	-- 32. Actualización inmediata: marcador abierto, aviso breve y presencia comercial.
-	App.go("expansion")
+	-- 32. Actualización inmediata: marcador abierto, aviso breve y presencia comercial (sin reabrir la pantalla).
 	M.task.wait()
 	eq(named("Marcador_JP"):GetAttribute("estado"), "abierto", "32. Japón abierto en el mapa")
 	check(named("NuevaExpansion") ~= nil and find("Tu compañía llegó a Japón.") ~= nil, "32. «¡Nueva expansión internacional!»")
@@ -3492,6 +3491,182 @@ test("Expansión internacional (etapa 9): mapa con diez países, estados, selecc
 	App.go("juego")
 	M.task.wait()
 	noErrors("Expansión internacional")
+end)
+
+test("Ajustes de la etapa 9: Alemania y Polonia seleccionables, celebración única, rechazo sin aviso y demanda potencial", function()
+	local Rules = require("./.build-ui/shared/Rules")
+	local Office = require("./.build-ui/shared/Office")
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Util9 = require("./.build-ui/shared/Util")
+	local WorldMap = require("./.build-ui/client/WorldMap")
+	local EX = App.screens.expansion
+	App.closeAllDialogs()
+	local inst = Sessions.instance
+	local sess = inst.list[player]
+	local sg = sess.game
+	sg.money = 5e10
+	sg.sede = 5
+	Office.remap(sg.office, 5)
+	sg.facilities.builds = {}
+	sg.counters.unitsSold = 1e6
+	sg.expansion, sg.countries = 0, {}
+	inst:push(sess)
+	waitFor(function()
+		return App.g.expansion == 0 and App.g.sede == 5
+	end)
+	-- Separación pura: con poco espacio Alemania y Polonia se corren; con zoom suficiente, no.
+	local function geoPt(id: string): any
+		local geo = WorldMap.COUNTRY_GEO[id]
+		local x, y = WorldMap.project(geo[1], geo[2])
+		return { id = id, x = x, y = y }
+	end
+	local pts = {}
+	for _, c in Catalog.EXPANSION.countries do
+		table.insert(pts, geoPt(c.id))
+	end
+	local off = WorldMap.separate(pts, 366, 230, 1)
+	local de, pl = geoPt("DE"), geoPt("PL")
+	local function screenDist(o: any, w: number, h: number, z: number): number
+		local ax, ay = de.x * w * z + o.DE[1], de.y * h * z + o.DE[2]
+		local bx, by = pl.x * w * z + o.PL[1], pl.y * h * z + o.PL[2]
+		return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2)
+	end
+	local raw = math.sqrt(((pl.x - de.x) * 366) ^ 2 + ((pl.y - de.y) * 230) ^ 2)
+	check(raw < WorldMap.MIN_SEP, "2. en un celular a 1× Alemania y Polonia quedan a " .. Util9.num(raw, 1) .. " px (se superponían)")
+	check(screenDist(off, 366, 230, 1) >= WorldMap.MIN_SEP - 1e-6, "2. separados a " .. Util9.num(screenDist(off, 366, 230, 1), 1) .. " px")
+	check(math.abs(off.DE[1] + off.PL[1]) < 1e-9 and math.abs(off.DE[2] + off.PL[2]) < 1e-9, "2. desplazamiento simétrico")
+	local far = WorldMap.separate(pts, 1100, 460, 4)
+	check(far.DE[1] == 0 and far.PL[1] == 0 and far.DE[2] == 0 and far.PL[2] == 0, "2. con zoom 4× en PC no hace falta correrlos")
+	eq(off.BR[1] + off.BR[2], 0, "los países lejanos no se mueven")
+	for _, w in { { 366, 230 }, { 600, 260 }, { 900, 380 }, { 1200, 520 } } do
+		local o = WorldMap.separate(pts, w[1], w[2], 1)
+		for i = 1, #pts do
+			for j = i + 1, #pts do
+				local a, b = pts[i], pts[j]
+				local d = math.sqrt((a.x * w[1] + o[a.id][1] - b.x * w[1] - o[b.id][1]) ^ 2 + (a.y * w[2] + o[a.id][2] - b.y * w[2] - o[b.id][2]) ^ 2)
+				check(d >= WorldMap.MIN_SEP - 0.5, w[1] .. "×" .. w[2] .. ": " .. a.id .. "–" .. b.id .. " separados (" .. Util9.num(d, 1) .. " px)")
+			end
+		end
+	end
+	-- En la pantalla, en celular: los diez se eligen con clic, Alemania y Polonia también.
+	for _, res in { { 390, 844 }, { 1600, 900 } } do
+		M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(res[1], res[2])
+		M.task.wait()
+		App.ui.expSel, App.ui.expMap = nil, nil
+		App.go("expansion")
+		M.task.wait()
+		for _, c in Catalog.EXPANSION.countries do
+			local m = named("Marcador_" .. c.id)
+			M.click(m)
+			M.task.wait()
+			check(App.ui.expSel == c.id and m:GetAttribute("seleccionado") == true and named("NombrePais").Text == c.name, "1. " .. res[1] .. "×" .. res[2] .. ": clic en " .. c.name)
+		end
+		local mde, mpl = named("Marcador_DE"), named("Marcador_PL")
+		local w, h = EX.map.mapSize()
+		local z = App.ui.expMap.zoom
+		local ax, ay = mde:GetAttribute("x") * w * z + mde:GetAttribute("dx"), mde:GetAttribute("y") * h * z + mde:GetAttribute("dy")
+		local bx, by = mpl:GetAttribute("x") * w * z + mpl:GetAttribute("dx"), mpl:GetAttribute("y") * h * z + mpl:GetAttribute("dy")
+		check(math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2) >= WorldMap.MIN_SEP - 1e-6, "2. " .. res[1] .. "×" .. res[2] .. ": Alemania y Polonia no se tocan en pantalla")
+		local gde = WorldMap.COUNTRY_GEO.DE
+		local gx = WorldMap.project(gde[1], gde[2])
+		eq(mde:GetAttribute("x"), gx, "2. la coordenada geográfica no cambia")
+		-- 3. Zoom y desplazamiento: al acercar, el desplazamiento visual nunca crece (el zoom ya los separa).
+		local shift1 = math.abs(mde:GetAttribute("dx")) + math.abs(mde:GetAttribute("dy"))
+		for _ = 1, 6 do
+			clickN("AcercarMapa")
+		end
+		EX.map.panBy(0.1, 0.05)
+		check(App.ui.expMap.zoom == WorldMap.MAX_ZOOM and App.ui.expMap.cx >= 0.5 / WorldMap.MAX_ZOOM, "3. zoom y desplazamiento con límites")
+		local shift4 = math.abs(mde:GetAttribute("dx")) + math.abs(mde:GetAttribute("dy"))
+		check(shift4 <= shift1 + 1e-9, "3. con zoom 4× el corrimiento baja (" .. Util9.num(shift1, 1) .. " → " .. Util9.num(shift4, 1) .. " px)")
+		M.click(mpl)
+		M.task.wait()
+		eq(App.ui.expSel, "PL", "3. con zoom también se elige Polonia")
+		clickN("EncuadreCompleto")
+	end
+	M.services.Workspace.CurrentCamera.ViewportSize = M.Vector2.new(1600, 900)
+	M.task.wait()
+	App.go("expansion")
+	M.task.wait()
+	-- 5. Rechazo: el servidor no tiene el dinero → sin aviso.
+	local before = EX.celebrations
+	M.click(named("Marcador_PL"))
+	M.task.wait()
+	clickN("Expandirse_PL")
+	eq(topKind(), "confirm", "pide confirmación")
+	sg.money = 0 -- en el servidor (el cliente todavía ve fondos)
+	clickN("Confirmar")
+	M.task.wait()
+	M.task.wait()
+	check(App.g.expansion == 0 and EX.celebrations == before and named("NuevaExpansion") == nil and App.ui.expCelebrate == nil, "5. apertura rechazada: sin aviso ni aviso pendiente")
+	-- 4 y 6. Apertura aceptada: un solo aviso y un solo destello, aunque la pantalla se reconstruya.
+	sg.money = 5e10
+	inst:push(sess)
+	waitFor(function()
+		return App.g.money == 5e10
+	end)
+	M.click(named("Marcador_DE"))
+	M.task.wait()
+	clickN("Expandirse_DE")
+	clickN("Confirmar")
+	check(waitFor(function()
+		return App.g.expansion == 1
+	end), "4. Alemania abierta")
+	M.task.wait()
+	eq(EX.celebrations, before + 1, "4. aviso mostrado una vez")
+	local banners = 0
+	for _, d in root:GetDescendants() do
+		if d.Name == "NuevaExpansion" then
+			banners += 1
+		end
+	end
+	eq(banners, 1, "6. un solo aviso en pantalla")
+	eq(named("MapaMundial"):GetAttribute("destellos"), 1, "6. un solo destello del marcador")
+	check(find("Tu compañía llegó a Alemania.") ~= nil, "4. «Tu compañía llegó a Alemania.»")
+	App.forceRender()
+	M.task.wait()
+	check(EX.celebrations == before + 1 and named("NuevaExpansion") == nil and named("MapaMundial"):GetAttribute("destellos") == nil, "6. reconstruir la pantalla no repite el aviso ni el destello")
+	-- El estado llega antes que la respuesta: el aviso pendiente se muestra una vez sobre la pantalla actual.
+	App.ui.expCelebrate = { id = "DE", at = os.clock() }
+	check(EX.celebrate() == true and EX.celebrate() == false, "4. con el estado ya aplicado se muestra una vez y se consume")
+	eq(EX.celebrations, before + 2, "un aviso por pedido aceptado")
+	-- Aviso pendiente de un país todavía no abierto (el estado no llegó): espera, no se muestra.
+	App.ui.expCelebrate = { id = "ZA", at = os.clock() }
+	check(EX.celebrate() == false and App.ui.expCelebrate ~= nil, "4. sin el estado nuevo, el aviso espera")
+	App.ui.expCelebrate = nil
+	-- 7 y 8. Mercado internacional: potencial (cerrado) e incorporada (abierto).
+	App.ui.tabs.mercado = "mundo"
+	App.go("mercado")
+	M.task.wait()
+	clickN("PrefPais_ZA")
+	M.task.wait()
+	local bars = named("BarrasPreferencias")
+	eq(bars:GetAttribute("demanda"), "potencial", "7. Sudáfrica (cerrada): demanda potencial")
+	local _, zaTotal = Rules.countryDemand(Rules.country("ZA"), Rules.yearFrac(App.g))
+	check(string.find(table.concat(M.texts(bars), " "), "demanda potencial: +" .. Util9.num(zaTotal, 1), 1, true) ~= nil, "7. con su cifra")
+	clickN("PrefPais_DE")
+	M.task.wait()
+	eq(bars:GetAttribute("demanda"), "incorporada", "8. Alemania (abierta): demanda incorporada")
+	-- 9. El resumen cuenta solo lo adquirido: +15 % de un país.
+	local base, total = Rules.worldDemand(App.g)
+	check(math.abs(total / base - 1.15) < 1e-9, "9. +15 % con un país")
+	check(string.find(table.concat(M.texts(named("PresenciaMundial")), " "), "+" .. Util9.num(total - base, 1) .. " autos/min", 1, true) ~= nil, "9. el aporte mostrado es el de los países abiertos")
+	App.ui.tabs.mercado = nil
+	-- Panel del país: potencial e incorporada.
+	App.go("expansion")
+	M.task.wait()
+	M.click(named("Marcador_ZA"))
+	M.task.wait()
+	check(named("DemandaPotencial") ~= nil and string.find(named("TipoDemandaPais").Text, "potencial", 1, true) ~= nil, "7. panel de un país cerrado: demanda potencial")
+	M.click(named("Marcador_DE"))
+	M.task.wait()
+	check(named("DemandaAportada") ~= nil and string.find(named("TipoDemandaPais").Text, "incorporada", 1, true) ~= nil, "8. panel de un país abierto: demanda incorporada")
+	sg.expansion, sg.countries = 0, {}
+	sg.claimed.s13 = nil
+	inst:push(sess)
+	App.go("juego")
+	M.task.wait()
+	noErrors("Ajustes de la etapa 9")
 end)
 
 test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()

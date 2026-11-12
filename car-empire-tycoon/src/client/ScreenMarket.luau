@@ -178,12 +178,16 @@ function Screen.world(g: any, main: Frame)
 		for _, t in Catalog.TYPE_ORDER do
 			maxP = math.max(maxP, c.prefs[t] or 1)
 		end
-		Ui.text(c.name .. (Rules.countryOpen(g, id) and " · abierto" or "") .. ": +" .. Util.num(sum, 1) .. " autos/min este año, repartidos así", { size = Ui.S.xs, color = T.mut }).Parent = bars
+		-- Abierto: demanda ya incorporada al mercado. Cerrado: lo que sumaría si lo abrieras (potencial).
+		local isOpen = Rules.countryOpen(g, id)
+		Ui.text(c.name .. (isOpen and (" · abierto · demanda incorporada: +" .. Util.num(sum, 1) .. " autos/min este año")
+			or (" · sin abrir · demanda potencial: +" .. Util.num(sum, 1) .. " autos/min este año si lo abrís (no está en el mercado todavía)")) .. ". Por tipo:", { size = Ui.S.xs, color = isOpen and T.gr or T.ye, name = "TipoDemanda" }).Parent = bars
+		bars:SetAttribute("demanda", isOpen and "incorporada" or "potencial")
 		for _, t in Catalog.TYPE_ORDER do
 			local p = c.prefs[t] or 1
-			local bar = Ui.bar(p / maxP * 100, (contrib[t] or 0) > 0 and T.bl or T.mut, 6)
+			local bar = Ui.bar(p / maxP * 100, (contrib[t] or 0) > 0 and (isOpen and T.bl or T.ye) or T.mut, 6)
 			Ui.col({
-				Ui.row({ Ui.grow(Ui.inline(Catalog.TYPES[t], { size = Ui.S.xs, color = T.tx2 })), Ui.inline("×" .. Util.num(p, 1) .. " · " .. Util.num(contrib[t] or 0, 1) .. "/min", { size = Ui.S.xs, weight = W.semi }) }, 6),
+				Ui.row({ Ui.grow(Ui.inline(Catalog.TYPES[t], { size = Ui.S.xs, color = T.tx2 })), Ui.inline("×" .. Util.num(p, 1) .. " · " .. (isOpen and "" or "potencial ") .. Util.num(contrib[t] or 0, 1) .. "/min", { size = Ui.S.xs, weight = W.semi }) }, 6),
 				bar,
 			}, 3, { Name = "Pref_" .. t }).Parent = bars
 		end
