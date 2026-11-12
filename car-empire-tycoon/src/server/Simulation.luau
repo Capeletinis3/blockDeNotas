@@ -107,6 +107,7 @@ function Simulation.addXp(g: any, ctx: any, n: number)
 end
 
 -- Suma PI generados (sin tope; los decimales se conservan para no perder precisión entre ticks cortos).
+-- g.bankFull es un campo de versiones con banco de PI limitado: se borra para que nunca quede un aviso viejo.
 function Simulation.addPi(g: any, n: number, _ctx: any?)
 	g.bankFull = nil
 	if n > 0 then
@@ -116,7 +117,7 @@ end
 
 --[[ PI por jugar (ventas, lotes agotados con ganancia, lanzamientos exitosos). Comparten un tope por mes
 	(Catalog.ECON.bonusPiCapMinutes de la generación de la sede) para que no se puedan farmear repitiendo
-	acciones baratas. Se suman aunque el banco esté lleno: una recompensa nunca desaparece en silencio.
+	acciones baratas (desactivados desde la etapa 3: Catalog.ECON.bonusPiEnabled). No hay tope de acumulación.
 	Devuelve los PI otorgados. ]]
 function Simulation.bonusPi(g: any, amount: number): number
 	-- Etapa 3: los PI salen solo del centro de investigación y de las líneas (y de las misiones).

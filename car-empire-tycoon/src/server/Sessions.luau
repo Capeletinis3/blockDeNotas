@@ -906,11 +906,18 @@ function Sessions:tick()
 				g.playedSeconds = (g.playedSeconds or 0) + 1
 			end
 			if g and not s.blocked and g.time.speed > 0 and not s.uiPaused then
+				local done: { any } = g.research.done
+				local researched: number = #done
 				local ok, err = pcall(Simulation.simulate, g, s.ctx, Catalog.RULES.minutesPerRealSecond * g.time.speed)
 				if not ok then
 					self.deps.log("Error de simulación: " .. tostring(err))
 				end
 				s.dirty = true
+				-- Una investigación completada se guarda enseguida (no espera al autoguardado periódico).
+				local after: { any } = g.research.done
+				if #after > researched then
+					s.pendingSave = true
+				end
 				if self.deps.garage and s.hasPlot then
 					self.deps.garage.update(player, g)
 				end

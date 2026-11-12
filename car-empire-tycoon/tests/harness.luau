@@ -1,5 +1,7 @@
 -- Mini marco de pruebas compartido por run.luau y ui.luau.
 local T = { passed = 0, failed = 0, current = "" }
+-- TEST_ONLY=texto corre solo las pruebas cuyo nombre lo contiene (para iterar más rápido).
+local ONLY = require("@lune/process").env.TEST_ONLY
 
 function T.check(cond: any, what: string)
 	if cond then
@@ -15,6 +17,9 @@ function T.eq(a: any, b: any, what: string)
 end
 
 function T.test(name: string, fn: () -> ())
+	if ONLY and ONLY ~= "" and not string.find(name, ONLY, 1, true) then
+		return
+	end
 	T.current = name
 	local before = T.failed
 	local ok, err = pcall(fn)

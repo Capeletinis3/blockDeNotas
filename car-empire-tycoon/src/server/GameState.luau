@@ -60,7 +60,7 @@ function GameState.newGame(opts: { name: string, color: string, logo: string?, n
 		countries = {}, -- ids de los países elegidos, en orden (Catalog.EXPANSION.countries)
 		money = Catalog.START.money, -- todas las empresas empiezan igual
 		gems = 0, -- sin uso por ahora: se conserva por compatibilidad y no se muestra
-		rp = 0, -- banco de puntos de investigación
+		rp = 0, -- puntos de investigación acumulados (sin tope; se gastan al empezar cada proyecto)
 		xp = 0,
 		level = 1,
 		reputation = Catalog.START.reputation,
@@ -694,7 +694,7 @@ local OLD_MAT_PRICE = { acero = 40, aluminio = 95, pintura = 120, electronica = 
 	· unidades sin vender (almacén, salón, reservadas, en el mercado) → su costo de fabricación
 	· la unidad en curso de cada orden → lo cobrado al empezarla (el resto de la orden no se había cobrado)
 	· materiales y piezas sueltas → su precio de proveedor
-	· investigaciones del árbol anterior → su costo (y su PI vuelve al banco)
+	· investigaciones del árbol anterior → su costo (y sus PI vuelven a g.rp)
 	Se conservan: dinero, diseños (con año de modelo y 1.ª generación), sede, personal, mejoras de estaciones,
 	estadísticas por período, contadores, reputación, nivel, gemas (sin uso) y misiones de recompensa diaria. ]]
 MIGRATIONS[2] = function(g: any, _now: number)

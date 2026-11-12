@@ -460,7 +460,8 @@ function DesignCalc.computeDesign(g: any, d: any): any
 	local stop = clamp(46 - brakeIdx * 0.2 + (kg - 1300) / 120, 28, 60)
 	local consumption
 	if ev then
-		consumption = clamp(12 + kg * 0.003 + hp * 0.006 - fx.eff * 0.15, 10, 30)
+		-- Los niveles del motor eléctrico también bajan el consumo (ENGINE_LEVEL_FX.cons, como dice su tecnología).
+		consumption = clamp((12 + kg * 0.003 + hp * 0.006 - fx.eff * 0.15) * (1 + LF.cons * lvl), 10, 30)
 	else
 		consumption = clamp((4 + hp * 0.014 + kg * 0.0015 - fx.eff * 0.12) * (1 + tech("consPct") / 100) * (1 + LF.cons * lvl) * variant.cons, 3.5, 25)
 	end

@@ -71,7 +71,7 @@ local STATE_CHIP = {
 	curso = { "En curso", "cv" },
 	bloqueada = { "Bloqueada", "cn" },
 	completada = { "✓ Completada", "cg" },
-	incluida = { "✓ Desde el inicio", "cg" },
+	incluida = { "✓ Incluida desde el inicio", "cg" },
 }
 
 local function piRate(g: any): number
@@ -91,6 +91,30 @@ function Screen.levelLabel(n: any): string
 		end
 	end
 	return Catalog.RESEARCH_RULES.complexityLabel[n.complexity] or "Mejora"
+end
+
+-- Categoría de la tarjeta (Chasis, Motores, Seguridad o Tecnología).
+function Screen.categoryLabel(n: any, cat: string): string
+	for _, c in Screen.CATEGORIES do
+		if c[1] == (n.category or cat) then
+			return c[2]
+		end
+	end
+	return tostring(cat)
+end
+
+--[[ Qué hace la tecnología al completarse: un efecto automático (se aplica solo a lo que se fabrique), opciones
+	que se eligen en el editor en cada diseño, o las dos cosas. Lo de serie ya está en el editor. ]]
+local EFFECT_LABEL = {
+	auto = "Efecto automático",
+	editor = "Se elige en el editor",
+	ambos = "Efecto automático + opción del editor",
+}
+function Screen.effectLabel(n: any): string
+	if n.builtin then
+		return "De serie en el editor"
+	end
+	return EFFECT_LABEL[Catalog.researchEffectKind(n)]
 end
 
 --[[ Lo que la empresa tiene desde la fundación (no se investiga): Sedán y Coupé de 1970, motores I4 e I6 de
@@ -213,9 +237,10 @@ function Screen.card(g: any, n: any, cat: string): Frame
 		Ui.row({
 			Ui.chip(n.builtin and (n.level and ("Nivel " .. n.level) or (n.gen and ("Generación " .. n.gen)) or "De serie") or Screen.levelLabel(n), "cn"),
 			Ui.chip(chip[1], chip[2]),
-			(ahead > 0 and st ~= "completada") and Ui.chip("Adelantada " .. ahead .. (ahead == 1 and " año" or " años"), "cy") or nil,
+			(ahead > 0 and st ~= "completada") and Ui.chip(ahead > Catalog.RESEARCH_RULES.aheadMaxYears and "Futura" or ("Adelantada " .. ahead .. (ahead == 1 and " año" or " años")), "cy") or nil,
 		}, 4, { wrap = true }),
 		Ui.text(n.name, { size = 16, weight = W.bold, name = "Nombre" }),
+		Ui.text(Screen.categoryLabel(n, cat) .. " · " .. Screen.effectLabel(n), { size = Ui.S.xs, color = STYLE.accent2, weight = W.semi, name = "Tipo" }),
 		Ui.text(n.desc or ((Catalog.RESEARCH[cat] and Catalog.RESEARCH[cat].label or "") .. " · aparece en " .. tostring(n.year)), { size = Ui.S.xs, color = T.mut, lineHeight = 1.3 }),
 		-- Beneficio destacado (es lo que se compra): etiqueta verde y texto claro.
 		Ui.col({
@@ -224,17 +249,39 @@ function Screen.card(g: any, n: any, cat: string): Frame
 		}, 2, { Name = "Beneficio" }),
 	}
 	if not n.builtin then
+		local RR = Catalog.RESEARCH_RULES
 		local pi, cost, days, info = Rules.researchCost(g, n)
+		local future = ahead > RR.aheadMaxYears
+		local costNote = nil
+		local project = st == "curso" and Rules.researchProject(g, n.id) or nil
+		if project then
+			-- En curso: lo que se pagó al empezar (no cambia con el calendario ni con la difusión).
+			pi, cost, days = project.paidPi or pi, project.paidMoney or cost, project.days or days
+			costNote = "Pagado al empezar"
+		elseif future then
+			-- Todavía no se puede adelantar: costo base (el recargo se calcula el año en que se empiece).
+			pi, cost, days = info.base.pi, info.base.money, info.base.days
+			costNote = "Costo base, sin recargo"
+		end
 		if st ~= "completada" then
 			-- Costos en píldoras: dinero, PI y días, cada uno con su color.
 			table.insert(items, Ui.row({
 				Ui.chip(Util.money(cost), "co", { height = 22 }),
 				Ui.chip(Util.num(pi) .. " PI", "cb", { height = 22 }),
 				Ui.chip(daysText(days), "cn", { height = 22 }),
+				costNote and Ui.inline(costNote, { size = Ui.S.xs, color = T.mut, name = "NotaCosto" }) or nil,
 			}, 4, { wrap = true, Name = "Costo" }))
 		end
-		local late = ahead > 0 and st ~= "completada"
-		table.insert(items, Ui.text("Año " .. n.year .. (late and (" · recargo +" .. Util.round(info.penalty.money * 100) .. " % dinero, +" .. Util.round(info.penalty.pi * 100) .. " % PI, +" .. Util.round(info.penalty.days * 100) .. " % días") or ""), { size = Ui.S.xs, color = late and T.ye or T.mut, name = "Anio" }))
+		local late = ahead > 0 and st ~= "completada" and not project
+		local yearText = "Año " .. n.year
+		if late and future then
+			yearText ..= " · se puede adelantar desde " .. (n.year - RR.aheadMaxYears) .. " (recargo de hasta +" .. Util.round(RR.aheadMoney * RR.aheadMaxYears * 100) .. " % dinero, +" .. Util.round(RR.aheadPi * RR.aheadMaxYears * 100) .. " % PI, +" .. Util.round(RR.aheadDays * RR.aheadMaxYears * 100) .. " % días)"
+		elseif late then
+			yearText ..= " · recargo +" .. Util.round(info.penalty.money * 100) .. " % dinero, +" .. Util.round(info.penalty.pi * 100) .. " % PI, +" .. Util.round(info.penalty.days * 100) .. " % días"
+		elseif project and (project.ahead or 0) > 0 then
+			yearText ..= " · adelantada " .. project.ahead .. (project.ahead == 1 and " año" or " años") .. " (recargo ya pagado)"
+		end
+		table.insert(items, Ui.text(yearText, { size = Ui.S.xs, color = late and T.ye or T.mut, name = "Anio" }))
 		if #n.req > 0 then
 			local reqs: { Instance? } = {}
 			for _, r in n.req do
@@ -243,6 +290,8 @@ function Screen.card(g: any, n: any, cat: string): Frame
 				table.insert(reqs, Ui.text((ok and "✓ " or "✕ ") .. (rn and rn.name or r), { size = Ui.S.xs, color = ok and T.gr or T.re2, weight = ok and W.med or W.semi }))
 			end
 			table.insert(items, Ui.col({ Ui.lbl("Requisitos", T.mut, 11), Ui.col(reqs, 2) }, 3, { Name = "Requisitos" }))
+		else
+			table.insert(items, Ui.text("Sin tecnologías previas", { size = Ui.S.xs, color = T.mut, name = "Requisitos" }))
 		end
 	end
 	if st == "curso" then

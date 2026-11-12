@@ -1004,6 +1004,21 @@ function Rules.researchMissing(g: any, n: any): { string }
 	return m
 end
 
+--[[ Tecnologías del árbol actual ya completadas (las de Catalog.RESEARCH que figuran en g.research.done, sin
+	repetir). Es la misma definición que Catalog.RESEARCH_TOTAL: la usa la misión «Completá todas las
+	investigaciones». A diferencia de counters.researchDone (investigaciones terminadas a lo largo de la partida,
+	que en partidas viejas incluye tecnologías de árboles anteriores), no puede pasar del total. ]]
+function Rules.researchTreeDone(g: any): number
+	local n, seen = 0, {}
+	for _, id in (g and g.research and g.research.done) or {} do
+		if not seen[id] and Catalog.researchNode(id) then
+			seen[id] = true
+			n += 1
+		end
+	end
+	return n
+end
+
 -- Proyecto en curso de una tecnología (o nil).
 function Rules.researchProject(g: any, id: string): any
 	for _, p in g.research.projects or {} do
@@ -1185,6 +1200,8 @@ function Rules.missionValue(g: any, m: any): number
 		return Rules.expansion(g)
 	elseif m.counter == "leaderTypes" then
 		return Rules.leaderTypes(g)
+	elseif m.counter == "researchTree" then
+		return Rules.researchTreeDone(g)
 	end
 	return g.counters[m.counter] or 0
 end

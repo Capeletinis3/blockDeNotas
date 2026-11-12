@@ -28,11 +28,10 @@ Catalog.RULES = {
 	gameDayMinutes = Catalog.CALENDAR.realSecondsPerDay * 10,
 	-- Partidas de versiones anteriores (esquema ≤ 5): todos los meses duraban 550 minutos de juego.
 	legacyMonthMinutes = 550,
-	-- Banco de PI: la generación de la sede se acumula hasta este equivalente en minutos aunque no haya
-	-- investigación activa (las bonificaciones y misiones se suman aunque el banco esté lleno).
+	-- Obsoletos (versiones anteriores al I+D por proyectos): ya no hay «banco» con tope ni aceleración por PI
+	-- ahorrados. Los PI se acumulan sin límite en g.rp y solo sirven para pagar proyectos nuevos al empezarlos
+	-- (Rules.piCap = infinito). Se conservan los valores por compatibilidad; ningún cálculo los usa.
 	piBankMinutes = 20,
-	-- El banco acelera la investigación activa: aporta hasta bankSpeedup veces la generación de la sede
-	-- por minuto (con 1, se investiga hasta el doble de rápido). Ahorrar sirve, pero no completa al instante.
 	bankSpeedup = 1,
 	-- Difusión tecnológica: una tecnología de hace más de diffusionGrace años cuesta diffusionPerYear menos
 	-- por año (PI y dinero), hasta diffusionFloor de su costo. Quien va atrasado se pone al día más rápido.
@@ -806,8 +805,8 @@ Catalog.RESEARCH = {
 		{ id = "el5", name = "Baterías de iones de litio", year = 2010, tier = "b", req = { "el4" }, fx = {}, gain = "Habilita el Rayo E, el motor eléctrico y la batería de 60 kWh" },
 		{ id = "el6", name = "Baterías de alta densidad", year = 2016, tier = "i", req = { "el5" }, fx = {}, gain = "Habilita la batería de 80 kWh y el motor de 350 kW" },
 		{ id = "el7", name = "Baterías de estado sólido", year = 2024, tier = "b", req = { "el6" }, fx = {}, gain = "Habilita la batería de estado sólido" },
-		{ id = "var_eco", name = "Variante de motor económica", year = 1973, tier = "n", req = {}, fx = {}, gain = "Variante «Económica» para todos los motores a combustión: −15 % de consumo, −12 % de potencia y un poco más barata" },
-		{ id = "var_sport", name = "Variante de motor deportiva", year = 1974, tier = "n", req = {}, fx = {}, gain = "Variante «Deportiva» para todos los motores a combustión: +15 % de potencia, +12 % de consumo y +10 % de costo del motor" },
+		{ id = "var_eco", name = "Variante de motor económica", year = 1973, tier = "n", req = {}, fx = {}, gain = "Variante «Económica» para todos los motores a combustión: −15 % de consumo, −12 % de potencia y −3 % de costo del motor" },
+		{ id = "var_sport", name = "Variante de motor deportiva", year = 1974, tier = "n", req = {}, fx = {}, gain = "Variante «Deportiva» para todos los motores a combustión: +15 % de potencia, +12 % de consumo, +1 de calidad y +10 % de costo del motor" },
 	} },
 	seguridad = { label = "Seguridad", nodes = {
 		{ id = "se1", name = "Cinturones de tres puntos", year = 1970, tier = "s", req = {}, fx = {}, gain = "Habilita el paquete «Cinturones de tres puntos» (+8 de seguridad)" },
@@ -862,7 +861,7 @@ do
 				fx = {},
 				family = fam.id,
 				level = lvl,
-				gain = string.format("Motores %s de nivel %d: +%d %% de potencia, %d %% de consumo y +%d %% de costo del motor frente al nivel 1", fam.name, lvl, math.floor(F.hp * k * 100 + 0.5), math.floor(F.cons * k * 100 - 0.5), math.floor(F.cost * k * 100 + 0.5)),
+				gain = string.format("Motores %s de nivel %d: +%d %% de potencia, %d %% de consumo, +%s de calidad y +%d %% de costo del motor frente al nivel 1 (se elige en cada diseño)", fam.name, lvl, math.floor(F.hp * k * 100 + 0.5), math.floor(F.cons * k * 100 - 0.5), (string.gsub(tostring(math.floor(F.q * k * 10 + 0.5) / 10), "%.", ",")), math.floor(F.cost * k * 100 + 0.5)),
 			})
 		end
 	end
@@ -924,7 +923,7 @@ Catalog.MISSIONS = {
 	{ id = "s9", kind = "historia", title = "Liderá un tipo de vehículo", desc = "Tené al menos 35 % de la cuota de mercado de un tipo (promedio de los últimos meses, en Mercado).", counter = "leaderTypes", goal = 1, reward = { money = 6000000, pi = 150, xp = 3000 }, go = "mercado" },
 	{ id = "s10", kind = "historia", title = "Vendé 50.000 autos", desc = "Una de las marcas grandes del país.", counter = "unitsSold", goal = 50000, reward = { money = 10000000, pi = 200, xp = 4000 }, go = "ventas" },
 	{ id = "s11", kind = "historia", title = "Llegá al Imperio automotriz", desc = "Oficinas centrales al máximo: abren la expansión internacional.", counter = "sedeLevel", goal = 5, reward = { money = 40000000, pi = 300, xp = 6000 }, go = "compania" },
-	{ id = "s12", kind = "historia", title = "Completá todas las investigaciones", desc = "Las 56 tecnologías de 1970 a 2030.", counter = "researchDone", goal = 56, reward = { money = 50000000, xp = 8000 }, go = "investigacion" },
+	{ id = "s12", kind = "historia", title = "Completá todas las investigaciones", desc = "Todas las tecnologías del departamento de I+D.", counter = "researchTree", goal = 0, reward = { money = 50000000, xp = 8000 }, go = "investigacion" },
 	{ id = "s13", kind = "historia", title = "Primera expansión internacional", desc = "Abrí tu primer país desde Compañía › Instalaciones.", counter = "expansion", goal = 1, reward = { money = 30000000, xp = 6000 }, go = "compania" },
 	{ id = "s14", kind = "historia", title = "Vendé 250.000 autos", desc = "Una marca internacional.", counter = "unitsSold", goal = 250000, reward = { money = 60000000, xp = 8000 }, go = "ventas" },
 	{ id = "s15", kind = "historia", title = "Liderá cuatro tipos de vehículo", desc = "Al menos 35 % de cuota en cuatro tipos a la vez.", counter = "leaderTypes", goal = 4, reward = { money = 80000000, xp = 10000 }, go = "mercado" },
@@ -1115,7 +1114,11 @@ for _, key in Catalog.RESEARCH_ORDER do
 		Catalog.RESEARCH_NAMES[n.id] = n.name
 	end
 end
--- La misión «Completá todas las investigaciones» sigue al tamaño real del árbol.
+-- La misión «Completá todas las investigaciones» sigue al tamaño real del árbol: TODAS las tecnologías que se
+-- pueden investigar (las normales y los niveles 2–10 de cada familia de motor). Lo que viene de serie (chasis
+-- de 1970, nivel 1 de los motores, variante Equilibrada) no es una investigación y no cuenta. Su contador
+-- («researchTree», Rules.missionValue) cuenta las tecnologías de este mismo catálogo que figuran en
+-- g.research.done: meta y avance usan la misma definición, sin un número fijo.
 do
 	local total = 0
 	for _, key in Catalog.RESEARCH_ORDER do
@@ -1131,6 +1134,62 @@ do
 end
 function Catalog.researchNode(id: any): any
 	return type(id) == "string" and researchIndex[id] or nil
+end
+
+--[[ Lo que desbloquea cada tecnología para elegir en el editor: { [id] = { { kind, name } } }, con kind =
+	"base" (chasis), "pieza", "equipamiento", "variante", "carroceria", "interior" o "familia" (habilita mejorar
+	una familia de motores). Los niveles de motor desbloquean su nivel («nivel»). Las tecnologías con `fx` tienen
+	además (o en lugar de esto) un efecto automático en la empresa (Rules.tech). Lo usan la pantalla de
+	Investigación (tipo de efecto de cada tarjeta) y las pruebas de integridad del árbol. ]]
+Catalog.RESEARCH_UNLOCKS = {} :: { [string]: { any } }
+do
+	local U = Catalog.RESEARCH_UNLOCKS
+	local function add(id: any, kind: string, name: any)
+		if type(id) == "string" then
+			U[id] = U[id] or {}
+			table.insert(U[id], { kind = kind, name = tostring(name) })
+		end
+	end
+	for _, b: any in Catalog.BASES do
+		add(b.research, "base", b.name)
+	end
+	for _, p: any in Catalog.PARTS do
+		add(p.research, "pieza", p.name)
+	end
+	for _, e: any in Catalog.EQUIPMENT do
+		add(e.research, "equipamiento", e.name)
+	end
+	for _, v: any in Catalog.ENGINE_VARIANTS do
+		add(v.research, "variante", v.name)
+	end
+	for _, list in Catalog.BODY_OPTS do
+		for _, o in list do
+			add(o[5], "carroceria", o[2])
+		end
+	end
+	for _, list in Catalog.INTERIOR do
+		for _, o in list do
+			add(o[6], "interior", o[2])
+		end
+	end
+	for _, f: any in Catalog.ENGINE_FAMILIES do
+		add(f.req, "familia", "Familia " .. f.name)
+	end
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if n.family then
+				add(n.id, "nivel", n.name)
+			end
+		end
+	end
+end
+
+-- Tipo de efecto de una tecnología: "auto" (solo efecto automático), "editor" (solo opciones que se eligen en
+-- cada diseño) o "ambos".
+function Catalog.researchEffectKind(n: any): string
+	local auto = n ~= nil and n.fx ~= nil and next(n.fx) ~= nil
+	local editor = n ~= nil and Catalog.RESEARCH_UNLOCKS[n.id] ~= nil
+	return (auto and editor and "ambos") or (auto and "auto") or "editor"
 end
 
 -- Opción de carrocería o interior: { id, nombre, costo, (efectos), año, investigación }.

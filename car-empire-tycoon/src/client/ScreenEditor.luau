@@ -1178,7 +1178,7 @@ local function stageMotor(g: any, d: any, cur: any, body: Instance)
 			dd.motorLevel = l
 		end) or nil
 		local hint = diff and (" <font size=\"10\" color=\"#A3AAB8\">" .. (diff.hp >= cur.hp and "+" or "−") .. math.abs(diff.hp - cur.hp) .. " hp</font>") or ""
-		table.insert(levels, { l, "Nivel " .. l .. hint, 0, (not ok) and { disabled = "Requiere investigar " .. tostring(fam) .. " nivel " .. l } or nil })
+		table.insert(levels, { l, "Nivel " .. l .. hint, 0, (not ok) and { disabled = "Requiere investigar «" .. DesignCalc.researchName("eng_" .. tostring(fam) .. "_" .. l) .. "»" } or nil })
 	end
 	section("Nivel del motor" .. (fam and (" · familia " .. fam .. " (investigado hasta el " .. maxLvl .. ")") or ""), {
 		optRow(nil, levels, d.motorLevel or 1, function(v)

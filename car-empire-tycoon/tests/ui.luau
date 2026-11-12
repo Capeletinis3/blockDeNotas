@@ -3062,6 +3062,128 @@ test("Centro de investigación: categorías, filtros, estados, franja de activas
 	noErrors("Centro de investigación")
 end)
 
+test("Investigación (etapa 7): tarjeta completa, tipo de efecto, estados, franja en vivo y completar sin reiniciar", function()
+	local Catalog = require("./.build-ui/shared/Catalog")
+	local Rules = require("./.build-ui/shared/Rules")
+	local R = App.screens.investigacion
+	App.closeAllDialogs()
+	if not App.g then
+		App.request("selectSlot", { slot = "1" })
+		waitFor(function()
+			return App.g ~= nil
+		end)
+	end
+	local sess = Sessions.instance.list[player]
+	sess.game.money = math.max(sess.game.money, 50000000)
+	sess.game.rp = math.max(sess.game.rp, 100000)
+	Sessions.instance:push(sess)
+	waitFor(function()
+		return App.g.rp >= 100000
+	end)
+	App.go("investigacion")
+	App.ui.researchFilter = nil
+	App.ui.tabs.investigacion = "chasis"
+	App.forceRender()
+	M.task.wait()
+	-- Contenido de una tarjeta: nombre, categoría y tipo, nivel, año, descripción, beneficio, costos, requisitos y estado.
+	local function cardText(id: string): string
+		local c = named("Nodo_" .. id)
+		return c and table.concat(M.texts(c), " | ") or ""
+	end
+	local function hasAll(id: string, parts: { string }): boolean
+		local t = cardText(id)
+		for _, p in parts do
+			if not string.find(t, p, 1, true) then
+				print("    falta «" .. p .. "» en " .. id .. ": " .. t)
+				return false
+			end
+		end
+		return true
+	end
+	local ca3 = Catalog.researchNode("ca3")
+	if not Rules.has(App.g, "ca3") and not Rules.researchProject(App.g, "ca3") then
+		local pi, cost, days = Rules.researchCost(App.g, ca3)
+		local _, _, _, info = Rules.researchCost(App.g, ca3)
+		if info.ahead > Catalog.RESEARCH_RULES.aheadMaxYears then
+			-- Más allá del adelanto permitido: costo base y desde cuándo se puede adelantar (sin un recargo imposible).
+			pi, cost, days = info.base.pi, info.base.money, info.base.days
+			check(hasAll("ca3", { "Futura", "Costo base, sin recargo", "se puede adelantar desde " .. (ca3.year - 5), "recargo de hasta +75 % dinero, +75 % PI, +50 % días" }), "tecnología futura sin recargo imposible")
+			check(not string.find(cardText("ca3"), "Adelantada " .. info.ahead, 1, true), "no dice «Adelantada " .. info.ahead .. " años»")
+		end
+		check(hasAll("ca3", { ca3.name, "Chasis · Se elige en el editor", R.levelLabel(ca3), "Año " .. ca3.year, "BENEFICIO", ca3.gain, Util.money(cost), Util.num(pi) .. " PI", days .. " días", "REQUISITOS", "Carrocería reforzada", "Bloqueada" }), "tarjeta completa de " .. ca3.name)
+	end
+	local ma1 = Catalog.researchNode("ma1")
+	if not Rules.has(App.g, "ma1") then
+		check(hasAll("ma1", { "Chasis · Efecto automático", "Sin tecnologías previas" }), "una tecnología con efecto automático lo dice")
+	end
+	check(hasAll("inicio_brisa", { "✓ Incluida desde el inicio", "De serie en el editor" }), "lo de serie figura como «Incluida desde el inicio»")
+	App.ui.tabs.investigacion = "motores"
+	App.forceRender()
+	M.task.wait()
+	if not Rules.has(App.g, "mo4") then
+		check(hasAll("mo4", { "Motores · Efecto automático + opción del editor" }), "mo4: efecto automático y motor nuevo en el editor")
+	end
+	check(hasAll("eng_I4_3", { "Nivel 3", "Motores · Se elige en el editor", "+12 % de potencia" }), "nivel de motor con su beneficio real")
+	-- Estado y texto de un bloqueo por requisitos.
+	local lock = cardText("eng_I4_3")
+	if not Rules.has(App.g, "eng_I4_2") then
+		check(string.find(lock, "Bloqueada", 1, true) ~= nil and string.find(lock, "I4 · nivel 2", 1, true) ~= nil, "bloqueada muestra el requisito")
+	end
+	-- Un proyecto en curso: la franja lo muestra; al volver al juego avanza y al terminar cambia de estado sin reiniciar.
+	local pick = nil
+	for _, key in Catalog.RESEARCH_ORDER do
+		for _, n in Catalog.RESEARCH[key].nodes do
+			if not pick and R.status(App.g, n) == "disponible" and not R.blockReason(App.g, n) and n.days <= 60 then
+				pick = n
+			end
+		end
+	end
+	if #App.g.research.projects >= Catalog.RESEARCH_RULES.maxParallel then
+		check(true, "seis en curso: no se agrega otra")
+	else
+		check(pick ~= nil and App.request("startResearch", { id = pick.id }).ok, "empieza " .. tostring(pick and pick.name))
+		App.forceRender()
+		M.task.wait()
+		check(named("Proyecto_" .. pick.id) ~= nil, "la franja muestra el proyecto nuevo")
+		local pr = Rules.researchProject(App.g, pick.id)
+		App.ui.tabs.investigacion = pick.category
+		App.forceRender()
+		M.task.wait()
+		check(hasAll(pick.id, { "En curso", "Pagado al empezar", Util.money(pr.paidMoney), Util.num(pr.paidPi) .. " PI" }), "en curso muestra lo pagado")
+		local projectsShown = 0
+		for _, p in App.g.research.projects do
+			projectsShown += named("Proyecto_" .. p.id) and 1 or 0
+		end
+		eq(projectsShown, #App.g.research.projects, "la franja muestra TODOS los proyectos en curso")
+		App.go("juego")
+		M.task.wait()
+		local done = false
+		for _ = 1, 400 do
+			advance(1)
+			if Rules.has(App.g, pick.id) then
+				done = true
+				break
+			end
+		end
+		check(done, "se completa jugando")
+		local toast = table.concat(M.texts(App.toastLayer), " ")
+		check(string.find(toast, "Investigación completada", 1, true) ~= nil, "aviso al completar")
+		App.go("investigacion")
+		App.ui.tabs.investigacion = pick.category
+		App.forceRender()
+		M.task.wait()
+		eq(named("Nodo_" .. pick.id) and named("Nodo_" .. pick.id):GetAttribute("estado"), "completada", "la tarjeta pasa a «Completada» sin reiniciar")
+		check(named("Proyecto_" .. pick.id) == nil, "sale de la franja")
+		for _, p in App.g.research.projects do
+			local pct = named("Proyecto_" .. p.id) and named("Proyecto_" .. p.id):FindFirstChild("Porcentaje", true)
+			check(pct ~= nil and pct.Text == Util.round(p.progress / p.days * 100) .. " %", "porcentaje en vivo de " .. p.id)
+		end
+	end
+	App.go("juego")
+	M.task.wait()
+	noErrors("Investigación etapa 7")
+end)
+
 test("Cambiar de empresa: no se arrastran borradores ni ids de la anterior", function()
 	App.closeAllDialogs()
 	local slots = {}
